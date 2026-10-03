@@ -202,6 +202,26 @@ test("of several pods restarting, the worst one is shown and the rest are counte
   assert.equal(a.evidence[0], "Container app of pod api-2 has restarted 11 times. 2 of its pods show this.");
 });
 
+test("where some pods of a group are looping, the pod the evidence names is one of those", () => {
+  const a = only(
+    cluster({
+      pods: [
+        pod({ name: "api-a", containers: [container({ restartCount: 3, waitingReason: "CrashLoopBackOff", terminated: stopped(0.5) })] }),
+        pod({ name: "api-b", containers: [container({ restartCount: 9, terminated: stopped(1) })] }),
+      ],
+    }),
+  );
+  // api-b has restarted more, but it is not the one in CrashLoopBackOff, and the next line says it is.
+  assert.equal(a.evidence[0], "Container app of pod api-a has restarted 3 times. 2 of its pods show this.");
+  assert.equal(a.evidence[1], "It is in CrashLoopBackOff: Kubernetes is waiting longer and longer between its restarts");
+  assert.match(a.advice, /kubectl logs api-a -n prod /);
+});
+
+test("a last stop the pod times in a way that cannot be read is not reported as within the window", () => {
+  const a = only(cluster({ pods: [pod({ containers: [container({ restartCount: 7, terminated: { reason: "Error", exitCode: 1, finishedAt: "whenever" } })] })] }));
+  assert.equal(a.evidence[1], "It has restarted at least 5 times (the time the pod gives for its last stop cannot be read, so the window was not checked)");
+});
+
 test("what the cluster says about a stop is made safe to print before it is read into an advisory", async () => {
   const reader: KubeReader = {
     identity: async () => ({ context: "prod-cluster" }),
@@ -305,6 +325,14 @@ test("the scheduler's message is cut to a safe length and has no control charact
   const quoted = said.slice('The scheduler says: "'.length, -1);
   assert.ok(quoted.length <= 240 && quoted.endsWith("..."), `${quoted.length}`);
   assert.equal(safeText("a\u0000b\nc", 10), "a b c");
+});
+
+test("a direction override or a zero-width mark in what the cluster says never reaches what is printed", () => {
+  const trick = "0/3 nodes are available\u202e: the pod is fine\u202c\u200b.";
+  const a = only(cluster({ pods: [pod({ phase: "Pending", unscheduled: waiting({ message: trick }) })] }));
+  assert.equal(a.evidence[1], 'The scheduler says: "0/3 nodes are available : the pod is fine ."');
+  assert.doesNotMatch(JSON.stringify(a), /[\u200b-\u200f\u202a-\u202e\u2066-\u2069\u061c\ufeff]/);
+  assert.equal(safeText("a\u202eb\u2066c\ufeffd"), "a b c d");
 });
 
 test("a pod that is pending for another reason, and running pods, are not unschedulable", async () => {

@@ -350,9 +350,16 @@ export interface CollectClusterOptions {
   advisories?: boolean;
 }
 
-/** Text a cluster hands back, made safe to print: no control characters, and no longer than `max`. */
+/**
+ * Text a cluster hands back, made safe to print: no control characters, none of
+ * the invisible marks that change the direction or the joining of what follows
+ * them, and no longer than `max`. The second group goes too because the text is
+ * printed to a terminal and written into the Markdown and HTML reports, and in
+ * all three a left-over override can make a line read as something other than
+ * what the cluster stored.
+ */
 export function safeText(text: unknown, max = 240): string {
-  const flat = String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+  const flat = String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, " ").replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 3).trimEnd()}...` : flat;
 }
 

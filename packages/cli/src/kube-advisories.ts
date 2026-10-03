@@ -132,21 +132,26 @@ function restarting(inventory: ClusterInventory): Advisory[] {
     pod.containers.flatMap((container) => {
       const loop = container.waitingReason === "CrashLoopBackOff";
       const stopped = container.terminated?.finishedAt === undefined ? NaN : Date.parse(container.terminated.finishedAt);
-      // Where the pod does not say when it last stopped, the count alone has to do.
-      const recent = Number.isFinite(stopped) && Number.isFinite(now) ? now - stopped <= windowMs : true;
+      // Where the pod gives no time for its last stop that can be read, the count alone has to do.
+      const timed = Number.isFinite(stopped) && Number.isFinite(now);
+      const recent = timed ? now - stopped <= windowMs : true;
       const often = container.restartCount >= RESTART_COUNT && recent;
-      return loop || often ? [{ pod, container, loop }] : [];
+      return loop || often ? [{ pod, container, loop, timed }] : [];
     }),
   );
   return grouped(hits).map((g) => {
-    const worst = [...g.members].sort((a, b) => b.container.restartCount - a.container.restartCount || byName(a.pod, b.pod))[0]!;
+    // The pod named in the evidence has to be one the rest of it is true of, so where any
+    // pod of the group is looping the worst is picked from those: only they are in the loop.
+    const looping = g.members.filter((m) => m.loop);
+    const pool = looping.length > 0 ? looping : g.members;
+    const worst = [...pool].sort((a, b) => b.container.restartCount - a.container.restartCount || byName(a.pod, b.pod))[0]!;
     const c = worst.container;
     const bad = invalidName({ subdomain: [worst.pod.name], label: [g.namespace, g.container] });
     const stopped = c.terminated;
     const state = [stopped?.reason ? `reason ${stopped.reason}` : "", stopped?.exitCode !== undefined ? `exit code ${stopped.exitCode}` : "", stopped?.finishedAt ? `at ${stopped.finishedAt}` : ""].filter(Boolean);
-    const why = g.members.some((m) => m.loop)
+    const why = worst.loop
       ? "It is in CrashLoopBackOff: Kubernetes is waiting longer and longer between its restarts"
-      : `It has restarted at least ${RESTART_COUNT} times${stopped?.finishedAt ? `, the last within ${RESTART_WINDOW_HOURS} hours of the scan` : " (the pod does not say when it last stopped)"}`;
+      : `It has restarted at least ${RESTART_COUNT} times${worst.timed ? `, the last within ${RESTART_WINDOW_HOURS} hours of the scan` : stopped?.finishedAt === undefined ? " (the pod does not say when it last stopped)" : " (the time the pod gives for its last stop cannot be read, so the window was not checked)"}`;
     return {
       rule: "restarting",
       title: `Container ${g.container} of ${g.resource} keeps restarting`,
