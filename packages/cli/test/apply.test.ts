@@ -13,7 +13,9 @@ import { apply, ApplyError, plan, renderAudit, runnable, tokenize, type AuditEnt
 import { collectCluster, type KubeReader } from "../src/kube.js";
 import { detectCluster, OPENCOST_DEFAULTS } from "../src/kube-detect.js";
 import type { Finding, ScanResult } from "../src/types.js";
-import { cli, FIXTURE } from "./helpers.js";
+import { cli, cliRun, FIXTURE } from "./helpers.js";
+import { everyAwsFinding, scan as scanOf } from "./scans.js";
+import { hook } from "./webhook.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const NOW = new Date("2026-10-03T12:00:00Z");
@@ -256,6 +258,8 @@ function workspace(scans: Record<string, ScanResult>) {
     cwd,
     calls: (): Array<{ program: string; args: string[]; profile: string | null }> => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []),
     run: (args: string[], env: Record<string, string> = {}) => cli(args, { blockNetwork: true, cwd, env: { PATH: `${bin}:${dirname(process.execPath)}`, STAND_IN_LOG: log, ...env } }),
+    /** The same without the network blocked, for proving that nothing is sent when a server is there to be sent to. */
+    runOpen: (args: string[], env: Record<string, string> = {}) => cliRun(args, { cwd, env: { PATH: `${bin}:${dirname(process.execPath)}`, STAND_IN_LOG: log, ...env } }),
   };
 }
 
@@ -364,8 +368,131 @@ test("a failing command makes apply fail, stop, and say so in the record", () =>
 
 test("scanning never starts aws or kubectl to change anything: only apply does", () => {
   const ws = saved();
-  for (const args of [["scan", "--replay", FIXTURE], ["scan", "--replay", FIXTURE, "--html", "report.html"], ["audit"]]) {
-    assert.equal(ws.run(args).status, 0);
+  for (const args of [
+    ["scan", "--replay", FIXTURE],
+    ["scan", "--replay", FIXTURE, "--html", "report.html"],
+    ["ask", "--replay", FIXTURE, "What should I fix first, and what is the risk?"],
+    ["init", "--print-policy"],
+    ["audit"],
+  ]) {
+    assert.equal(ws.run(args).status, 0, args.join(" "));
   }
+  assert.deepEqual(ws.calls(), []);
+});
+
+test("the read-only policy is the same file after apply was added: it holds reads only, and apply asks for nothing in it", () => {
+  const policy = JSON.parse(readFileSync(resolve(here, "../../../docs/cloudpilot-readonly-policy.json"), "utf8")) as { Statement: Array<{ Effect: string; Action: string[] }> };
+  const printed = JSON.parse(cli(["init", "--print-policy"], { blockNetwork: true }).stdout);
+  assert.deepEqual(printed, policy);
+  for (const action of policy.Statement.flatMap((s) => s.Action)) assert.match(action, /^[a-z0-9]+:(Describe|List|Get)/, `${action} is not a read`);
+  // Nothing a fix needs (delete, terminate, modify, stop, release, deregister, put, abort) is in it.
+  const writes = policy.Statement.flatMap((s) => s.Action).filter((a) => /:(Delete|Terminate|Modify|Stop|Start|Release|Deregister|Put|Abort|Create)/.test(a));
+  assert.deepEqual(writes, []);
+});
+
+// The fixes of the newer rules, and apply beside the newer features.
+
+const rules = scanOf(everyAwsFinding(), { scannedAt: "2026-10-03T11:00:00Z" });
+const pick = (pattern: string, id?: string) => rules.findings.find((f) => f.pattern === pattern && (!id || f.resourceIds[0] === id))!;
+
+test("cloudpilot apply resizes an oversized instance as four commands in order, with the new size as one argument", () => {
+  const ws = workspace({ "last-scan.json": fresh(rules) });
+  const id = pick("oversized-instance").resourceIds[0]!;
+  const run = ws.run(["apply", id, "--yes"]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(ws.calls().map((c) => c.args), [
+    ["ec2", "stop-instances", "--instance-ids", id, "--region", "ap-south-1"],
+    ["ec2", "wait", "instance-stopped", "--instance-ids", id, "--region", "ap-south-1"],
+    ["ec2", "modify-instance-attribute", "--instance-id", id, "--instance-type", '{"Value": "m5.large"}', "--region", "ap-south-1"],
+    ["ec2", "start-instances", "--instance-ids", id, "--region", "ap-south-1"],
+  ]);
+  assert.match(run.stdout, /Can be undone\./);
+});
+
+test("a resize that fails after the instance was stopped says it may be half done, and starts nothing after it", () => {
+  const ws = workspace({ "last-scan.json": fresh(rules) });
+  const id = pick("oversized-instance").resourceIds[0]!;
+  const run = ws.run(["apply", id, "--yes"], { STAND_IN_FAIL: "modify-instance-attribute" });
+  assert.equal(run.status, 1);
+  assert.deepEqual(ws.calls().map((c) => c.args[1]), ["stop-instances", "wait", "modify-instance-attribute"], "the start is never run");
+  assert.match(run.stdout, /Failed with exit code 254\. Nothing after this was run\./);
+  assert.match(run.stdout, /The commands before it had already run, so this fix may be half done\./);
+  const [entry] = JSON.parse(ws.run(["audit", "--json"]).stdout) as AuditEntry[];
+  assert.equal(entry!.outcome, "failed");
+  assert.deepEqual(entry!.commands.map((c) => c.exitCode), [0, 0, 254, undefined]);
+
+  // A failure of the first command has nothing before it to be half done.
+  const first = workspace({ "last-scan.json": fresh(rules) });
+  assert.doesNotMatch(first.run(["apply", id, "--yes"], { STAND_IN_FAIL: "stop-instances" }).stdout, /half done/);
+});
+
+test("the idle NAT gateway, load balancer and database fixes are permanent: they need --allow-permanent and the ID typed back, which a script cannot do", () => {
+  const ws = workspace({ "last-scan.json": fresh(rules) });
+  for (const pattern of ["idle-nat-gateway", "idle-load-balancer"]) {
+    const id = pick(pattern).resourceIds[0]!;
+    const refused = ws.run(["apply", id, "--allow-permanent", "--yes"]);
+    assert.equal(refused.status, 1, pattern);
+    assert.match(refused.stdout, /PERMANENT: this cannot be undone\./);
+    assert.match(refused.stdout, /Not run: a permanent fix is never run unattended\./);
+    assert.match(ws.run(["apply", id, "--yes"]).stderr, /The only fix for \S+ is permanent/, pattern);
+  }
+  // The database has a gentler fix, and that is the one that runs without being asked for the other.
+  const db = pick("idle-rds-instance").resourceIds[0]!;
+  assert.equal(ws.run(["apply", db, "--yes"]).status, 0);
+  assert.deepEqual(ws.calls().map((c) => c.args.slice(0, 2).join(" ")), ["rds stop-db-instance"], "nothing else was started");
+  const dry = ws.run(["apply", pick("idle-load-balancer").resourceIds[0]!, "--allow-permanent", "--dry-run"]);
+  assert.match(dry.stdout, /\$ aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:\S+ --region ap-south-1\n {2}Dry run/);
+  assert.equal(ws.calls().length, 1, "a dry run starts nothing");
+});
+
+test("a scan of a cluster that was given a name with --cluster-name is saved under that name, and apply runs its fix against that name", async () => {
+  const named = {
+    ...detectCluster(await collectCluster({ identity: async () => ({ ...kubeFixture.identity, context: "prod-eks" }), get: kubeReader.get }, { lookbackHours: kubeFixture.lookbackHours, now: new Date(kubeFixture.recordedAt) }), OPENCOST_DEFAULTS),
+  };
+  const ws = workspace({ "last-kube-scan-prod-eks.json": fresh(named) });
+  const run = ws.run(["apply", "deployment/reports", "--yes"]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(ws.calls().map((c) => c.args), [["set", "resources", "deployment/reports", "-n", "shop", "--context", "prod-eks", "-c", "worker", "--requests=cpu=10m,memory=32Mi"]]);
+  const [entry] = JSON.parse(ws.run(["audit", "--json"]).stdout) as AuditEntry[];
+  assert.deepEqual([entry!.scope, entry!.target], ["cluster", "prod-eks"]);
+
+  // A name that is not a context on this machine is kubectl's to refuse: it fails, nothing else runs, and the failure is recorded.
+  const missing = workspace({ "last-kube-scan-prod-eks.json": fresh(named) });
+  const failed = missing.run(["apply", "deployment/reports", "deployment/checkout", "--yes"], { STAND_IN_FAIL: "set" });
+  assert.equal(failed.status, 1);
+  assert.equal(missing.calls().length, 1, "the second fix is not started");
+  assert.deepEqual(JSON.parse(missing.run(["audit", "--json"]).stdout).map((e: AuditEntry) => e.outcome), ["failed", "refused"]);
+});
+
+test("apply never notifies, never uploads and has no replay: those options do not exist on it, and set in the environment they send nothing", async () => {
+  const ws = saved();
+  for (const extra of [["--notify", "http://127.0.0.1:9/x"], ["--upload", "http://127.0.0.1:9/x"], ["--replay", FIXTURE], ["--record", "somewhere"]]) {
+    const run = ws.run(["apply", VOLUME, "--yes", ...extra]);
+    assert.equal(run.status, 1, extra.join(" "));
+    assert.match(run.stderr, new RegExp(`unknown option '${extra[0]}'`), extra.join(" "));
+  }
+  assert.deepEqual(ws.calls(), [], "none of them ran anything");
+  assert.equal(existsSync(join(ws.cwd, ".cloudpilot/audit.jsonl")), false);
+
+  // With a webhook and an upload token in the environment, and a server there to hear them, a fix that runs sends nothing to it.
+  const server = await hook(() => ({ status: 200 }));
+  try {
+    const run = await ws.runOpen(["apply", VOLUME, "deployment/reports", "--yes"], { CLOUDPILOT_NOTIFY: server.url, CLOUDPILOT_UPLOAD_TOKEN: "token-that-must-not-leave" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(ws.calls().length, 2, "the fixes did run");
+    assert.deepEqual(server.requests, [], "no request was made to the webhook or the upload address");
+    assert.doesNotMatch(run.stdout + run.stderr, /token-that-must-not-leave/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a replay never leaves a scan behind for apply to take a fix from", () => {
+  const ws = workspace({});
+  assert.equal(ws.run(["scan", "--replay", FIXTURE]).status, 0);
+  assert.equal(existsSync(join(ws.cwd, ".cloudpilot/last-scan.json")), false);
+  const run = ws.run(["apply", VOLUME, "--yes"]);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /There is no saved scan in this directory/);
   assert.deepEqual(ws.calls(), []);
 });

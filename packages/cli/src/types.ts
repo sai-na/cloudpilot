@@ -249,24 +249,28 @@ export const RDS_PRICED_STORAGE: Record<string, string> = { gp2: "General Purpos
 export const rdsHourKey = (instanceClass: string, engine: string, multiAz: boolean) => `${instanceClass}|${engine}|${multiAz ? "Multi-AZ" : "Single-AZ"}`;
 export const rdsStorageKey = (storageType: string, engine: string, multiAz: boolean) => `${storageType}|${engine}|${multiAz ? "Multi-AZ" : "Single-AZ"}`;
 
-export type Pattern =
-  | "unattached-ebs-volume"
-  | "gp2-volume"
-  | "idle-elastic-ip"
-  | "stopped-instance"
-  | "idle-instance"
-  | "oversized-instance"
-  | "idle-rds-instance"
-  | "idle-nat-gateway"
-  | "idle-load-balancer"
-  | "orphaned-snapshot"
-  | "unused-ami"
-  | "bucket-without-lifecycle"
-  | "incomplete-multipart-upload"
+/** Every rule's pattern, so a test can go through all of them and a new rule cannot be left out. */
+export const PATTERNS = [
+  "unattached-ebs-volume",
+  "gp2-volume",
+  "idle-elastic-ip",
+  "stopped-instance",
+  "idle-instance",
+  "oversized-instance",
+  "idle-rds-instance",
+  "idle-nat-gateway",
+  "idle-load-balancer",
+  "orphaned-snapshot",
+  "unused-ami",
+  "bucket-without-lifecycle",
+  "incomplete-multipart-upload",
   // Kubernetes
-  | "over-requested-workload"
-  | "unused-volume-claim"
-  | "released-volume";
+  "over-requested-workload",
+  "unused-volume-claim",
+  "released-volume",
+] as const;
+
+export type Pattern = (typeof PATTERNS)[number];
 
 /**
  * How much care a fix needs before anyone runs it.

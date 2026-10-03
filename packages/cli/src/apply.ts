@@ -15,7 +15,7 @@
  *   was declined or was refused.
  */
 import { execFile } from "node:child_process";
-import type { Finding, Fix, ScanResult } from "./types.js";
+import type { Finding, Fix, Risk, ScanResult } from "./types.js";
 
 export class ApplyError extends Error {}
 
@@ -59,40 +59,50 @@ export function tokenize(command: string): string[] {
 }
 
 /**
- * Every kind of command a CloudPilot rule prints as a fix. Nothing else is
- * ever run. The RDS commands and the EC2 stop/resize/start sequence are the
- * fixes of a rule set held on another branch: listed here so this allow-list
- * does not have to be found again when those rules land.
+ * Every kind of command a CloudPilot rule prints as a fix, and whether the
+ * kind is one that cannot be undone. Nothing else is ever run, and nothing is
+ * listed that no rule prints: a test goes through every rule's fixes to hold
+ * both to it, so a new rule's fix cannot be one apply silently cannot run.
+ *
+ * Whether a fix is permanent is still read from the finding's own risk. The
+ * flag here is only a cross-check, so a saved scan that calls a delete
+ * "caution" cannot slip past the prompt that a permanent fix needs.
  */
-const RUNNABLE = [
-  "aws ec2 modify-volume",
-  "aws ec2 delete-volume",
-  "aws ec2 release-address",
-  "aws ec2 terminate-instances",
-  "aws ec2 delete-snapshot",
-  "aws ec2 deregister-image",
-  "aws ec2 stop-instances",
-  "aws ec2 wait instance-stopped",
-  "aws ec2 modify-instance-attribute",
-  "aws ec2 start-instances",
-  "aws s3api put-bucket-lifecycle-configuration",
-  "aws s3api abort-multipart-upload",
-  "aws rds delete-db-instance",
-  "aws rds stop-db-instance",
-  "kubectl set resources",
-  "kubectl delete persistentvolumeclaim",
-  "kubectl delete persistentvolume",
+export const RUNNABLE: ReadonlyArray<{ kind: string; permanent: boolean }> = [
+  { kind: "aws ec2 modify-volume", permanent: false },
+  { kind: "aws ec2 delete-volume", permanent: true },
+  { kind: "aws ec2 release-address", permanent: true },
+  { kind: "aws ec2 terminate-instances", permanent: true },
+  { kind: "aws ec2 delete-snapshot", permanent: true },
+  { kind: "aws ec2 deregister-image", permanent: true },
+  { kind: "aws ec2 stop-instances", permanent: false },
+  { kind: "aws ec2 wait instance-stopped", permanent: false },
+  { kind: "aws ec2 modify-instance-attribute", permanent: false },
+  { kind: "aws ec2 start-instances", permanent: false },
+  { kind: "aws ec2 delete-nat-gateway", permanent: true },
+  { kind: "aws elbv2 delete-load-balancer", permanent: true },
+  { kind: "aws rds delete-db-instance", permanent: true },
+  { kind: "aws rds stop-db-instance", permanent: false },
+  { kind: "aws s3api put-bucket-lifecycle-configuration", permanent: false },
+  { kind: "aws s3api abort-multipart-upload", permanent: false },
+  { kind: "kubectl set resources", permanent: false },
+  { kind: "kubectl delete persistentvolumeclaim", permanent: true },
+  { kind: "kubectl delete persistentvolume", permanent: true },
 ];
+
+const kindOf = (args: string[]) => RUNNABLE.find(({ kind }) => kind.split(" ").every((word, n) => args[n] === word));
 
 /** The command as arguments, if it is one CloudPilot may run. */
 export function runnable(command: string): string[] {
   const args = tokenize(command);
-  const ok = RUNNABLE.some((kind) => {
-    const words = kind.split(" ");
-    return words.every((word, n) => args[n] === word);
-  });
-  if (!ok) throw new ApplyError(`CloudPilot only runs the kinds of command its own rules print, and this is not one: ${command}`);
+  if (!kindOf(args)) throw new ApplyError(`CloudPilot only runs the kinds of command its own rules print, and this is not one: ${command}`);
   return args;
+}
+
+/** The risk a command's kind carries: "dangerous" for a kind that cannot be undone. A fix is as risky as its riskiest command. */
+export function commandRisk(command: string): Risk {
+  runnable(command);
+  return kindOf(tokenize(command))!.permanent ? "dangerous" : "caution";
 }
 
 /** One fix chosen to run: which finding, which of its fixes, and the commands as arguments. */
@@ -152,6 +162,10 @@ export function plan(scans: ScanResult[], names: string[], options: PlanOptions)
       );
     }
     const fix = which === "fix" ? finding.fix : alt!;
+    // A fix that calls itself undoable but holds a command that cannot be undone would skip the prompt a permanent fix needs.
+    if (fix.risk !== "dangerous" && fix.commands.some((text) => commandRisk(text) === "dangerous")) {
+      throw new ApplyError(`The fix for ${named} says it can be undone but holds a command that cannot be, so it is not run. A scan CloudPilot made does not say that: scan again.`);
+    }
     return {
       scan,
       finding,
@@ -329,6 +343,7 @@ export async function apply(plans: Plan[], ctx: ApplyContext): Promise<Array<Out
       if (result.exitCode !== 0) {
         failed = true;
         ctx.say(`  Failed with exit code ${result.exitCode}. Nothing after this was run.`);
+        if (ran.length > 1) ctx.say("  The commands before it had already run, so this fix may be half done. Check the resource, and see the way back above.");
       }
     }
     await ctx.record(entry(failed ? "failed" : "applied", ran));
