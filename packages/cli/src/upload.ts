@@ -99,10 +99,11 @@ async function readStart(res: Response): Promise<string> {
 /** Text with the token and the address taken out: for anything that is printed. */
 export function scrub(text: string, destination: Destination): string {
   const url = new URL(destination.url);
-  let out = text.split(destination.token).join("[token]");
-  // Longest first: the whole address, then the part after the host, which is where an address would carry a secret.
+  // Longest first, and the address before the bare token: an address that carries the token in it would otherwise
+  // survive as a half-replaced string that matches neither form.
+  let out = text;
   for (const secret of [destination.url, `${url.pathname}${url.search}`].filter((s) => s.length > 1)) out = out.split(secret).join("[url]");
-  return out;
+  return out.split(destination.token).join("[token]");
 }
 
 /** The real sender: one POST, no redirects followed (a redirect would take the token somewhere nobody configured). */

@@ -226,6 +226,14 @@ test("scrub takes out the token, the address and the part of it after the host",
   assert.equal(text, "[url] [token] [url]");
 });
 
+test("an address that carries the token in it still leaves only the host", () => {
+  const d = parseDestination(`https://hosted.example.com/api/ingest?key=${TOKEN}`, TOKEN);
+  const text = scrub(`rejected ${d.url} and ${d.token} and /api/ingest?key=${TOKEN}`, d);
+  assert.equal(text, "rejected [url] and [token] and [url]");
+  assert.ok(!text.includes(TOKEN));
+  assert.ok(!text.includes("/api/ingest"));
+});
+
 // The real sender, against a server on this machine
 
 test("one POST: the token as a bearer token, the body as JSON, nothing else of the machine", async () => {
