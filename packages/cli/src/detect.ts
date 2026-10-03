@@ -4,9 +4,12 @@ import {
   RDS_PRICED_STORAGE,
   rdsHourKey,
   rdsStorageKey,
+  type Bill,
   type Finding,
   type InstanceInfo,
   type Inventory,
+  type LoadBalancerInfo,
+  type NatGatewayInfo,
   type PriceBook,
   type RdsInstanceInfo,
   type RegionScan,
@@ -26,8 +29,9 @@ export interface DetectOptions {
   oversizedCpuMaxPct: number;
   /**
    * The share of the requested history CloudWatch must hold before an
-   * instance is judged oversized or an RDS instance idle. A short history
-   * is a new resource, or a gap in the data, not evidence.
+   * instance is judged oversized, or an RDS instance, NAT gateway or load
+   * balancer idle. A short history is a new resource, or a gap in the data,
+   * not evidence.
    */
   minCoverage: number;
 }
@@ -99,6 +103,51 @@ export function idleRdsInstances(inventory: Inventory, options: DetectOptions = 
     if (!RDS_PRICED_ENGINES[d.engine] || !RDS_PRICED_STORAGE[d.storageType]) return false;
     return c.maxConnections === 0 && c.hoursObserved >= options.minCoverage * c.windowHours;
   });
+}
+
+/**
+ * NAT gateways that carried no traffic for the whole window. A regional NAT
+ * gateway (it has no subnet) is billed differently and is never judged.
+ */
+export function idleNatGateways(inventory: Inventory, options: DetectOptions = DEFAULT_DETECT_OPTIONS): NatGatewayInfo[] {
+  return inventory.natGateways.filter((g) => {
+    const t = g.traffic;
+    if (g.ignored || g.state !== "available" || !g.subnetId || !t) return false;
+    return t.total === 0 && t.hoursObserved >= options.minCoverage * t.windowHours;
+  });
+}
+
+/** Why a load balancer is idle: nothing is registered behind it, or nothing came through it, or both. */
+export interface IdleBalancer {
+  balancer: LoadBalancerInfo;
+  noTargets: boolean;
+  noTraffic: boolean;
+}
+
+const hoursSince = (iso: string | undefined, at: string) => (iso ? (Date.parse(at) - Date.parse(iso)) / 3600_000 : undefined);
+
+/**
+ * Application and Network load balancers that no target group holds a target
+ * for, or that took no requests or flows for the whole window. Any recorded
+ * traffic clears a balancer, because one with no targets can still answer
+ * with a redirect or a fixed response. A balancer must also be old enough:
+ * as old as the share of the window CloudWatch has to cover, so one still
+ * being set up is never judged. Gateway load balancers, balancers whose tags
+ * could not be read, and balancers that are not active are left alone.
+ */
+export function idleLoadBalancers(inventory: Inventory, options: DetectOptions = DEFAULT_DETECT_OPTIONS): IdleBalancer[] {
+  const out: IdleBalancer[] = [];
+  for (const b of inventory.loadBalancers) {
+    if (b.ignored || b.tagsUnread || b.state !== "active" || (b.type !== "application" && b.type !== "network")) continue;
+    const t = b.traffic;
+    if (t && t.total > 0) continue;
+    const old = (hoursSince(b.createdAt, inventory.collectedAt) ?? 0) >= options.minCoverage * b.windowHours;
+    // A target group with no targets is empty; a balancer with no target group at all may only redirect, so it is not judged on this.
+    const noTargets = old && b.targetGroups !== undefined && b.targetGroups.length > 0 && b.targetGroups.every((g) => g.registeredTargets === 0);
+    const noTraffic = t !== undefined && t.hoursObserved >= options.minCoverage * t.windowHours;
+    if (noTargets || noTraffic) out.push({ balancer: b, noTargets, noTraffic });
+  }
+  return out;
 }
 
 const GIB = 1024 ** 3;
@@ -336,6 +385,79 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
     });
   }
 
+  // NAT gateways that carried nothing for the whole window.
+  for (const g of idleNatGateways(inventory, options)) {
+    const t = g.traffic!;
+    const hourly = prices.natGatewayHour;
+    // A gateway that cannot be priced is left out rather than reported at a made-up cost.
+    if (!hourly) continue;
+    findings.push({
+      pattern: "idle-nat-gateway",
+      title: `Idle NAT gateway: no traffic in the last ${t.hoursObserved.toFixed(0)} h`,
+      resourceType: "AWS::EC2::NatGateway",
+      resourceIds: [g.id],
+      evidence: [
+        `CloudWatch NAT gateway bytes in and out (BytesInFromSource, BytesInFromDestination, BytesOutToSource, BytesOutToDestination) over the last ${t.hoursObserved.toFixed(1)} h of the ${t.windowHours} h asked for: ${t.total} bytes in total (${t.datapoints} datapoints)`,
+        "No traffic means none passed in that window; it does not show that nothing routes to the gateway, such as a route used only when another path fails",
+        `${g.connectivityType} NAT gateway in ${g.subnetId} (${g.vpcId ?? "unknown VPC"}), state available`,
+        ...(g.allocationIds.length > 0 ? [`Elastic IP: ${g.publicIps.join(", ") || "unknown address"} (${g.allocationIds.join(", ")})`] : []),
+        ...(g.createdAt ? [`Created ${g.createdAt}`] : []),
+        ...(g.name ? [`Name tag: ${g.name}`] : []),
+      ],
+      monthlyCostUsd: hourly * HOURS_PER_MONTH,
+      costBasis: `${usd(hourly)}/hour x ${HOURS_PER_MONTH} hours. Data-processing charges are not included; with no traffic there are none. The Elastic IP is billed separately and is not included.`,
+      fix: {
+        commands: [cli(`ec2 delete-nat-gateway --nat-gateway-id ${g.id}`)],
+        risk: "dangerous",
+        rollback: `Deleting a NAT gateway is permanent. A route table entry that points at it is not removed: that route black-holes, so traffic sent through it is dropped, until the route is changed or deleted. ${g.allocationIds.length > 0 ? "Its Elastic IP is not released with it: the address stays in the account, billed as an idle IP and reported by the idle Elastic IP check unless it is released too. " : ""}A new gateway gets a new ID${g.allocationIds.length > 0 ? " and a new or another Elastic IP" : ""}, so every route has to be pointed at it again.`,
+      },
+      // A day without traffic can be a quiet day; a week is a much stronger signal. Deleting is permanent, so none is higher than 0.85.
+      confidence: t.hoursObserved >= 168 ? 0.85 : t.hoursObserved >= 24 ? 0.7 : 0.5,
+    });
+  }
+
+  // Load balancers with no targets behind them, or no traffic through them, for the whole window.
+  for (const { balancer: b, noTargets, noTraffic } of idleLoadBalancers(inventory, options)) {
+    const hourly = prices.loadBalancerHour[b.type];
+    if (hourly === undefined) continue;
+    const t = b.traffic;
+    const unit = b.type === "application" ? "requests" : "flows";
+    const metrics = b.type === "application" ? "RequestCount" : "NewFlowCount and ActiveFlowCount";
+    const hours = t?.hoursObserved ?? hoursSince(b.createdAt, inventory.collectedAt) ?? 0;
+    const why = [noTargets ? "no registered targets" : "", noTraffic ? `no ${unit}` : ""].filter(Boolean).join(" and ");
+    findings.push({
+      pattern: "idle-load-balancer",
+      title: `Idle ${b.type} load balancer ${b.name}: ${why}`,
+      resourceType: "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      resourceIds: [b.name],
+      evidence: [
+        ...(noTargets ? [`${b.targetGroups!.length} target group${b.targetGroups!.length === 1 ? "" : "s"} (${b.targetGroups!.map((g) => g.name).join(", ")}), none with a registered target`] : []),
+        ...(t && noTraffic
+          ? [
+              t.fromAge
+                ? `CloudWatch holds no ${metrics} datapoints for the last ${t.hoursObserved.toFixed(1)} h of the ${t.windowHours} h asked for. A load balancer reports that metric only while ${unit} flow, so none means no ${unit}`
+                : `CloudWatch ${metrics} over the last ${t.hoursObserved.toFixed(1)} h of the ${t.windowHours} h asked for: ${t.total} ${unit} in total (${t.datapoints} datapoints)`,
+            ]
+          : []),
+        ...(!t ? [`Traffic was not read, so ${unit} are not ruled out: a load balancer with no targets can still answer with a redirect or a fixed response`] : []),
+        "No targets or no traffic in that window does not show that nothing uses the load balancer, such as one that serves a yearly event",
+        `${b.type} load balancer ${b.name}, ${b.scheme ?? "unknown scheme"}, state active, DNS name ${b.dnsName ?? "unknown"}`,
+        `ARN ${b.arn}`,
+        ...(b.createdAt ? [`Created ${b.createdAt}`] : []),
+        ...(b.deletionProtection ? ["Deletion protection is on: the delete command is refused until it is turned off"] : []),
+      ],
+      monthlyCostUsd: hourly * HOURS_PER_MONTH,
+      costBasis: `${usd(hourly)}/hour x ${HOURS_PER_MONTH} hours (${b.type} load balancer). Load balancer capacity unit (LCU) charges are not included${noTraffic ? "; with no traffic there are almost none" : ""}.`,
+      fix: {
+        commands: [cli(`elbv2 delete-load-balancer --load-balancer-arn ${b.arn}`)],
+        risk: "dangerous",
+        rollback: `Deleting a load balancer is permanent. Its DNS name${b.dnsName ? ` (${b.dnsName})` : ""} is gone for good and cannot be claimed again, so every DNS record or allow-list that uses it breaks, and a new load balancer gets a new DNS name. Its listeners and rules are deleted with it. Its target groups are left behind, unused and not billed: delete them separately if they are not wanted. If deletion protection is on, the command is refused until it is switched off. To keep a way back, save its setup first: ${cli(`elbv2 describe-listeners --load-balancer-arn ${b.arn}`)} and ${cli("elbv2 describe-rules --listener-arn <each listener ARN>")}.`,
+      },
+      // The same ladder as the other idle rules. Without the traffic reading, only the empty target groups speak, so it stays low.
+      confidence: Math.min(hours >= 168 ? 0.85 : hours >= 24 ? 0.7 : 0.5, t ? 1 : 0.5),
+    });
+  }
+
   // Snapshots whose source volume is gone and that no AMI is built on.
   const amiSnapshots = new Set(inventory.images.flatMap((img) => img.snapshots.map((s) => s.id)));
   for (const s of inventory.snapshots) {
@@ -458,8 +580,21 @@ export function skippedByTag(inventory: Inventory): string[] {
     ...inventory.instances.filter((r) => r.ignored).map((r) => r.id),
     ...inventory.rdsInstances.filter((r) => r.ignored).map((r) => r.id),
     ...inventory.addresses.filter((r) => r.ignored).map((r) => r.allocationId),
+    ...inventory.natGateways.filter((r) => r.ignored).map((r) => r.id),
+    ...inventory.loadBalancers.filter((r) => r.ignored).map((r) => r.name),
     ...inventory.buckets.filter((r) => r.ignored).map((r) => r.name),
   ];
+}
+
+/**
+ * The scan with the account's bill added: the bill as read, and what the
+ * monthly waste found comes to as a share of it, rounded to one decimal. This
+ * is the only place the share is worked out. No share is given when nothing
+ * was wasted or the bill is not a positive amount.
+ */
+export function withBill(result: ScanResult, bill: Bill): ScanResult {
+  const share = bill.totalUsd && bill.totalUsd > 0 && result.totalMonthlyWasteUsd > 0 ? Math.round((result.totalMonthlyWasteUsd / bill.totalUsd) * 1000) / 10 : undefined;
+  return { ...result, bill: { ...bill, ...(share !== undefined ? { wasteSharePct: share } : {}) } };
 }
 
 /** A warning names the region whose check could not run, so a reader can tell what was missed. */

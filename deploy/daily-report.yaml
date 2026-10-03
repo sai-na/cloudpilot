@@ -86,6 +86,15 @@ Resources:
                 Action:
                   - rds:DescribeDBInstances
                 Resource: "*"
+              - Sid: ElbDescribe
+                Effect: Allow
+                Action:
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeLoadBalancerAttributes
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTags
+                Resource: "*"
               - Sid: S3BucketMetadata
                 Effect: Allow
                 Action:
@@ -109,6 +118,11 @@ Resources:
                 Action:
                   - pricing:GetProducts
                   - pricing:DescribeServices
+                Resource: "*"
+              - Sid: CostExplorerBill
+                Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
                 Resource: "*"
         - PolicyName: daily-job
           PolicyDocument:

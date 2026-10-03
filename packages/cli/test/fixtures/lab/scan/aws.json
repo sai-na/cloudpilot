@@ -229,6 +229,28 @@
     },
     "body": "PERlc2NyaWJlREJJbnN0YW5jZXNSZXNwb25zZSB4bWxucz0iaHR0cDovL3Jkcy5hbWF6b25hd3MuY29tL2RvYy8yMDE0LTEwLTMxLyI+CiAgPERlc2NyaWJlREJJbnN0YW5jZXNSZXN1bHQ+CiAgICA8REJJbnN0YW5jZXMvPgogIDwvRGVzY3JpYmVEQkluc3RhbmNlc1Jlc3VsdD4KICA8UmVzcG9uc2VNZXRhZGF0YT4KICAgIDxSZXF1ZXN0SWQ+OWIzZDIyYTYtYjZiYi00MGM3LWE3N2YtYzg0MjQyOGUxODZlPC9SZXF1ZXN0SWQ+CiAgPC9SZXNwb25zZU1ldGFkYXRhPgo8L0Rlc2NyaWJlREJJbnN0YW5jZXNSZXNwb25zZT4K"
    }
+  ],
+  "POST ec2.ap-south-1.amazonaws.com/ e7ec967fa2c793722904d240f14ecdbf1bca55f6139f7bf13347f046870b9432": [
+   {
+    "service": "EC2",
+    "operation": "DescribeNatGateways",
+    "status": 200,
+    "headers": {
+     "content-type": "text/xml;charset=UTF-8"
+    },
+    "body": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPERlc2NyaWJlTmF0R2F0ZXdheXNSZXNwb25zZSB4bWxucz0iaHR0cDovL2VjMi5hbWF6b25hd3MuY29tL2RvYy8yMDE2LTExLTE1LyI+PHJlcXVlc3RJZD5kMGIyYzljNi03MTk3LTQ0MWYtYTA5My00ZTQyOGIwMzYxMzA8L3JlcXVlc3RJZD48bmF0R2F0ZXdheVNldC8+PC9EZXNjcmliZU5hdEdhdGV3YXlzUmVzcG9uc2U+"
+   }
+  ],
+  "POST elasticloadbalancing.ap-south-1.amazonaws.com/ 291737628a8822c591d69bcc8ab0023e2d91be3e5358172d89f534bec412a356": [
+   {
+    "service": "ELBv2",
+    "operation": "DescribeLoadBalancers",
+    "status": 200,
+    "headers": {
+     "content-type": "text/xml"
+    },
+    "body": "PERlc2NyaWJlTG9hZEJhbGFuY2Vyc1Jlc3BvbnNlIHhtbG5zPSJodHRwOi8vZWxhc3RpY2xvYWRiYWxhbmNpbmcuYW1hem9uYXdzLmNvbS9kb2MvMjAxNS0xMi0wMS8iPgogIDxEZXNjcmliZUxvYWRCYWxhbmNlcnNSZXN1bHQ+CiAgICA8TG9hZEJhbGFuY2Vycy8+CiAgPC9EZXNjcmliZUxvYWRCYWxhbmNlcnNSZXN1bHQ+CiAgPFJlc3BvbnNlTWV0YWRhdGE+CiAgICA8UmVxdWVzdElkPmMxNzhlYjA2LTY4ZmUtNGQ4My1iYjRlLWFiZmI0MmMxYTNhODwvUmVxdWVzdElkPgogIDwvUmVzcG9uc2VNZXRhZGF0YT4KPC9EZXNjcmliZUxvYWRCYWxhbmNlcnNSZXNwb25zZT4K"
+   }
   ]
  }
 }

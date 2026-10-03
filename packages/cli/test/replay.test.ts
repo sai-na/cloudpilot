@@ -1,9 +1,12 @@
 /** Offline tests against a committed, account-redacted recording of the waste lab. */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { CostExplorerClient, GetCostAndUsageCommand } from "@aws-sdk/client-cost-explorer";
+import { billQuery } from "../src/collect.js";
 import { cli, FIXTURE, recordingText, SECRET_MARKERS } from "./helpers.js";
 
 const BANNER = /^REPLAY MODE: recorded \S+ from account 123456789012, region ap-south-1\. No live calls\.$/m;
@@ -152,4 +155,155 @@ test("the lab holds no database or oversized instance, so the recorded scan repo
   const result = JSON.parse(run.stdout);
   assert.deepEqual(result.warnings, []);
   assert.ok(!result.findings.some((f: { pattern: string }) => f.pattern === "idle-rds-instance" || f.pattern === "oversized-instance"));
+});
+
+// ---- NAT gateways, load balancers and the bill ----
+
+interface Recorded {
+  entries: Record<string, Array<{ service: string; operation: string; status: number; headers: Record<string, string>; body: string }>>;
+}
+const recordingFile = (dir: string, session = "scan") => join(dir, session, "aws.json");
+const readRecorded = (dir: string, session = "scan") => JSON.parse(readFileSync(recordingFile(dir, session), "utf8")) as Recorded;
+
+/** A copy of the committed recording, edited by `change`, for a test to replay. */
+async function recordingWith(change: (recorded: Recorded) => void | Promise<void>): Promise<string> {
+  const dir = join(mkdtempSync(join(tmpdir(), "cloudpilot-bill-")), "recording");
+  cpSync(FIXTURE, dir, { recursive: true });
+  const recorded = readRecorded(dir);
+  await change(recorded);
+  writeFileSync(recordingFile(dir), JSON.stringify(recorded));
+  return dir;
+}
+
+/** The recorded key of the one Cost Explorer request a bill makes, worked out from the request the code builds. */
+async function billKey(): Promise<string> {
+  const recordedAt = JSON.parse(readFileSync(join(FIXTURE, "manifest.json"), "utf8")).sessions[0].recordedAt as string;
+  let seen: { hostname: string; path: string; body?: unknown } | undefined;
+  const client = new CostExplorerClient({
+    region: "us-east-1",
+    credentials: { accessKeyId: "test", secretAccessKey: "test" },
+    maxAttempts: 1,
+    requestHandler: {
+      metadata: { handlerProtocol: "http/1.1" },
+      updateHttpClientConfig() {},
+      httpHandlerConfigs: () => ({}),
+      async handle(request: { hostname: string; path: string; body?: unknown }) {
+        seen = request;
+        throw new Error("captured");
+      },
+    },
+  });
+  await client.send(new GetCostAndUsageCommand(billQuery(new Date(recordedAt)).input)).catch(() => {});
+  return `POST ${seen!.hostname}${seen!.path} ${createHash("sha256").update(String(seen!.body)).digest("hex")}`;
+}
+
+const JSON_11 = { "content-type": "application/x-amz-json-1.1" };
+const costExplorerSays = (status: number, body: object, errorType?: string) => async (recorded: Recorded) => {
+  recorded.entries[await billKey()] = [
+    { service: "CostExplorer", operation: "GetCostAndUsage", status, headers: { ...JSON_11, ...(errorType ? { "x-amzn-errortype": errorType } : {}) }, body: Buffer.from(JSON.stringify(body)).toString("base64") },
+  ];
+};
+const monthTotal = (amount: string, unit = "USD") => ({
+  ResultsByTime: [{ TimePeriod: { Start: "2026-09-01", End: "2026-10-01" }, Total: { UnblendedCost: { Amount: amount, Unit: unit } }, Groups: [], Estimated: false }],
+  DimensionValueAttributes: [],
+});
+const recordingWithBill = (status: number, body: object, errorType?: string) => recordingWith(costExplorerSays(status, body, errorType));
+
+test("the recording holds the NAT gateway and load balancer reads, empty, in every session, and no Cost Explorer read", () => {
+  for (const session of ["scan", "ask-14a18f21221c", "ask-88bc6aba9740"]) {
+    const operations = Object.values(readRecorded(FIXTURE, session).entries).map((responses) => `${responses[0]!.service} ${responses[0]!.operation}`);
+    assert.equal(operations.filter((o) => o === "EC2 DescribeNatGateways").length, 1, session);
+    assert.equal(operations.filter((o) => o === "ELBv2 DescribeLoadBalancers").length, 1, session);
+    assert.ok(!operations.some((o) => o.startsWith("CostExplorer")), `${session} must not hold a paid read`);
+  }
+  assert.ok(!recordingText(FIXTURE).includes("ce.us-east-1"));
+});
+
+test("the lab holds no NAT gateway and no load balancer, so the recorded scan reports neither rule and says nothing of the bill", () => {
+  const run = cli(["scan", "--replay", FIXTURE, "--json"], { blockNetwork: true });
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.deepEqual(result.warnings, []);
+  assert.ok(!result.findings.some((f: { pattern: string }) => f.pattern === "idle-nat-gateway" || f.pattern === "idle-load-balancer"));
+  assert.equal(result.bill, undefined, "the bill is read only when asked for");
+  assert.doesNotMatch(run.stdout, /Cost Explorer/);
+});
+
+test("a role without the load balancer permission still gets a full scan: the denied check becomes a warning", async () => {
+  const denied =
+    '<ErrorResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">\n  <Error>\n    <Type>Sender</Type>\n    <Code>AccessDenied</Code>\n' +
+    "    <Message>User: arn:aws:sts::123456789012:assumed-role/cloudpilot-readonly/session is not authorized to perform: elasticloadbalancing:DescribeLoadBalancers</Message>\n" +
+    "  </Error>\n  <RequestId>00000000-0000-0000-0000-000000000000</RequestId>\n</ErrorResponse>";
+  const dir = await recordingWith((recorded) => {
+    const elb = Object.values(recorded.entries).filter((responses) => responses[0]!.service === "ELBv2");
+    assert.equal(elb.length, 1);
+    Object.assign(elb[0]![0]!, { status: 403, headers: { "content-type": "text/xml" }, body: Buffer.from(denied).toString("base64") });
+  });
+  const run = cli(["scan", "--replay", dir, "--json"], { blockNetwork: true });
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.findings.length, 10);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /^\[ap-south-1\] elasticloadbalancing:DescribeLoadBalancers: AccessDenied/);
+});
+
+test("--bill reads last month's spend once and every form of the report says what share the waste is", async () => {
+  const dir = await recordingWithBill(200, monthTotal("1234.56"));
+  const json = cli(["scan", "--replay", dir, "--bill", "--json"], { blockNetwork: true });
+  assert.equal(json.status, 0, json.stderr);
+  const result = JSON.parse(json.stdout);
+  assert.equal(result.findings.length, 10);
+  // 151.53 of 1234.56 is 12.27%, written to one decimal by the code.
+  assert.deepEqual(result.bill, { month: "2026-09", totalUsd: 1234.56, wasteSharePct: 12.3 });
+  assert.match(result.summary, /In September 2026 the account spent \$1234\.56 \(AWS Cost Explorer, unblended cost, before credits and refunds\)\.\nThe \$151\.53 a month of waste found is about 12\.3% of last month's bill\./);
+
+  const text = cli(["scan", "--replay", dir, "--bill", "--out", "report.md", "--html", "report.html"], { blockNetwork: true });
+  assert.equal(text.status, 0, text.stderr);
+  const share = "The $151.53 a month of waste found is about 12.3% of last month's bill. The waste is an estimate per month at current prices; the bill is last month's actual total.";
+  assert.ok(text.stdout.includes(share), "terminal report");
+  assert.ok(readFileSync(join(text.cwd, "report.md"), "utf8").includes(share), "Markdown report");
+  assert.ok(readFileSync(join(text.cwd, "report.html"), "utf8").includes(share.replaceAll("'", "&#39;")), "HTML report");
+  const plain = cli(["scan", "--replay", dir, "--bill", "--out", "report.txt"], { blockNetwork: true });
+  assert.ok(readFileSync(join(plain.cwd, "report.txt"), "utf8").includes(share), "plain text report");
+
+  // Without --bill the same recording is scanned and the bill is not touched.
+  assert.equal(JSON.parse(cli(["scan", "--replay", dir, "--json"], { blockNetwork: true }).stdout).bill, undefined);
+});
+
+test("--bill degrades to a plain note when the bill cannot be read, and the scan is otherwise whole", async () => {
+  const cases: Array<[string, number, object, string | undefined, RegExp]> = [
+    [
+      "denied",
+      400,
+      { __type: "AccessDeniedException", Message: "User: arn:aws:sts::123456789012:assumed-role/r/s is not authorized to perform: ce:GetCostAndUsage" },
+      "AccessDeniedException",
+      /The bill could not be read: AccessDeniedException - User: .* is not authorized to perform: ce:GetCostAndUsage\./,
+    ],
+    ["not enabled", 400, { __type: "AccessDeniedException", Message: "User not enabled for cost explorer access" }, "AccessDeniedException", /The bill could not be read: AccessDeniedException - User not enabled for cost explorer access\./],
+    ["no data", 200, { ResultsByTime: [], DimensionValueAttributes: [] }, undefined, /The bill could not be read: Cost Explorer returned no data for 2026-09\./],
+    ["a few thousandths of a cent", 200, monthTotal("0.000045"), undefined, /The bill could not be read: Cost Explorer shows no spend to the cent for 2026-09/],
+    ["zero", 200, monthTotal("0.0"), undefined, /The bill could not be read: Cost Explorer shows no spend to the cent for 2026-09/],
+    ["another currency", 200, monthTotal("90000", "INR"), undefined, /The bill could not be read: Cost Explorer reports 2026-09 in INR, and CloudPilot compares dollars only\./],
+    ["not a number", 200, monthTotal("lots"), undefined, /The bill could not be read: Cost Explorer returned an amount for 2026-09 that is not a number\./],
+  ];
+  for (const [name, status, body, errorType, note] of cases) {
+    const dir = await recordingWithBill(status, body, errorType);
+    const run = cli(["scan", "--replay", dir, "--bill", "--json"], { blockNetwork: true });
+    assert.equal(run.status, 0, `${name}: ${run.stderr}`);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.findings.length, 10, name);
+    assert.equal(result.bill.totalUsd, undefined, `${name}: no made-up figure`);
+    assert.equal(result.bill.wasteSharePct, undefined, name);
+    assert.match(result.summary, note, name);
+    assert.doesNotMatch(result.summary, /the account spent|of last month's bill/, name);
+    const report = cli(["scan", "--replay", dir, "--bill"], { blockNetwork: true });
+    assert.match(report.stdout, note, name);
+  }
+});
+
+test("--bill against a recording with no Cost Explorer read stops, naming it, and never reaches the network", () => {
+  const run = cli(["scan", "--replay", FIXTURE, "--bill"], { blockNetwork: true });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /Replay: no recorded response for CostExplorer GetCostAndUsage/);
+  assert.match(run.stderr, /never falls back to the network/);
 });

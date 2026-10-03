@@ -62,6 +62,43 @@ test("the documented policy grants every permission the README lists, and the RE
 test("every AWS SDK package is pinned to one exact version", () => {
   const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as { dependencies: Record<string, string> };
   const sdk = Object.entries(pkg.dependencies).filter(([name]) => name.startsWith("@aws-sdk/"));
-  assert.ok(sdk.some(([name]) => name === "@aws-sdk/client-rds"));
+  for (const wanted of ["client-rds", "client-elastic-load-balancing-v2", "client-cost-explorer"]) assert.ok(sdk.some(([name]) => name === `@aws-sdk/${wanted}`), `${wanted} is a dependency`);
   for (const [name, version] of sdk) assert.equal(version, "3.929.0", `${name} must be pinned to exactly 3.929.0`);
+});
+
+test("the README lists the NAT gateway, load balancer and bill reads, and the policy names each one", () => {
+  for (const operation of ["DescribeNatGateways", "DescribeLoadBalancers", "DescribeLoadBalancerAttributes", "DescribeTargetGroups", "DescribeTargetHealth", "DescribeTags", "GetCostAndUsage"]) {
+    assert.ok(documented.includes(operation), `${operation} is in the README table`);
+    assert.ok(called.includes(operation), `${operation} is called`);
+  }
+  // NAT gateways are read through ec2:Describe*, which the policy already holds.
+  assert.ok(grants("ec2:DescribeNatGateways"));
+  // Load balancers and the bill are asked for by name, never with a wildcard that would allow more.
+  const elb = ["DescribeLoadBalancers", "DescribeLoadBalancerAttributes", "DescribeTargetGroups", "DescribeTargetHealth", "DescribeTags"].map((o) => `elasticloadbalancing:${o}`);
+  for (const action of elb) assert.ok(allowed.includes(action), `${action} is in the policy`);
+  assert.deepEqual(allowed.filter((a) => a.startsWith("elasticloadbalancing:")).sort(), elb.sort());
+  assert.deepEqual(allowed.filter((a) => a.startsWith("ce:")), ["ce:GetCostAndUsage"]);
+});
+
+test("the one paid call is made only when the scan is asked for the bill", () => {
+  const index = readFileSync(resolve(root, "src/index.ts"), "utf8");
+  const collect = readFileSync(resolve(root, "src/collect.ts"), "utf8");
+  // Cost Explorer is reached from one place, behind the flag.
+  assert.deepEqual([...source.matchAll(/new GetCostAndUsageCommand\(/g)].length, 1);
+  assert.equal([...index.matchAll(/readBill\(/g)].length, 1, "index.ts calls readBill once");
+  assert.match(index, /options\.bill \? withBill\(merged, await readBill\(/);
+  assert.equal([...collect.matchAll(/\breadBill\(/g)].length, 1, "collect.ts only defines it: scanning a region never reads the bill");
+  assert.match(index, /\.option\("--bill", ".*\$0\.01 for this one request.*never made unless you ask"\)/);
+  assert.match(readme, /AWS charges \$0\.01 for each Cost Explorer\s+request/);
+  // The flag is on scan alone: ask, eval, mcp and kube cannot spend it.
+  assert.equal([...index.matchAll(/\.option\("--bill"/g)].length, 1);
+  assert.doesNotMatch(index.slice(index.indexOf("function withCommonOptions"), index.indexOf("const VERSION")), /--bill/);
+});
+
+test("the landing page lists every call the README lists, and its count of kinds is right", () => {
+  const page = readFileSync(resolve(root, "../../site/index.html"), "utf8");
+  const table = page.slice(page.indexOf('<details id="api-calls">'), page.indexOf("</details>", page.indexOf('<details id="api-calls">')));
+  const rows = [...table.matchAll(/<tr><td>\w+<\/td><td>(\w+)<\/td>/g)].map((m) => m[1]!).sort();
+  assert.deepEqual(rows, documented);
+  assert.match(table, new RegExp(`makes: ${documented.length} kinds, none of which can change anything`));
 });

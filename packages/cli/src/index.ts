@@ -5,9 +5,9 @@ import { dirname } from "node:path";
 import { Command } from "commander";
 import { buildTools, forModel, MCP_CLUSTER_INSTRUCTIONS, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
-import { callerAccount, collect, enabledRegions, readCpu } from "./collect.js";
+import { callerAccount, collect, enabledRegions, mapLimit, readBill, readCpu } from "./collect.js";
 import { compareScans, isScanResult } from "./compare.js";
-import { detect, mergeScans } from "./detect.js";
+import { detect, mergeScans, withBill } from "./detect.js";
 import { loadEnvFile } from "./env.js";
 import { evaluate, renderEvaluation } from "./evaluate.js";
 import { renderHtml } from "./html.js";
@@ -56,6 +56,7 @@ interface CommonOptions {
   replay?: string;
   liveLlm?: boolean;
   redactAccount?: boolean;
+  bill?: boolean;
 }
 
 /** What to scan: one named region, or every enabled one (region null). */
@@ -168,20 +169,6 @@ function noComparisonReason(options: CompareOptions, previous: ScanResult | unde
   return options.compare === false || options.replay || options.record ? "off" : undefined;
 }
 
-/** Run a task per item, a few at a time, keeping the results in the order of the items. */
-async function mapLimit<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await run(items[index]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
 async function pricesFor(inventory: Inventory, options: CommonOptions): Promise<PriceBook> {
   if (isEmpty(inventory)) return noPrices(inventory.region);
   const fromFile = async (path: string) => {
@@ -229,7 +216,9 @@ async function runScan(options: CommonOptions, command: "scan" | "ask", question
     return { inventory, prices, findings };
   });
 
-  const result = mergeScans(accountId, scans);
+  const merged = mergeScans(accountId, scans);
+  // Cost Explorer charges for each request, so the bill is read once, and only when asked for.
+  const result = options.bill ? withBill(merged, await readBill({ profile })) : merged;
   // The baseline the next scan compares with. A replay is a recording, not the
   // account as it is now, and a redacted run hides the account ID the
   // comparison needs, so neither may replace it. Skipped quietly where the
@@ -414,6 +403,7 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
   .option("--compare <file>", "say what changed since this earlier scan (default: the last scan made from this directory)")
   .option("--no-compare", "do not compare with an earlier scan")
   .option("--only-new", "list only the findings that are new since the earlier scan")
+  .option("--bill", "also read last month's total spend from Cost Explorer and say what share of it the waste is. AWS charges $0.01 for this one request, so it is never made unless you ask")
   .action(async (options: CommonOptions & { json?: boolean; out?: string; html?: string; explain?: boolean; compare?: string | false; onlyNew?: boolean }) => {
     // Read the earlier scan first: this run saves its own result over it.
     const previous = await previousScan(options);

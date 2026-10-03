@@ -1,4 +1,5 @@
 /** What every model provider shares: the ground rules, the summary request and the lookup tools. */
+import { sharePhrase } from "./report.js";
 import type { Inventory, PriceBook, ScanResult } from "./types.js";
 
 export type Provider = "anthropic" | "bedrock" | "openai";
@@ -24,6 +25,7 @@ Rules:
 - Costs for snapshots and AMIs are upper bounds (provisioned size); say so when you quote them.
 - Quote dollar amounts and resource IDs exactly as they appear in the data. Do not add amounts together, convert them to yearly figures or round them differently; text containing a figure or ID that is not in the data is discarded.
 - Resources tagged cloudpilot:ignore=true were skipped on purpose and are listed under skippedByTag; mention how many when you summarise.
+- When the scan has a "bill", it is last month's actual spend. Quote its total and its wasteSharePct exactly as given, worded "about N% of last month's bill": the waste is an estimate per month at current prices and the bill is last month's actual total. Never work out another percentage or ratio. If the bill has an "unavailable" reason, say the bill could not be read and why; never state a figure for it.
 - Write plain text for a terminal: short paragraphs and simple lists, no Markdown tables or headings.`;
 
 const dollars = (n: number) => `$${n.toFixed(2)}`;
@@ -33,6 +35,16 @@ export function forModel(result: ScanResult) {
   return {
     ...result,
     totalMonthlyWasteUsd: dollars(result.totalMonthlyWasteUsd),
+    ...(result.bill
+      ? {
+          bill: {
+            ...result.bill,
+            ...(result.bill.totalUsd !== undefined ? { totalUsd: dollars(result.bill.totalUsd) } : {}),
+            // The percentage as the report words it, so it is quoted exactly and never recomputed.
+            ...(result.bill.wasteSharePct !== undefined ? { wasteSharePct: sharePhrase(result.bill.wasteSharePct) } : {}),
+          },
+        }
+      : {}),
     ...(result.comparison
       ? {
           comparison: {
@@ -59,6 +71,7 @@ export const MCP_INSTRUCTIONS = `CloudPilot is a read-only scanner for wasted AW
 - Each fix carries a risk level and a "way back" note. When you recommend a fix marked dangerous, say what is permanent about it.
 - Costs for snapshots and AMIs are upper bounds based on provisioned size; say so when you quote them.
 - Resources tagged cloudpilot:ignore=true were skipped on purpose and are listed under skippedByTag.
+- When a result has a "bill", it is last month's actual spend. Quote its total and its wasteSharePct exactly as given, worded "about N% of last month's bill", and never work out another percentage. An "unavailable" reason means the bill could not be read: say so and never state a figure for it.
 - A result that starts with "REPLAY MODE" comes from a recording, not a live account: tell the user.`;
 
 /** Added to the instructions only by a server that offers the cluster tools: a replaying one has no cluster. */
@@ -94,7 +107,7 @@ export interface ToolSpec {
   run: (args: Record<string, unknown>) => Promise<string>;
 }
 
-const INVENTORY_KINDS = ["volumes", "snapshots", "images", "instances", "rdsInstances", "addresses", "buckets"] as const;
+const INVENTORY_KINDS = ["volumes", "snapshots", "images", "instances", "rdsInstances", "addresses", "natGateways", "loadBalancers", "buckets"] as const;
 type InventoryKind = (typeof INVENTORY_KINDS)[number];
 
 export function buildTools(ctx: AskContext): ToolSpec[] {

@@ -9,6 +9,8 @@ export interface Inventory {
   instances: InstanceInfo[];
   rdsInstances: RdsInstanceInfo[];
   addresses: AddressInfo[];
+  natGateways: NatGatewayInfo[];
+  loadBalancers: LoadBalancerInfo[];
   /** AMI IDs referenced by the latest and default version of every launch template. */
   launchTemplateImageIds: string[];
   buckets: BucketInfo[];
@@ -115,6 +117,74 @@ export interface RdsInstanceInfo {
   connections?: ConnectionStats;
 }
 
+/** What CloudWatch recorded for a resource's traffic over the window. */
+export interface TrafficStats {
+  /** The window that was asked for, so a reader can tell how much of it CloudWatch had data for. */
+  windowHours: number;
+  hoursObserved: number;
+  datapoints: number;
+  /** Everything the traffic metrics add up to: bytes for a NAT gateway, requests for an Application Load Balancer, flows for a Network Load Balancer. Zero means none. */
+  total: number;
+  /**
+   * True when CloudWatch held no datapoint at all and `hoursObserved` is how
+   * long the load balancer has existed within the window instead. Load
+   * balancers publish their request and flow metrics only while traffic
+   * flows, so for them no datapoints means no traffic.
+   */
+  fromAge?: boolean;
+}
+
+export interface NatGatewayInfo {
+  /** Tagged cloudpilot:ignore=true, so no finding is raised for it. */
+  ignored?: boolean;
+  id: string;
+  /** pending, available, deleting, deleted or failed. */
+  state: string;
+  vpcId?: string;
+  /** Not set for a regional NAT gateway, which spans subnets and is not priced here. */
+  subnetId?: string;
+  /** "public" or "private". Only a public one has an Elastic IP. */
+  connectivityType: string;
+  createdAt?: string;
+  /** The Elastic IP allocations the gateway uses. */
+  allocationIds: string[];
+  publicIps: string[];
+  name?: string;
+  /** Only for available gateways. Undefined when CloudWatch returned no data. */
+  traffic?: TrafficStats;
+}
+
+export interface TargetGroupInfo {
+  arn: string;
+  name: string;
+  /** Targets in any state, draining and unhealthy included. Undefined when the health could not be read. */
+  registeredTargets?: number;
+}
+
+export interface LoadBalancerInfo {
+  /** Tagged cloudpilot:ignore=true, so no finding is raised for it. */
+  ignored?: boolean;
+  /** The tags could not be read, so whether it carries the ignore tag is unknown and it is not judged. */
+  tagsUnread?: boolean;
+  arn: string;
+  name: string;
+  /** "application", "network" or "gateway". Classic load balancers are a different API and are not read. */
+  type: string;
+  scheme?: string;
+  dnsName?: string;
+  /** active, provisioning, active_impaired or failed. */
+  state: string;
+  createdAt?: string;
+  /** The window traffic was read over. */
+  windowHours: number;
+  /** Undefined when the attributes could not be read. */
+  deletionProtection?: boolean;
+  /** Undefined when the target groups could not be read. */
+  targetGroups?: TargetGroupInfo[];
+  /** Only for active Application and Network load balancers. Undefined when CloudWatch could not be read. */
+  traffic?: TrafficStats;
+}
+
 export interface AddressInfo {
   /** Tagged cloudpilot:ignore=true, so no finding is raised for it. */
   ignored?: boolean;
@@ -163,6 +233,10 @@ export interface PriceBook {
    * down from a running instance. Only types that were looked up are here.
    */
   instanceSpecs: Record<string, { vcpu: number; memoryGib: number }>;
+  /** Hourly price of a NAT gateway. 0 when none was looked up. */
+  natGatewayHour: number;
+  /** Hourly price of a load balancer by type, "application" or "network". Only types that were looked up are here. */
+  loadBalancerHour: Record<string, number>;
   s3StandardGbMonth: number;
 }
 
@@ -183,6 +257,8 @@ export type Pattern =
   | "idle-instance"
   | "oversized-instance"
   | "idle-rds-instance"
+  | "idle-nat-gateway"
+  | "idle-load-balancer"
   | "orphaned-snapshot"
   | "unused-ami"
   | "bucket-without-lifecycle"
@@ -269,6 +345,27 @@ export interface ClusterInfo {
   prices: ClusterPrices;
 }
 
+/**
+ * What the account spent in the last full calendar month, read with --bill:
+ * the total, and what the waste found comes to as a share of it.
+ */
+export interface Bill {
+  /** The month read, as YYYY-MM. */
+  month: string;
+  /** Cost Explorer's unblended cost for that month, before credits and refunds. Set unless `unavailable` is. */
+  totalUsd?: number;
+  /** AWS still marks the month's figures as estimated. */
+  estimated?: boolean;
+  /**
+   * The monthly waste found as a percentage of `totalUsd`, to one decimal.
+   * Computed by CloudPilot, never by a model. Not set when there is no waste
+   * or no bill to compare with.
+   */
+  wasteSharePct?: number;
+  /** Why the bill could not be read or compared, in words for a report. */
+  unavailable?: string;
+}
+
 export interface ScanResult {
   /** The AWS account ID. For a cluster scan, the kubectl context: what tells one scanned thing from another. */
   accountId: string;
@@ -283,6 +380,8 @@ export interface ScanResult {
   /** Resources left out because they are tagged cloudpilot:ignore=true. */
   skippedByTag: string[];
   warnings: string[];
+  /** Present when the scan was asked for the account's bill (--bill). */
+  bill?: Bill;
   /** Present when the scan was compared with an earlier one. */
   comparison?: Comparison;
 }
