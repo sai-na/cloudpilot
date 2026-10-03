@@ -593,7 +593,8 @@ the reason for each one held back or not run, not the command list.
 than usual (see [Spend anomalies](#spend-anomalies)). Its generic body is
 `source`, `event` (`spend-anomalies`), `text`, `subject`, `day`,
 `totalIncreaseUsd`, `totalMonthlyIfContinuesUsd` and `anomalies`, as `--json`
-has them. It has no earlier scan to compare with, so none of the rules above
+has them, and `rule` with one field, `weekdayCheck` (`false` when the run
+used `--no-weekday-check`). It has no earlier scan to compare with, so none of the rules above
 about the saved scan apply to it.
 
 **A message that fails to send is not lost.** CloudPilot says so on stderr and
