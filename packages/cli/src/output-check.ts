@@ -24,8 +24,15 @@ export function allowedValues(result: ScanResult, extra?: { inventories?: Invent
     // Unit prices quoted inside cost notes, such as "$0.114/GB-month".
     ...[...source.matchAll(DOLLARS)].map((m) => Number(m[1]!.replace(/,/g, ""))),
   ];
-  for (const p of extra?.prices ?? []) {
-    amounts.push(p.snapshotGbMonth, p.idleIpv4Hour, p.s3StandardGbMonth, ...Object.values(p.ebsGbMonth), ...Object.values(p.instanceHour));
+  // Every price in a book the model was handed, whichever field it sits in.
+  const prices = (value: unknown): number[] =>
+    typeof value === "number"
+      ? [value]
+      : value !== null && typeof value === "object"
+        ? Object.values(value as Record<string, unknown>).filter((v): v is number => typeof v === "number")
+        : [];
+  for (const book of extra?.prices ?? []) {
+    for (const field of Object.values(book as unknown as Record<string, unknown>)) amounts.push(...prices(field));
   }
   return { ids: new Set(source.match(RESOURCE_ID) ?? []), amounts };
 }
