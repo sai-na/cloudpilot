@@ -46,6 +46,10 @@ npm run test:kube-lab      # the live tests
 The second command scores the scan: every item found, every cost within 1%,
 every fix command exact, and nothing reported that is not in the key.
 
+The live tests include ones that run CloudPilot in the lab as a pod. Those
+need the image on the lab's node as well, and without it they skip, naming the
+two commands that build and load it.
+
 ```sh
 k8s-lab/down.sh --confirm  # deletes the cluster
 ```

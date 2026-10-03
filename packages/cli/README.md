@@ -97,8 +97,13 @@ out halfway through one. It reports:
   `--context`): whether each list the cluster scan makes is allowed (a
   `kubectl get --raw` with `limit=1`), whether a Prometheus is found (or named
   with `--prometheus`) and answers a query, and how many hours of container
-  history it holds, looking back at most a week. Without `kubectl` or a
-  context, the cluster is skipped in one line that says why.
+  history it holds, looking back at most a week. Run inside a cluster, where
+  there is no kubeconfig, it checks the same things through the pod's service
+  account once the cluster is named with `--cluster-name` (see [Read a cluster
+  from inside it](#read-a-cluster-from-inside-it)), and the `kube` command it
+  prints next carries that name. Without `kubectl`, without a context, or
+  inside a cluster with no name for it, the cluster is skipped in one line that
+  says why.
 - **What to run next**: the `scan` and `kube` commands that will work.
 
 `init` creates and changes nothing. Where a read was refused it prints what to

@@ -96,7 +96,7 @@ says what is new, what was resolved and what is unchanged.
 | [`docs/waste-lab.md`](docs/waste-lab.md) | The waste lab: a test AWS account seeded with nine kinds of waste, and the answer key CloudPilot is scored against |
 | `terraform/`, most of `scripts/`, `emulator/`, `lab-spec.json`, `pricing/` | The lab itself |
 | [`k8s-lab/`](k8s-lab) | The Kubernetes waste lab: a local cluster with seeded waste and its answer key |
-| [`deploy/`](deploy) | The daily report: a CloudFormation template that runs the scan on a schedule in your own account and emails what is new |
+| [`deploy/`](deploy) | Running it unattended: a CloudFormation template for the daily report, which scans the account on a schedule and emails what is new, and a Kubernetes manifest that has a cluster watch itself |
 | [`Dockerfile`](Dockerfile), [`scripts/docker-smoke.sh`](scripts/docker-smoke.sh) | A Docker image of the command with `kubectl` included, to build yourself, and the offline test that checks it: see [Run it in Docker](packages/cli/README.md#run-it-in-docker) |
 | [`demo/`](demo) | Demo runbook and the record and replay scripts |
 | [`site/`](site) | The landing page |

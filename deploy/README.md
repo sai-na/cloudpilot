@@ -115,7 +115,8 @@ For any other cluster, tag it for a registry you control and push it there
 (`docker tag`, `docker push`), with an image pull secret if the registry needs
 one. Use the name you pushed in the next step.
 
-**3. Fill in `kube-watch.yaml`.** Three places are marked `EDIT`:
+**3. Fill in `kube-watch.yaml`.** Three things in it are yours to fill in, each
+marked `EDIT` (a fourth `EDIT`, how often to scan, already works as it stands):
 
 - `image:` is a name Kubernetes cannot pull, on purpose, so that nothing is
   fetched from anywhere until you put yours there (`cloudpilot:local` for the
@@ -157,7 +158,7 @@ others.
 | Object | What it is for |
 |---|---|
 | Namespace `cloudpilot`, held to the `restricted` Pod Security Standard as v1.37 defines it | Where it runs. The pod below meets that standard, so the cluster can enforce it. Pinning the version keeps a cluster upgrade from changing what is admitted here |
-| ServiceAccount, ClusterRole and ClusterRoleBinding `cloudpilot` | Its identity, and the access in the next section |
+| ServiceAccount `cloudpilot`, ClusterRole and ClusterRoleBinding `cloudpilot-readonly` | Its identity, and the access in the next section |
 | Role and RoleBinding in your Prometheus's namespace | GET on that one service, through the API server |
 | Deployment `cloudpilot-watch` | One pod running `cloudpilot watch --kube --every 6h` |
 
