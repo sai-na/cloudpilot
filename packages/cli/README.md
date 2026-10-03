@@ -673,8 +673,9 @@ The rules are checked against a seeded cluster: see
   up is not judged on its targets. CloudWatch publishes these two metrics only
   while traffic flows, so a balancer with no datapoints at all counts as having
   had no traffic for as long as it has existed within the window; the evidence
-  says so. If CloudWatch cannot be read, only the empty target groups speak and
-  the confidence stays at 50%.
+  says so. If CloudWatch cannot be read, or holds less than 90% of the window,
+  only the empty target groups speak, the evidence says which of the two it was,
+  and the confidence stays at 50%.
 - The cost of an idle load balancer is its hourly price over 730 hours.
   Load balancer capacity unit (LCU) charges are not included. Deletion
   protection is read (`DescribeLoadBalancerAttributes`) and stated in the

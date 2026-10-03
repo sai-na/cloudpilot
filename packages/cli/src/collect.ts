@@ -64,6 +64,9 @@ const MAX_OBJECT_PAGES = 10;
 /** Load balancers whose targets are read at the same time, to stay inside the API's rate limits. */
 const LOAD_BALANCERS_AT_ONCE = 5;
 
+/** Resources whose CloudWatch metrics are read at the same time, to stay inside the GetMetricData request rate. */
+const METRICS_AT_ONCE = 10;
+
 /** DescribeTags takes at most this many ARNs in one request. */
 const TAGS_PER_REQUEST = 20;
 
@@ -298,24 +301,25 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
     attempt("s3:ListAllMyBuckets", warnings, [], () => collectBuckets(s3, opts.region, warnings)),
   ]);
 
-  await Promise.all([
+  // Every CloudWatch read of the region, a few at a time: they all draw on the same GetMetricData request rate.
+  const metricReads: Array<() => Promise<void>> = [
     ...instances
       .filter((i) => i.state === "running")
-      .map(async (i) => {
+      .map((i) => async () => {
         i.cpu = await attempt(`cloudwatch:GetMetricData ${i.id}`, warnings, undefined, () =>
           cpuStats(cloudwatch, i.id, opts.lookbackHours),
         );
       }),
     ...rdsInstances
       .filter((d) => d.status === "available")
-      .map(async (d) => {
+      .map((d) => async () => {
         d.connections = await attempt(`cloudwatch:GetMetricData ${d.id}`, warnings, undefined, () =>
           connectionStats(cloudwatch, d.id, opts.lookbackHours),
         );
       }),
     ...natGateways
       .filter((g) => g.state === "available")
-      .map(async (g) => {
+      .map((g) => async () => {
         g.traffic = await attempt(`cloudwatch:GetMetricData ${g.id}`, warnings, undefined, () =>
           trafficStats(cloudwatch, {
             namespace: "AWS/NATGateway",
@@ -332,10 +336,11 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
       }),
     ...loadBalancers
       .filter((b) => b.state === "active" && (b.type === "application" || b.type === "network"))
-      .map(async (b) => {
+      .map((b) => async () => {
         b.traffic = await attempt(`cloudwatch:GetMetricData ${b.name}`, warnings, undefined, () => loadBalancerTraffic(cloudwatch, b, opts.lookbackHours));
       }),
-  ]);
+  ];
+  await mapLimit(metricReads, METRICS_AT_ONCE, (read) => read());
 
   return {
     accountId,
