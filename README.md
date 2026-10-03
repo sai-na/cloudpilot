@@ -38,6 +38,14 @@ claims no pod mounts, and volumes left Released. It reads through your own
 `kubectl` and the cluster's Prometheus, and prints the `kubectl` command for
 each fix with the old values as the way back.
 
+It also lists things worth a look that are **not waste** and are never counted in
+the total: containers killed for running out of memory or restarting
+repeatedly, workloads with no CPU or memory request, pods that cannot be
+scheduled, and whether the requests would fit on fewer nodes. They sit in their
+own section after the findings and are left out with `--no-advisories`. The
+rules and limits are in
+[`packages/cli/README.md`](packages/cli/README.md#also-worth-a-look-advisories-which-are-not-waste).
+
 ## How it works
 
 1. **Read.** It asks AWS what exists, using only Describe, List and Get calls.

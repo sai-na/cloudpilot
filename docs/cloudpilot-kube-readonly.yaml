@@ -1,8 +1,10 @@
 # The least access `cloudpilot kube` needs in a cluster.
 #
-# It may list workloads, pods, services and volumes, and send GET requests to
-# one Prometheus service. It cannot read Secrets or ConfigMaps, and it has no
-# verb that creates, changes or deletes anything.
+# It may list workloads, pods, services, volumes and nodes, and send GET
+# requests to one Prometheus service. It cannot read Secrets or ConfigMaps, and
+# it has no verb that creates, changes or deletes anything. Nodes are listed
+# only for the spare node capacity advisory: without that permission, that one
+# check says it could not run and everything else is unaffected.
 #
 # You do not need this to try CloudPilot: it reads with whatever access your
 # own kubectl already has. Apply it when you want a dedicated identity whose
@@ -29,7 +31,7 @@ metadata:
   name: cloudpilot-readonly
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "services", "persistentvolumeclaims", "persistentvolumes"]
+    resources: ["namespaces", "pods", "services", "persistentvolumeclaims", "persistentvolumes", "nodes"]
     verbs: ["list"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]

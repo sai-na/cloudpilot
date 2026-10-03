@@ -6327,6 +6327,158 @@
     }
    ]
   },
+  "/api/v1/nodes?limit=500": {
+   "kind": "NodeList",
+   "apiVersion": "v1",
+   "metadata": {
+    "resourceVersion": "38395"
+   },
+   "items": [
+    {
+     "metadata": {
+      "name": "cloudpilot-lab-control-plane",
+      "uid": "57e6e126-1a98-4afe-a99c-9a278e423ea4",
+      "resourceVersion": "38044",
+      "creationTimestamp": "2026-10-03T14:22:00Z",
+      "labels": {
+       "beta.kubernetes.io/arch": "arm64",
+       "beta.kubernetes.io/os": "linux",
+       "kubernetes.io/arch": "arm64",
+       "kubernetes.io/hostname": "cloudpilot-lab-control-plane",
+       "kubernetes.io/os": "linux",
+       "node-role.kubernetes.io/control-plane": ""
+      },
+      "annotations": {
+       "node.alpha.kubernetes.io/ttl": "0",
+       "volumes.kubernetes.io/controller-managed-attach-detach": "true"
+      }
+     },
+     "spec": {
+      "podCIDR": "10.244.0.0/24",
+      "podCIDRs": [
+       "10.244.0.0/24"
+      ],
+      "providerID": "kind://docker/cloudpilot-lab/cloudpilot-lab-control-plane"
+     },
+     "status": {
+      "capacity": {
+       "cpu": "4",
+       "ephemeral-storage": "20955348992",
+       "hugepages-1Gi": "0",
+       "hugepages-2Mi": "0",
+       "hugepages-32Mi": "0",
+       "hugepages-64Ki": "0",
+       "memory": "6053984Ki",
+       "pods": "110"
+      },
+      "allocatable": {
+       "cpu": "4",
+       "ephemeral-storage": "20955348992",
+       "hugepages-1Gi": "0",
+       "hugepages-2Mi": "0",
+       "hugepages-32Mi": "0",
+       "hugepages-64Ki": "0",
+       "memory": "6053984Ki",
+       "pods": "110"
+      },
+      "conditions": [
+       {
+        "type": "MemoryPressure",
+        "status": "False",
+        "lastHeartbeatTime": "2026-10-03T21:32:10Z",
+        "lastTransitionTime": "2026-10-03T14:21:59Z",
+        "reason": "KubeletHasSufficientMemory",
+        "message": "kubelet has sufficient memory available"
+       },
+       {
+        "type": "DiskPressure",
+        "status": "False",
+        "lastHeartbeatTime": "2026-10-03T21:32:10Z",
+        "lastTransitionTime": "2026-10-03T14:21:59Z",
+        "reason": "KubeletHasNoDiskPressure",
+        "message": "kubelet has no disk pressure"
+       },
+       {
+        "type": "PIDPressure",
+        "status": "False",
+        "lastHeartbeatTime": "2026-10-03T21:32:10Z",
+        "lastTransitionTime": "2026-10-03T14:21:59Z",
+        "reason": "KubeletHasSufficientPID",
+        "message": "kubelet has sufficient PID available"
+       },
+       {
+        "type": "Ready",
+        "status": "True",
+        "lastHeartbeatTime": "2026-10-03T21:32:10Z",
+        "lastTransitionTime": "2026-10-03T14:22:21Z",
+        "reason": "KubeletReady",
+        "message": "kubelet is posting ready status"
+       }
+      ],
+      "addresses": [
+       {
+        "type": "InternalIP",
+        "address": "172.18.0.2"
+       },
+       {
+        "type": "Hostname",
+        "address": "cloudpilot-lab-control-plane"
+       }
+      ],
+      "daemonEndpoints": {
+       "kubeletEndpoint": {
+        "Port": 10250
+       }
+      },
+      "nodeInfo": {
+       "machineID": "3bea80a561bf4a7cbc2aac9888be6fa9",
+       "systemUUID": "4171d1e7-6dc3-4ef6-956b-7772a798aed8",
+       "bootID": "2c1c7443-73e5-4240-acd8-e27cc41d3c3a",
+       "kernelVersion": "6.8.0-100-generic",
+       "osImage": "Debian GNU/Linux 13 (trixie)",
+       "containerRuntimeVersion": "containerd://2.3.4",
+       "kubeletVersion": "v1.37.0",
+       "kubeProxyVersion": "",
+       "operatingSystem": "linux",
+       "architecture": "arm64",
+       "runningInUserNamespace": false
+      },
+      "runtimeHandlers": [
+       {
+        "name": "",
+        "features": {
+         "recursiveReadOnlyMounts": true,
+         "userNamespaces": true
+        }
+       },
+       {
+        "name": "runc",
+        "features": {
+         "recursiveReadOnlyMounts": true,
+         "userNamespaces": true
+        }
+       },
+       {
+        "name": "test-handler",
+        "features": {
+         "recursiveReadOnlyMounts": true,
+         "userNamespaces": true
+        }
+       }
+      ],
+      "features": {
+       "supplementalGroupsPolicy": true
+      },
+      "declaredFeatures": [
+       "ExtendWebSocketsToKubelet",
+       "InPlacePodLevelResourcesVerticalScaling",
+       "InPlacePodVerticalScalingInitContainers",
+       "RestartAllContainersOnContainerExits"
+      ]
+     }
+    }
+   ]
+  },
   "/apis/apps/v1/deployments?limit=500": {
    "kind": "DeploymentList",
    "apiVersion": "apps/v1",

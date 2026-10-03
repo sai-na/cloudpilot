@@ -314,7 +314,7 @@ test("a cluster that allows every list and has a week of history is ready", asyn
   assert.deepEqual([report.context, report.server], ["prod", "https://prod.example:6443"]);
   assert.deepEqual(
     report.checks.map((c) => c.resource),
-    ["namespaces", "pods", "services", "replicasets", "deployments", "statefulsets", "daemonsets", "persistentvolumeclaims", "persistentvolumes"],
+    ["namespaces", "pods", "services", "replicasets", "deployments", "statefulsets", "daemonsets", "persistentvolumeclaims", "persistentvolumes", "nodes"],
   );
   assert.ok(report.checks.every((c) => c.status === "allowed"));
   assert.deepEqual(report.prometheus, { status: "answers", ref: "monitoring/prometheus-server:9090", discovered: true, historyHours: 168 });
@@ -402,6 +402,16 @@ test("a list the identity may not read is reported with what the scan loses; wit
   assert.equal(none.prometheus, undefined);
   assert.ok(!reader.asked.some((p) => p.includes("/proxy/") || p.startsWith("/api/v1/services?limit=500")), "nothing more is read once a scan is impossible");
   assert.deepEqual((await preflight(options, { aws: aws().probes, kube: reader })).next, ["cloudpilot scan --region ap-south-1"]);
+});
+
+test("a refused list of nodes limits the scan to its advisories: the findings can still be made, and init says what is lost", async () => {
+  const report = await checkKubernetes(kubeReader({ denied: ["/api/v1/nodes"] }), options);
+  assert.equal(report.status, "limited");
+  assert.deepEqual(report.checks.filter((c) => c.status !== "allowed").map((c) => [c.resource, c.status]), [["nodes", "denied"]]);
+  const result = await preflight(options, { aws: aws().probes, kube: kubeReader({ denied: ["/api/v1/nodes"] }) });
+  assert.ok(result.next.includes("cloudpilot kube"), "a cluster scan is still offered");
+  const text = renderPreflight(result, options);
+  assert.match(text, /^ {4}denied {6}nodes {2}\(.*is forbidden.*; the spare node capacity advisory cannot run; the findings are unaffected, and --no-advisories skips the read\)$/m);
 });
 
 test("a cluster that cannot be reached is a failed list, not a refused one", async () => {
@@ -558,7 +568,7 @@ test("cloudpilot init scans a cluster ready, exits 0 without AWS, and kubectl is
   assert.ok(!calls.some((c) => c.some((a) => /^(auth|can-i|apply|create|delete|patch|edit|replace|exec|proxy|port-forward)$/.test(a))));
   assert.deepEqual(
     [...new Set(paths.map((p) => p.replace(/\?.*$/, "").replace(/^.*\/proxy\//, "prometheus:")))].sort(),
-    ["/api/v1/namespaces", "/api/v1/persistentvolumeclaims", "/api/v1/persistentvolumes", "/api/v1/pods", "/api/v1/services", "/apis/apps/v1/daemonsets", "/apis/apps/v1/deployments", "/apis/apps/v1/replicasets", "/apis/apps/v1/statefulsets", "prometheus:api/v1/query"],
+    ["/api/v1/namespaces", "/api/v1/nodes", "/api/v1/persistentvolumeclaims", "/api/v1/persistentvolumes", "/api/v1/pods", "/api/v1/services", "/apis/apps/v1/daemonsets", "/apis/apps/v1/deployments", "/apis/apps/v1/replicasets", "/apis/apps/v1/statefulsets", "prometheus:api/v1/query"],
   );
 });
 

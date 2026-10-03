@@ -67,6 +67,25 @@ test("scan_cluster says what it read and at what prices, then gives the summary 
   assert.equal(scan.findings[0].fix.commands[0], "kubectl set resources deployment/reports -n shop --context kind-cloudpilot-lab -c worker --requests=cpu=10m,memory=32Mi");
 });
 
+test("scan_cluster puts the advisories in its output, apart from the findings and the total", async () => {
+  const tools = (await client.listTools()).tools;
+  assert.match(tools.find((t) => t.name === "scan_cluster")!.description!, /It also returns advisories, which are NOT waste and are not in the total/);
+  assert.match(client.getInstructions() ?? "", /A cluster result may hold "advisories": things for a person to look at that are NOT waste\./);
+
+  const result = await client.callTool({ name: "scan_cluster", arguments: { lookback_hours: 1 } });
+  assert.equal(result.isError, false, text(result));
+  const body = text(result);
+  // A few lines for a reader, before the JSON.
+  assert.match(body, /\nAlso worth a look \(not counted as waste\): 2\. These are things to look at, not waste\. None of them is in the \$50\.64 total above[^\n]*\n- Container job of deployment\/importer was killed for running out of memory\n- Deployment local-path-provisioner sets no CPU or memory request\n\nFindings as JSON:/);
+  assert.ok(body.indexOf("Also worth a look") < body.indexOf("Findings as JSON:"));
+  const scan = JSON.parse(body.slice(body.indexOf("{", body.indexOf("Findings as JSON:"))));
+  assert.equal(scan.totalMonthlyWasteUsd, "$50.64");
+  assert.equal(scan.findings.length, 5);
+  assert.deepEqual(scan.advisories.map((a: { rule: string; resource: string }) => [a.rule, a.resource]), [["out-of-memory", "deployment/importer"], ["no-requests", "deployment/local-path-provisioner"]]);
+  assert.ok(scan.advisories.every((a: { countedInTotal: boolean }) => a.countedInTotal === false));
+  assert.deepEqual(scan.advisoryWarnings, []);
+});
+
 test("get_cluster_workloads shows what was not flagged, and why", async () => {
   const read = JSON.parse(text(await client.callTool({ name: "get_cluster_workloads", arguments: {} })));
   const named = (name: string) => read.workloads.find((w: { name: string }) => w.name === name);

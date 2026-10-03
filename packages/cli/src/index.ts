@@ -42,7 +42,7 @@ import {
   startReplay,
 } from "./recording.js";
 import { READ_ONLY_POLICY } from "./policy.js";
-import { header, money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
+import { advisoryDigest, header, money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
 import type { ClusterPrices, Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
 import { httpUploader, parseDestination, scanJson, TOKEN_VARIABLE, upload, type Destination } from "./upload.js";
 import { DEFAULT_EVERY, parseEvery, parseMaxRuns, reasonOf, sleep, watch } from "./watch.js";
@@ -51,6 +51,9 @@ const LAST_SCAN = ".cloudpilot/last-scan.json";
 
 const NOTIFY_HELP =
   "tell this Slack, Discord or other https webhook what is new (repeatable; or CLOUDPILOT_NOTIFY, comma-separated). The URL is a secret and is never printed";
+
+const NO_ADVISORIES_HELP =
+  "leave out the advisories: the things to look at that are not waste (out-of-memory kills, restarts, missing requests, pods that cannot be scheduled, spare node capacity). Also skips reading the cluster's nodes";
 
 const UPLOAD_HELP = `send each scan's full result as JSON to this https address, the hosted service's upload endpoint. The token for it is read only from ${TOKEN_VARIABLE}, never from a flag, because a flag ends up in shell history and in the process list`;
 
@@ -496,6 +499,8 @@ interface KubeOptions extends OutputOptions {
   cpuHourUsd?: string;
   memoryGibHourUsd?: string;
   storageGibMonthUsd?: string;
+  /** --no-advisories sets this to false. Anything else, including unset, reads and lists them. */
+  advisories?: boolean;
   compare?: string | false;
   onlyNew?: boolean;
   answerKey?: string;
@@ -566,6 +571,8 @@ interface ClusterScanOptions {
   prometheus?: string;
   lookbackHours: number;
   prices: ClusterPrices;
+  /** Read the nodes and the pods' status for the advisories, and list them. Off only with --no-advisories. */
+  advisories: boolean;
 }
 
 /**
@@ -579,6 +586,7 @@ async function scanCluster(reader: KubeReader, options: ClusterScanOptions): Pro
     prometheus: options.prometheus ? parsePrometheusRef(options.prometheus) : undefined,
     lookbackHours: options.lookbackHours,
     now: now(),
+    advisories: options.advisories,
   });
   return { inventory, result: detectCluster(inventory, options.prices) };
 }
@@ -595,12 +603,12 @@ function beginCluster(options: KubeOptions, command: "kube" | "kube-ask", questi
   if (options.liveLlm && !options.replay) throw new Error("--live-llm only applies to --replay.");
   const lookbackHours = amount(options.lookbackHours, "--lookback-hours");
   if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
-  const scan: ClusterScanOptions = { namespace: options.namespace, prometheus: options.prometheus, lookbackHours, prices: clusterPrices(options) };
+  const scan: ClusterScanOptions = { namespace: options.namespace, prometheus: options.prometheus, lookbackHours, prices: clusterPrices(options), advisories: options.advisories !== false };
 
   if (!options.replay) {
     if (options.record) {
-      const { namespace, prometheus, lookbackHours, prices } = scan;
-      startRecord(options.record, { id: sessionIdFor(command, question), command, question, namespace: namespace ?? null, prometheus: prometheus ?? null, lookbackHours, prices }, { redact: false });
+      const { namespace, prometheus, lookbackHours, prices, advisories } = scan;
+      startRecord(options.record, { id: sessionIdFor(command, question), command, question, namespace: namespace ?? null, prometheus: prometheus ?? null, lookbackHours, prices, advisories }, { redact: false });
     } else {
       startLive({ redact: false });
     }
@@ -616,6 +624,8 @@ function beginCluster(options: KubeOptions, command: "kube" | "kube-ask", questi
     prometheus: session.prometheus ?? undefined,
     lookbackHours: lookbackGiven ? lookbackHours : session.lookbackHours,
     prices: pricesGiven(options) ? scan.prices : session.prices,
+    // The recording holds the nodes only if the run that made it read them: an older one is replayed without advisories, as it was run.
+    advisories: scan.advisories && session.advisories === true,
   };
   const where = session.namespaces.length === 1 ? `namespace ${session.namespaces[0]}` : `${session.namespaces.length} namespaces`;
   const tail = replayTail("kubectl", options);
@@ -716,7 +726,7 @@ withRecordingOptions(
     withClusterOptions(
       program
         .command("kube")
-        .description("Scan a Kubernetes cluster for workloads that request more than they use and for unused volumes (read-only, through kubectl)")
+        .description("Scan a Kubernetes cluster for workloads that request more than they use and for unused volumes, and list things worth a look that are not waste (read-only, through kubectl)")
         .option("--lookback-hours <n>", "hours of usage history to judge requests by", "168"),
     ),
   ),
@@ -729,6 +739,7 @@ withRecordingOptions(
   .option("--no-compare", "do not compare with an earlier scan")
   .option("--only-new", "list only the findings that are new since the earlier scan")
   .option("--answer-key <path>", "score the findings against a lab's answer key instead of printing the report")
+  .option("--no-advisories", NO_ADVISORIES_HELP)
   .option("--notify <url>", NOTIFY_HELP, collectUrls)
   .option("--upload <url>", UPLOAD_HELP)
   .action(async (options: KubeOptions, command: Command) => {
@@ -922,13 +933,15 @@ program
   .option("--cpu-hour-usd <n>", "cluster: what one vCPU costs per hour on your nodes")
   .option("--memory-gib-hour-usd <n>", "cluster: what one GiB of memory costs per hour")
   .option("--storage-gib-month-usd <n>", "cluster: what one GiB of storage costs per month")
-  .action(async (options: WatchCommandOptions) => {
+  .option("--no-advisories", `cluster: ${NO_ADVISORIES_HELP}`)
+  .action(async (options: WatchCommandOptions, command: Command) => {
     const everyMs = parseEvery(options.every);
     const maxRuns = options.maxRuns === undefined ? undefined : parseMaxRuns(options.maxRuns);
     const targets = notifyTargets(options.notify);
     for (const key of options.kube ? AWS_ONLY : KUBE_ONLY) {
       if (options[key as keyof WatchCommandOptions] !== undefined) throw new Error(`${FLAG[key]} only applies ${options.kube ? "to the AWS account, not with --kube" : "with --kube"}.`);
     }
+    if (!options.kube && command.getOptionValueSource("advisories") === "cli") throw new Error("--no-advisories only applies with --kube.");
 
     const destination = uploadDestination(options);
 
@@ -958,7 +971,7 @@ program
       baselinePath = clusterFile("watch-kube", context);
       scan = async () => {
         note(readingCluster(context, inCluster));
-        return { result: (await scanCluster(reader, { namespace: options.namespace, prometheus: options.prometheus, lookbackHours, prices })).result };
+        return { result: (await scanCluster(reader, { namespace: options.namespace, prometheus: options.prometheus, lookbackHours, prices, advisories: options.advisories !== false })).result };
       };
     } else {
       const aws: CommonOptions = { ...options, lookbackHours: options.lookbackHours ?? "24", notifying: targets.length > 0 };
@@ -1265,6 +1278,7 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
           prometheus: text(args.prometheus),
           lookbackHours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 24 * 90) : 168,
           prices: OPENCOST_DEFAULTS,
+          advisories: true,
         }).then((scanned) => (cluster = scanned));
         // A failed scan leaves nothing behind to hand the next caller.
         const settled = () => {
@@ -1280,7 +1294,7 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
         {
           name: "scan_cluster",
           description:
-            "Scan a Kubernetes cluster for waste, read-only through kubectl, and return a summary plus every finding: workloads that request more CPU or memory than they use (with the kubectl command that lowers the request and the old values as the way back), volume claims no pod mounts, and Released volumes. Reads the current kubectl context unless one is given. Usage comes from the cluster's Prometheus. Costs use the OpenCost project's default unit prices, which the result states.",
+            "Scan a Kubernetes cluster for waste, read-only through kubectl, and return a summary plus every finding: workloads that request more CPU or memory than they use (with the kubectl command that lowers the request and the old values as the way back), volume claims no pod mounts, and Released volumes. It also returns advisories, which are NOT waste and are not in the total: containers killed for running out of memory, containers that keep restarting, workloads with no CPU or memory request, pods that cannot be scheduled, and spare node capacity. Reads the current kubectl context unless one is given. Usage comes from the cluster's Prometheus. Costs use the OpenCost project's default unit prices, which the result states.",
           inputSchema: {
             type: "object",
             properties: {
@@ -1293,7 +1307,8 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
           },
           run: async (args) => {
             const { result } = await readCluster(args);
-            return `${header(result).join("\n")}\n\n${templatedSummary(result)}\n\nFindings as JSON:\n${JSON.stringify(forModel(result))}`;
+            const digest = advisoryDigest(result);
+            return `${header(result).join("\n")}\n\n${templatedSummary(result)}\n\n${digest ? `${digest}\n\n` : ""}Findings as JSON:\n${JSON.stringify(forModel(result))}`;
           },
         },
         clusterWorkloads(async () => (await currentCluster()).inventory, " Runs scan_cluster with its defaults first if no cluster has been scanned yet."),

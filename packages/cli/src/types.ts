@@ -305,6 +305,72 @@ export interface Finding {
   isNew?: boolean;
 }
 
+/**
+ * The rules that raise an advisory. An advisory is something a person should
+ * look at that is NOT waste: it has no cost that adds into the total.
+ */
+export type AdvisoryRule = "out-of-memory" | "restarting" | "no-requests" | "unschedulable" | "spare-node-capacity";
+
+/**
+ * Something a cluster scan found that a person should look at, and that is not
+ * counted as waste. It is deliberately not a Finding: it has no monthly cost
+ * field to sum, no `pattern`, no `isNew` and no region, so nothing that adds up,
+ * compares, scores, uploads or announces findings can take one for a finding.
+ * It lives in `ScanResult.advisories`, a separate array that none of that code reads.
+ */
+export interface Advisory {
+  rule: AdvisoryRule;
+  title: string;
+  /** What kind of object it is about: Deployment, StatefulSet, DaemonSet, Job, Pod, or Cluster. */
+  kind: string;
+  /** The object as kubectl names it (deployment/importer), or cluster/<context> for the cluster as a whole. */
+  resource: string;
+  /** The namespace the object is in. "(cluster)" for the cluster as a whole. */
+  namespace: string;
+  /** The container, for the rules that are about one. */
+  container?: string;
+  /** Facts read from the cluster that support it. */
+  evidence: string[];
+  /** What to look at, in words. Always present. */
+  advice: string;
+  /** A command for a person to review, only where a sensible one can be worked out from what was read. */
+  suggestion?: Fix;
+  /** Always false: an advisory is never part of `totalMonthlyWasteUsd`, and this says so in the data. */
+  countedInTotal: false;
+  /** Only for spare node capacity: what the nodes that could go are worth at this scan's unit prices. Never added to the total. */
+  estimatedMonthlyUsd?: number;
+  /** Only with `estimatedMonthlyUsd`: how it was worked out. */
+  estimateBasis?: string;
+  /** Only for spare node capacity: the figures the evidence is worked from. */
+  capacity?: SpareCapacity;
+}
+
+/** What the spare-node-capacity rule worked out. CPU is in cores, memory in bytes. */
+export interface SpareCapacity {
+  /** The most of a node's allocatable CPU and memory the requests may fill, as a percentage. */
+  headroomPct: number;
+  /** Nodes that could run ordinary workloads, and so were counted. */
+  nodes: number;
+  /** Nodes left out because they run the control plane, carry a NoSchedule or NoExecute taint, or are cordoned. */
+  excludedNodes: string[];
+  /** The average node of those counted. */
+  perNode: { cpuCores: number; memoryBytes: number };
+  allocatable: { cpuCores: number; memoryBytes: number };
+  /** The requests of the pods on the counted nodes, as they are now. */
+  now: CapacityCase;
+  /** The same once the over-requested findings' suggested requests are applied. Equal to `now` when there are none. */
+  afterSuggestions: CapacityCase;
+}
+
+export interface CapacityCase {
+  requestedCpuCores: number;
+  requestedMemoryBytes: number;
+  /** How many nodes of this size would hold those requests within the headroom. */
+  nodesNeeded: number;
+  /** nodes - nodesNeeded, never below zero. */
+  removable: number;
+}
+
 /** How a scan differs from the one before it. */
 export interface Comparison {
   /** When the scan it is compared with was taken. */
@@ -382,6 +448,14 @@ export interface ScanResult {
   prices: { source: PriceBook["source"] | ClusterPrices["source"]; fetchedAt: string };
   findings: Finding[];
   totalMonthlyWasteUsd: number;
+  /**
+   * Cluster scans only, and absent with --no-advisories: things to look at that
+   * are NOT waste. Never counted in `totalMonthlyWasteUsd`, never compared with
+   * an earlier scan, never scored against a lab's answer key, never announced.
+   */
+  advisories?: Advisory[];
+  /** Cluster scans only, with `advisories`: reads the advisories needed that could not be made. Kept apart from `warnings`, so a refused read of the nodes cannot make a comparison doubt the findings. */
+  advisoryWarnings?: string[];
   /** Resources left out because they are tagged cloudpilot:ignore=true. */
   skippedByTag: string[];
   warnings: string[];

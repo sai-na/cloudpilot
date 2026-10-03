@@ -433,6 +433,7 @@ const KUBE_LISTS = [
   { resource: "daemonsets", path: "/apis/apps/v1/daemonsets", without: "the cloudpilot/ignore label on a DaemonSet is not seen" },
   { resource: "persistentvolumeclaims", path: "/api/v1/persistentvolumeclaims", without: "unused volume claims are not reported" },
   { resource: "persistentvolumes", path: "/api/v1/persistentvolumes", without: "released volumes are not reported" },
+  { resource: "nodes", path: "/api/v1/nodes", without: "the spare node capacity advisory cannot run; the findings are unaffected, and --no-advisories skips the read" },
 ] as const;
 
 /** The lists without which a cluster scan cannot run at all. */

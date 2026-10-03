@@ -174,8 +174,10 @@ The Secret `cloudpilot-webhook` is the one thing the manifest does not create.
 ## What it can and cannot read
 
 It can **list**, in every namespace: Namespaces, Pods, Services, PersistentVolumeClaims,
-PersistentVolumes, Deployments, ReplicaSets, StatefulSets and DaemonSets. It can
-**GET** one service's proxy, your Prometheus, to ask for usage history.
+PersistentVolumes, Nodes, Deployments, ReplicaSets, StatefulSets and DaemonSets. It can
+**GET** one service's proxy, your Prometheus, to ask for usage history. Nodes are listed
+for one advisory only, spare node capacity: where the list is refused, that one check says
+it could not run and nothing else changes.
 
 It cannot read Secrets or ConfigMaps, read logs, open a shell in a pod, or use any verb
 that creates, changes or deletes anything. Asked of the API server on the kind lab in

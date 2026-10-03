@@ -119,6 +119,55 @@ export interface Workload {
   /** Labelled or annotated cloudpilot/ignore=true, so no finding is raised for it. */
   ignored: boolean;
   containers: WorkloadContainer[];
+  /** How many of its pods are bound to each node, by node name. Absent when the pods were not read with their nodes. */
+  nodes?: Record<string, number>;
+}
+
+/** Why a node takes no part in the question of which nodes could be removed. */
+export type NodeLeftOut = "control-plane" | "tainted" | "cordoned";
+
+/** One node, with the requests of the pods bound to it. Only read for the advisories. */
+export interface NodeInfo {
+  name: string;
+  /** What the node offers to pods: its capacity less what the system reserves. */
+  allocatableCpuCores: number;
+  allocatableMemoryBytes: number;
+  /** Set when the node runs the control plane, carries a NoSchedule or NoExecute taint, or is cordoned. */
+  leftOut?: NodeLeftOut;
+  /** The requests of every pod bound to it that has not finished, in every namespace. */
+  requestedCpuCores: number;
+  requestedMemoryBytes: number;
+  pods: number;
+}
+
+/** What one container's pod status says. Only what the advisories read. */
+export interface ContainerFacts {
+  name: string;
+  cpuRequestCores?: number;
+  memoryRequestBytes?: number;
+  memoryLimitBytes?: number;
+  restartCount: number;
+  /** The reason the container is waiting, for example CrashLoopBackOff. */
+  waitingReason?: string;
+  /** How it last stopped, from lastState or, for a container that has stopped for good, state. */
+  terminated?: { reason?: string; exitCode?: number; finishedAt?: string };
+}
+
+/** One pod that has not finished, as the advisories read it. */
+export interface PodFacts {
+  namespace: string;
+  name: string;
+  phase: string;
+  /** What owns it: the workload for a pod of a Deployment, StatefulSet or DaemonSet, the controller otherwise, nothing for a bare pod. */
+  owner?: { kind: string; name: string };
+  /** Whether its owner is a workload that rules judge: a Deployment, StatefulSet or DaemonSet. */
+  ownerIsWorkload: boolean;
+  createdAt?: string;
+  containers: ContainerFacts[];
+  /** Set when the scheduler has said it cannot place the pod: its PodScheduled condition is False. */
+  unscheduled?: { reason?: string; message?: string; since?: string };
+  /** The pod or its workload is labelled cloudpilot/ignore=true. */
+  ignored: boolean;
 }
 
 export interface ClaimInfo {
@@ -161,6 +210,15 @@ export interface ClusterInventory {
   lookbackHours: number;
   /** Reads that failed. Findings that depend on them are skipped. */
   warnings: string[];
+  /** Absent when the advisories were not asked for, or in an inventory built without them. */
+  advisories?: {
+    /** Every node of the cluster. Absent when they could not be read. */
+    nodes?: NodeInfo[];
+    /** Pods that have not finished, in the namespaces read. */
+    pods: PodFacts[];
+    /** Advisory reads that could not be made. Kept apart from `warnings`: they never make a comparison doubt the findings. */
+    warnings: string[];
+  };
 }
 
 /** Run by the cluster itself and not the reader's to resize. */
@@ -288,6 +346,46 @@ export interface CollectClusterOptions {
   prometheus?: PrometheusRef;
   lookbackHours: number;
   now?: Date;
+  /** Also read what the advisories need: the nodes, and the pods' status. On unless set to false. */
+  advisories?: boolean;
+}
+
+/** Text a cluster hands back, made safe to print: no control characters, and no longer than `max`. */
+export function safeText(text: unknown, max = 240): string {
+  const flat = String(text ?? "").replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 3).trimEnd()}...` : flat;
+}
+
+const requestOf = (pod: any, resource: "cpu" | "memory") =>
+  (pod.spec?.containers ?? []).reduce((sum: number, c: any) => sum + ((resource === "cpu" ? parseCpu(c.resources?.requests?.cpu) : parseBytes(c.resources?.requests?.memory)) ?? 0), 0);
+
+const CONTROL_PLANE_ROLES = ["node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"];
+
+/** The nodes, each with what the pods bound to it request. A node with no allocatable figures cannot be counted and is named in `skipped`. */
+function nodesFrom(nodes: any[], pods: any[], skipped: string[]): NodeInfo[] {
+  const load = new Map<string, { cpu: number; memory: number; pods: number }>();
+  for (const pod of pods) {
+    const node = pod.spec?.nodeName;
+    if (!node || ["Succeeded", "Failed"].includes(pod.status?.phase)) continue;
+    const seen = load.get(node) ?? { cpu: 0, memory: 0, pods: 0 };
+    load.set(node, { cpu: seen.cpu + requestOf(pod, "cpu"), memory: seen.memory + requestOf(pod, "memory"), pods: seen.pods + 1 });
+  }
+  const out: NodeInfo[] = [];
+  for (const node of nodes) {
+    const name = String(node.metadata?.name ?? "");
+    const cpu = parseCpu(node.status?.allocatable?.cpu);
+    const memory = parseBytes(node.status?.allocatable?.memory);
+    if (!name || cpu === undefined || memory === undefined) {
+      skipped.push(name || "(unnamed)");
+      continue;
+    }
+    const labels = node.metadata?.labels ?? {};
+    const tainted = (node.spec?.taints ?? []).some((t: any) => t.effect === "NoSchedule" || t.effect === "NoExecute");
+    const leftOut: NodeLeftOut | undefined = CONTROL_PLANE_ROLES.some((role) => role in labels) ? "control-plane" : tainted ? "tainted" : node.spec?.unschedulable ? "cordoned" : undefined;
+    const used = load.get(name);
+    out.push({ name, allocatableCpuCores: cpu, allocatableMemoryBytes: memory, ...(leftOut ? { leftOut } : {}), requestedCpuCores: Math.round((used?.cpu ?? 0) * 1000) / 1000, requestedMemoryBytes: used?.memory ?? 0, pods: used?.pods ?? 0 });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Read the cluster's workloads, volumes and usage history. Nothing here can change the cluster. */
@@ -311,7 +409,9 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
     : (await list(reader, "/api/v1/namespaces")).map((n) => String(n.metadata.name)).filter((n) => !SYSTEM_NAMESPACES.has(n)).sort();
   const wanted = new Set(namespaces);
 
-  const pods = (await list(reader, scoped("/api/v1", "pods"))).filter((p) => wanted.has(p.metadata.namespace));
+  // Every pod the API server returned: a node is loaded by the pods of every namespace, the cluster's own included.
+  const everyPod = await list(reader, scoped("/api/v1", "pods"));
+  const pods = everyPod.filter((p) => wanted.has(p.metadata.namespace));
   const replicaSets = await attempt("ReplicaSets", scoped("/apis/apps/v1", "replicasets"));
   const claims = (await attempt("PersistentVolumeClaims", scoped("/api/v1", "persistentvolumeclaims"))).filter((c) => wanted.has(c.metadata.namespace));
   const volumes = await attempt("PersistentVolumes", "/api/v1/persistentvolumes");
@@ -325,11 +425,14 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
 
   const workloads = new Map<string, Workload>();
   const workloadOfPod = new Map<string, Workload>();
+  const wantAdvisories = options.advisories !== false;
+  const podFacts: PodFacts[] = [];
   for (const pod of pods) {
     if (["Succeeded", "Failed"].includes(pod.status?.phase)) continue;
     const owner = (pod.metadata.ownerReferences ?? []).find((o: any) => o.controller) ?? pod.metadata.ownerReferences?.[0];
-    if (!owner) continue;
     const namespace: string = pod.metadata.namespace;
+    if (wantAdvisories) podFacts.push(podFactsOf(pod, owner, deploymentOf));
+    if (!owner) continue;
     let kind: WorkloadKind;
     let name: string = owner.name;
     if (owner.kind === "ReplicaSet") {
@@ -351,6 +454,10 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
       workloads.set(key, workload);
     }
     workload.replicas += 1;
+    if (pod.spec?.nodeName) {
+      workload.nodes ??= {};
+      workload.nodes[pod.spec.nodeName] = (workload.nodes[pod.spec.nodeName] ?? 0) + 1;
+    }
     workload.ignored ||= isIgnored(pod.metadata);
     workloadOfPod.set(`${namespace}/${pod.metadata.name}`, workload);
     for (const spec of pod.spec?.containers ?? []) {
@@ -387,6 +494,26 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
     workloadOfPod,
     warnings,
   });
+
+  let advisories: ClusterInventory["advisories"];
+  if (wantAdvisories) {
+    const advisoryWarnings: string[] = [];
+    let nodes: NodeInfo[] | undefined;
+    if (namespace) {
+      advisoryWarnings.push("Spare node capacity was not checked: --namespace reads the pods of one namespace only, and a node is loaded by the pods of every namespace.");
+    } else {
+      try {
+        const skipped: string[] = [];
+        nodes = nodesFrom(await list(reader, "/api/v1/nodes"), everyPod, skipped);
+        if (skipped.length > 0) advisoryWarnings.push(`${skipped.length === 1 ? "A node" : `${skipped.length} nodes`} reported no allocatable CPU or memory and ${skipped.length === 1 ? "was" : "were"} left out of the spare node capacity check: ${skipped.join(", ")}`);
+      } catch (err) {
+        advisoryWarnings.push(`Spare node capacity could not be checked: the nodes could not be read: ${firstLine(err)}`);
+      }
+    }
+    // A label on the workload is not on its pods: a pod belongs to whatever its workload says.
+    for (const fact of podFacts) fact.ignored ||= workloadOfPod.get(`${fact.namespace}/${fact.name}`)?.ignored ?? false;
+    advisories = { nodes, pods: podFacts, warnings: advisoryWarnings };
+  }
 
   const mounted = new Map<string, string[]>();
   for (const pod of pods) {
@@ -432,6 +559,44 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
     prometheus: prometheus ? prometheusLabel(prometheus) : undefined,
     lookbackHours: options.lookbackHours,
     warnings,
+    ...(advisories ? { advisories } : {}),
+  };
+}
+
+/** What the advisories read of one pod. `owner` is resolved to the Deployment for a pod of a ReplicaSet that belongs to one. */
+function podFactsOf(pod: any, owner: any, deploymentOf: Map<string, string>): PodFacts {
+  const namespace: string = pod.metadata.namespace;
+  let resolved: PodFacts["owner"];
+  if (owner?.kind === "ReplicaSet" && deploymentOf.has(`${namespace}/${owner.name}`)) resolved = { kind: "Deployment", name: deploymentOf.get(`${namespace}/${owner.name}`)! };
+  else if (owner) resolved = { kind: String(owner.kind), name: String(owner.name) };
+  const scheduled = (pod.status?.conditions ?? []).find((c: any) => c.type === "PodScheduled");
+  const containers: ContainerFacts[] = (pod.spec?.containers ?? []).map((spec: any) => {
+    const status = (pod.status?.containerStatuses ?? []).find((s: any) => s.name === spec.name);
+    const stopped = status?.lastState?.terminated ?? status?.state?.terminated;
+    return {
+      name: spec.name,
+      cpuRequestCores: parseCpu(spec.resources?.requests?.cpu),
+      memoryRequestBytes: parseBytes(spec.resources?.requests?.memory),
+      memoryLimitBytes: parseBytes(spec.resources?.limits?.memory),
+      restartCount: Number(status?.restartCount ?? 0),
+      ...(status?.state?.waiting?.reason ? { waitingReason: safeText(status.state.waiting.reason, 80) } : {}),
+      ...(stopped
+        ? { terminated: { reason: stopped.reason === undefined ? undefined : safeText(stopped.reason, 80), exitCode: typeof stopped.exitCode === "number" ? stopped.exitCode : undefined, finishedAt: stopped.finishedAt === undefined ? undefined : safeText(stopped.finishedAt, 40) } }
+        : {}),
+    };
+  });
+  return {
+    namespace,
+    name: String(pod.metadata.name),
+    phase: String(pod.status?.phase ?? ""),
+    owner: resolved,
+    ownerIsWorkload: resolved !== undefined && ["Deployment", "StatefulSet", "DaemonSet"].includes(resolved.kind),
+    createdAt: pod.metadata.creationTimestamp,
+    containers,
+    ...(pod.status?.phase === "Pending" && scheduled?.status === "False"
+      ? { unscheduled: { reason: scheduled.reason === undefined ? undefined : safeText(scheduled.reason, 80), message: scheduled.message === undefined ? undefined : String(scheduled.message), since: scheduled.lastTransitionTime === undefined ? undefined : safeText(scheduled.lastTransitionTime, 40) } }
+      : {}),
+    ignored: isIgnored(pod.metadata),
   };
 }
 

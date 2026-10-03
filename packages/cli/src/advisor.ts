@@ -47,6 +47,8 @@ export function groundRules(result: Pick<ScanResult, "cluster">): string {
       ? [
           "- Objects labelled or annotated cloudpilot/ignore=true were skipped on purpose and are listed under skippedByTag (a Kubernetes label, not an AWS tag); mention how many when you summarise.",
           "- A warnings entry means part of the cluster could not be read, so the findings and workloads are incomplete. Say that instead of calling something absent or fine.",
+          "- The scan may also hold advisories: things for a person to look at that are NOT waste. They are not in totalMonthlyWasteUsd or in any finding, and they are not compared with an earlier scan. You may mention them as facts, apart from the findings and in the words of their evidence. Never call an advisory waste, never add its figure to the total, and never present a dollar figure in an advisory (estimatedMonthlyUsd) as waste or as a saving: it is an estimate of what removable nodes are worth, and the over-requested findings already count that money.",
+          "- An advisoryWarnings entry means a check that only the advisories need could not run, for example the nodes could not be read. Say so instead of saying that no node is spare.",
         ]
       : [
           "- Resources tagged cloudpilot:ignore=true were skipped on purpose and are listed under skippedByTag; mention how many when you summarise.",
@@ -88,6 +90,15 @@ export function forModel(result: ScanResult) {
       monthlyCostUsd: dollars(f.monthlyCostUsd),
       ...(f.alternative ? { alternative: { ...f.alternative, monthlySavingUsd: dollars(f.alternative.monthlySavingUsd) } } : {}),
     })),
+    // Advisories are not waste: the figure of the one that has one is a string like any other, and the raw capacity numbers stay out, so the evidence's words are what is quoted.
+    ...(result.advisories
+      ? {
+          advisories: result.advisories.map(({ capacity: _capacity, ...a }) => ({
+            ...a,
+            ...(a.estimatedMonthlyUsd !== undefined ? { estimatedMonthlyUsd: dollars(a.estimatedMonthlyUsd) } : {}),
+          })),
+        }
+      : {}),
   };
 }
 
@@ -103,11 +114,12 @@ export const MCP_INSTRUCTIONS = `CloudPilot is a read-only scanner for wasted AW
 - A result that starts with "REPLAY MODE" comes from a recording, not a live account: tell the user.`;
 
 /** Added to the instructions only by a server that offers the cluster tools: a replaying one has no cluster. */
-export const MCP_CLUSTER_INSTRUCTIONS = `- For a Kubernetes cluster, call "scan_cluster"; "get_cluster_workloads" reads from the latest cluster scan. A cluster result names the kubectl context where an account result gives the account ID, and namespaces where an account result gives regions. Lowering a request saves money only once the freed capacity lets the cluster run fewer or smaller nodes: say so when you quote such a saving, and say how much usage history the finding rests on. A cluster object is excluded by the label or annotation cloudpilot/ignore=true on it, not by the AWS tag; those objects are the ones listed under skippedByTag. A warnings entry means part of the cluster could not be read, so the lists are incomplete: say that instead of calling something absent.`;
+export const MCP_CLUSTER_INSTRUCTIONS = `- A cluster result may hold "advisories": things for a person to look at that are NOT waste. They are not in the total or in any finding, so never add them to it, never call one waste, and never present the dollar figure of one (estimatedMonthlyUsd, what removable nodes are worth) as a saving: the over-requested findings already count that money. An "advisoryWarnings" entry means a check only the advisories need could not run: say so.
+- For a Kubernetes cluster, call "scan_cluster"; "get_cluster_workloads" reads from the latest cluster scan. A cluster result names the kubectl context where an account result gives the account ID, and namespaces where an account result gives regions. Lowering a request saves money only once the freed capacity lets the cluster run fewer or smaller nodes: say so when you quote such a saving, and say how much usage history the finding rests on. A cluster object is excluded by the label or annotation cloudpilot/ignore=true on it, not by the AWS tag; those objects are the ones listed under skippedByTag. A warnings entry means part of the cluster could not be read, so the lists are incomplete: say that instead of calling something absent.`;
 
 export const summaryRequest = (result: ScanResult) =>
   result.cluster
-    ? `Here is the scan result as JSON:\n\n${JSON.stringify(forModel(result))}\n\nWrite a summary for the engineer who owns this cluster: the total monthly waste, then the findings in the order they should be dealt with, grouping ones that are the same kind of problem. For each, give the monthly cost, why it is waste in one sentence, and how risky the fix is. Say how much usage history the requests findings rest on, and that their saving is only realised once the cluster can run fewer or smaller nodes. Finish with the single action that saves the most for the least risk. Keep it under 300 words.`
+    ? `Here is the scan result as JSON:\n\n${JSON.stringify(forModel(result))}\n\nWrite a summary for the engineer who owns this cluster: the total monthly waste, then the findings in the order they should be dealt with, grouping ones that are the same kind of problem. For each, give the monthly cost, why it is waste in one sentence, and how risky the fix is. Say how much usage history the requests findings rest on, and that their saving is only realised once the cluster can run fewer or smaller nodes. Finish with the single action that saves the most for the least risk.${result.advisories && result.advisories.length > 0 ? " The scan also has advisories: things to look at that are not waste. After the findings, add one short separate paragraph naming them, in the words of their evidence, saying that they are not in the total, and never calling them waste or giving a figure from them as a saving." : ""} Keep it under 300 words.`
     : `Here is the scan result as JSON:\n\n${JSON.stringify(forModel(result))}\n\nWrite a summary for the engineer who owns this account: the total monthly waste, then the findings in the order they should be dealt with, grouping ones that are the same kind of problem. For each, give the monthly cost, why it is waste in one sentence, and how risky the fix is. Finish with the single action that saves the most for the least risk. Keep it under 250 words.`;
 
 /**
@@ -161,7 +173,7 @@ type InventoryKind = (typeof INVENTORY_KINDS)[number];
 const listFindings = (result: () => ScanResult): ToolSpec => ({
   name: "list_findings",
   description:
-    "Return every waste finding from the scan: pattern, resource IDs, evidence, monthly cost in USD, the proposed fix commands with their risk level, and the total. Call this first for any question about savings or what to fix.",
+    "Return every waste finding from the scan: pattern, resource IDs, evidence, monthly cost in USD, the proposed fix commands with their risk level, and the total. For a cluster it also returns advisories: things to look at that are NOT waste and not in the total. Call this first for any question about savings or what to fix.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   run: async () => JSON.stringify(forModel(result())),
 });
