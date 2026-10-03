@@ -74,6 +74,8 @@ export interface ClusterSession extends SessionBase {
   prometheus: string | null;
   lookbackHours: number;
   prices: ClusterPrices;
+  /** Whether the reads the advisories need (the nodes) were made. Absent in a recording made before there were advisories: it is replayed without them. */
+  advisories?: boolean;
 }
 
 export type SessionMeta = AccountSession | ClusterSession;
@@ -364,12 +366,16 @@ export function saveClusterRecording(cluster: { context: string; namespaces: str
  * secret: environment values, commands and their arguments, probes. Labels and
  * annotations are cut down to the one the scan reads (cloudpilot/ignore):
  * kubectl's own annotation holds a whole copy of the manifest, environment
- * included. Secrets and ConfigMaps are not on this list because a scan never
- * asks for them. Keep it in step with what kube.ts reads; the record-then-replay
+ * included. Node role labels (node-role.kubernetes.io/*) are kept as well, to
+ * tell the control plane from the nodes that run workloads, and a node's
+ * `images` list is dropped: a scan never reads it. Secrets and ConfigMaps are
+ * not on this list because a scan never asks for them. Keep it in step with what kube.ts reads; the record-then-replay
  * test fails if a read starts to depend on something dropped here.
  */
-const UNREAD = new Set(["managedFields", "env", "envFrom", "command", "args", "livenessProbe", "readinessProbe", "startupProbe", "lifecycle"]);
+const UNREAD = new Set(["managedFields", "images", "env", "envFrom", "command", "args", "livenessProbe", "readinessProbe", "startupProbe", "lifecycle"]);
 const KEPT_LABEL = "cloudpilot/ignore";
+/** The one family of labels besides that which a scan reads: a node's role, to tell the control plane from nodes that run workloads. */
+const KEPT_LABEL_PREFIX = "node-role.kubernetes.io/";
 
 function unread(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(unread);
@@ -378,8 +384,8 @@ function unread(value: unknown): unknown {
   for (const [key, inner] of Object.entries(value)) {
     if (UNREAD.has(key)) continue;
     if ((key === "labels" || key === "annotations") && inner && typeof inner === "object" && !Array.isArray(inner)) {
-      const only = (inner as Record<string, unknown>)[KEPT_LABEL];
-      if (only !== undefined) kept[key] = { [KEPT_LABEL]: only };
+      const wanted = Object.entries(inner as Record<string, unknown>).filter(([name]) => name === KEPT_LABEL || (key === "labels" && name.startsWith(KEPT_LABEL_PREFIX)));
+      if (wanted.length > 0) kept[key] = Object.fromEntries(wanted);
       continue;
     }
     kept[key] = unread(inner);

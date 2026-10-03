@@ -43,7 +43,7 @@ metadata:
   name: cloudpilot-readonly
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "services", "persistentvolumeclaims", "persistentvolumes"]
+    resources: ["namespaces", "pods", "services", "persistentvolumeclaims", "persistentvolumes", "nodes"]
     verbs: ["list"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]

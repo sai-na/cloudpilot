@@ -99,6 +99,7 @@ test("reading a cluster only ever asks the API server to GET lists and Prometheu
   const kinds = asked.map((path) => path.replace(/\?.*$/, "").replace(/^.*\/proxy\//, "prometheus:"));
   assert.deepEqual([...new Set(kinds)].sort(), [
     "/api/v1/namespaces",
+    "/api/v1/nodes",
     "/api/v1/persistentvolumeclaims",
     "/api/v1/persistentvolumes",
     "/api/v1/pods",
@@ -107,6 +108,11 @@ test("reading a cluster only ever asks the API server to GET lists and Prometheu
     "/apis/apps/v1/replicasets",
     "prometheus:api/v1/query",
   ]);
+  // Without the advisories, the nodes are not read at all.
+  const without: string[] = [];
+  await collectCluster(recorded(without), { lookbackHours: fixture.lookbackHours, now: new Date(fixture.recordedAt), advisories: false });
+  assert.ok(!without.some((path) => path.startsWith("/api/v1/nodes")), "--no-advisories reads no nodes");
+  assert.ok(without.length < asked.length);
 });
 
 // The rules on their own, over hand-built inventories.

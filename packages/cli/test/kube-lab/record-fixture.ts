@@ -6,18 +6,18 @@
  *
  * Run it when the reads change, with the lab up (k8s-lab/up.sh --confirm) and
  * at least ten minutes of history in its Prometheus. Nothing secret is read:
- * only pods, workloads, volumes, services and Prometheus query results.
+ * only pods, workloads, volumes, nodes, services and Prometheus query results.
  */
 import { collectCluster, kubectlReader, type KubeReader } from "../../src/kube.js";
 
 export const LAB_CONTEXT = "kind-cloudpilot-lab";
 export const LAB_LOOKBACK_HOURS = 1;
 
-/** Server-side bookkeeping that no rule reads and that would triple the file. */
+/** Server-side bookkeeping and a node's list of images that no rule reads and that would triple the file. */
 function trimmed(value: any): any {
   if (Array.isArray(value)) return value.map(trimmed);
   if (!value || typeof value !== "object") return value;
-  const { managedFields: _dropped, ...rest } = value;
+  const { managedFields: _dropped, images: _images, ...rest } = value;
   return Object.fromEntries(Object.entries(rest).map(([key, inner]) => [key, trimmed(inner)]));
 }
 
