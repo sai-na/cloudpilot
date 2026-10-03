@@ -157,7 +157,8 @@ function unusedClaim(claim: ClaimInfo, inventory: ClusterInventory, prices: Clus
   // A claim still waiting for a volume holds no storage, so it costs nothing.
   if (claim.phase !== "Bound" || claim.mountedBy.length > 0) return undefined;
   const size = gib(claim.capacityBytes);
-  const keeps = claim.reclaimPolicy === "Retain";
+  const policy = claim.reclaimPolicy;
+  const check = `kubectl get persistentvolume ${claim.volumeName ?? "<volume>"} --context ${inventory.context} -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'`;
   return {
     region: claim.namespace,
     pattern: "unused-volume-claim",
@@ -174,9 +175,12 @@ function unusedClaim(claim: ClaimInfo, inventory: ClusterInventory, prices: Clus
     fix: {
       commands: [`kubectl delete persistentvolumeclaim ${claim.name} -n ${claim.namespace} --context ${inventory.context}`],
       risk: "dangerous",
-      rollback: keeps
-        ? "The volume's reclaim policy is Retain, so deleting the claim leaves the volume and its data in place, still paid for, until the volume is deleted too."
-        : `Deleting the claim deletes the volume and its data (reclaim policy ${claim.reclaimPolicy ?? "Delete"}). Copy or snapshot the data first if any of it matters.`,
+      rollback:
+        policy === "Retain"
+          ? "The volume's reclaim policy is Retain, so deleting the claim leaves the volume and its data in place, still paid for, until the volume is deleted too."
+          : policy === undefined
+            ? `The volume's reclaim policy could not be read, so what deleting the claim does to the volume is unknown, and so is the saving: read it with ${check}. Delete means the claim takes the volume and its data with it; Retain means both stay, still paid for, until the volume is deleted too. Copy or snapshot the data first if any of it matters.`
+            : `Deleting the claim deletes the volume and its data (reclaim policy ${policy}). Copy or snapshot the data first if any of it matters.`,
     },
     confidence: 0.8,
   };
@@ -218,7 +222,9 @@ export function detectCluster(inventory: ClusterInventory, prices: ClusterPrices
 
   const warnings = [...inventory.warnings];
   if (inventory.prometheus) {
-    const unjudged = kept(inventory.workloads).filter((w) => w.containers.some((c) => (c.historyHours ?? 0) < MIN_HISTORY_HOURS));
+    // Only workloads where nothing at all could be judged: one container with
+    // history is enough for the workload to have been looked at.
+    const unjudged = kept(inventory.workloads).filter((w) => w.containers.length > 0 && w.containers.every((c) => (c.historyHours ?? 0) < MIN_HISTORY_HOURS));
     if (unjudged.length > 0) {
       warnings.push(
         `${unjudged.length} workload${unjudged.length === 1 ? " has" : "s have"} under five minutes of usage history in Prometheus and ${unjudged.length === 1 ? "was" : "were"} not judged: ${unjudged.map((w) => `${w.namespace}/${w.name}`).join(", ")}`,
@@ -228,7 +234,10 @@ export function detectCluster(inventory: ClusterInventory, prices: ClusterPrices
 
   return {
     accountId: inventory.context,
-    regions: inventory.namespaces,
+    // Volumes are cluster-scoped and read whole, so one can be charged to a
+    // namespace outside the list read for workloads: a deleted or a system one.
+    // Every namespace a finding is in belongs in the namespaces the report counts.
+    regions: [...new Set([...inventory.namespaces, ...findings.map((f) => f.region)])].sort(),
     scannedAt: inventory.collectedAt,
     prices: { source: prices.source, fetchedAt: inventory.collectedAt },
     findings,

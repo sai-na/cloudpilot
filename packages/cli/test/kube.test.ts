@@ -16,6 +16,7 @@ import { evaluate } from "../src/evaluate.js";
 import { collectCluster, parseBytes, parseCpu, parsePrometheusRef, type ClusterInventory, type KubeReader, type Workload } from "../src/kube.js";
 import { cpuQuantity, detectCluster, hours, memoryQuantity, OPENCOST_DEFAULTS } from "../src/kube-detect.js";
 import { renderHtml } from "../src/html.js";
+import { templatedSummary } from "../src/report.js";
 import { cli } from "./helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -167,6 +168,20 @@ test("a workload with too little history, or none, is not judged, and the scan s
   assert.deepEqual(blind.warnings, ["No Prometheus service was found in the cluster."]);
 });
 
+test("a workload is only called unjudged when no container of it could be judged", () => {
+  // The sidecar has no series in Prometheus; the main container has a week of history.
+  const mixed = workload({
+    containers: [
+      { name: "app", cpuRequestCores: 2, memoryRequestBytes: 2048 * MI, ...idle },
+      { name: "envoy", cpuRequestCores: 1, memoryRequestBytes: 512 * MI, oomKilled: false },
+    ],
+  });
+  const result = detectCluster(inventory({ workloads: [mixed] }), OPENCOST_DEFAULTS);
+  assert.deepEqual(result.findings.map((f) => f.resourceIds), [["deployment/api"]]);
+  assert.deepEqual(result.findings[0]!.fix.commands, ["kubectl set resources deployment/api -n prod --context prod-cluster -c app --requests=cpu=10m,memory=32Mi"]);
+  assert.deepEqual(result.warnings, []);
+});
+
 test("each over-requested container of a workload gets its own command, in one finding", () => {
   const two = workload({
     kind: "StatefulSet",
@@ -210,6 +225,32 @@ test("a claim still waiting for a volume, a mounted one and a labelled one are n
   );
   assert.deepEqual(result.findings, []);
   assert.deepEqual(result.skippedByTag, ["prod/persistentvolumeclaim/kept-on-purpose"]);
+});
+
+test("a Released volume charged to a namespace outside the ones read is still counted as one", () => {
+  const result = detectCluster(
+    inventory({
+      namespaces: ["default"],
+      volumes: [{ name: "archive", phase: "Released", capacityBytes: 50 * 2 ** 30, reclaimPolicy: "Retain", claim: { namespace: "old", name: "data" }, ignored: false }],
+    }),
+    OPENCOST_DEFAULTS,
+  );
+  assert.deepEqual(result.findings.map((f) => f.region), ["old"]);
+  assert.deepEqual(result.regions, ["default", "old"]);
+  // The summary must not put the finding in default, the one namespace read for workloads.
+  const summary = templatedSummary(result);
+  assert.match(summary, /across 1 finding in 1 of the 2 namespaces scanned\./);
+  assert.match(summary, /- old: 1 finding/);
+  assert.match(summary, /- 1 other namespace: nothing found\./);
+});
+
+test("a claim whose volume could not be read does not promise what deleting it does", () => {
+  const unread = { name: "data", namespace: "prod", phase: "Bound", capacityBytes: 2 ** 30, volumeName: "pv-1", mountedBy: [], ignored: false };
+  const warning = "PersistentVolumes could not be read: persistentvolumes is forbidden";
+  const [finding] = detectCluster(inventory({ claims: [unread], warnings: [warning] }), OPENCOST_DEFAULTS).findings;
+  assert.doesNotMatch(finding!.fix.rollback, /reclaim policy Delete/);
+  assert.match(finding!.fix.rollback, /reclaim policy could not be read/);
+  assert.match(finding!.fix.rollback, /kubectl get persistentvolume pv-1 --context prod-cluster/);
 });
 
 test("a failed read in the cluster means nothing is called resolved", () => {
