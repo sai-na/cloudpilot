@@ -760,6 +760,8 @@ function anomalySettings(options: AnomaliesOptions): { rule: AnomalyRule; days?:
   if (days !== undefined && (!/^\d+$/.test(options.days!.trim()) || days < MIN_DAYS || days > MAX_DAYS)) {
     throw new Error(`--days takes a whole number from ${MIN_DAYS} to ${MAX_DAYS}. Got "${options.days}".`);
   }
+  // Number("") is 0, which would quietly switch the floor off.
+  if (options.minIncrease.trim() === "") throw new Error(`--min-increase takes a number that is zero or more. Got "${options.minIncrease}".`);
   return { rule: { sensitivity, minIncreaseUsd: amount(options.minIncrease, "--min-increase") }, days };
 }
 

@@ -176,6 +176,7 @@ test("a setting that makes no sense is refused before anything is asked of AWS",
     [["--sensitivity", "-2"], /--sensitivity takes a number above zero\./],
     [["--sensitivity", "lots"], /--sensitivity takes a number above zero\./],
     [["--min-increase", "-1"], /--min-increase takes a number that is zero or more\. Got "-1"\./],
+    [["--min-increase", ""], /--min-increase takes a number that is zero or more\. Got ""\./],
     [["--min-increase", "cheap"], /--min-increase takes a number that is zero or more\./],
     [["--record", "x", "--replay", "y"], /Use --record or --replay, not both\./],
   ];
