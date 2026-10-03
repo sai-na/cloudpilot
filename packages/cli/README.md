@@ -119,7 +119,14 @@ node dist/index.js scan --profile cloudpilot-readonly --html report.html --out r
 `scan` is the default command. Every scan ends with a summary: built from
 the findings by default, written by a model with `--explain`. `--html` writes
 the report as one self-contained file (no fonts, scripts or images are
-fetched), with a copy button on each command and a print layout.
+fetched) with a print layout.
+
+The HTML report asks for one decision instead of one per command. Each fix
+has a tick box; the saving of everything ticked and the script that would do
+it are always on screen and change as you tick. Fixes that can be undone
+start ticked, permanent ones never do, and a finding with two ways to fix it
+takes one of them at most. One button copies the script, which is commands
+and comments only: CloudPilot still runs nothing.
 
 A resource ID is shortened where it is only a label: the finding line in the
 terminal, the `Resource` column of the Markdown table, the heading in HTML

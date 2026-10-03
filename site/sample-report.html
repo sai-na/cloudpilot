@@ -9,7 +9,7 @@
    the money that bought nothing, red for what cannot be undone. Light only. */
 :root {
   --paper: #fcfdf8; --band: #e4f1e3; --ink: #0d0d0d; --soft: #4b4f48; --line: #b9beb2;
-  --marker: #fff04a; --red: #cf2318; --red-wash: #fbeceb;
+  --marker: #fff04a; --red: #cf2318; --red-wash: #fbeceb; --red-on-ink: #ff9a90;
   --print: "Courier New", Courier, ui-monospace, monospace;
   color-scheme: light;
 }
@@ -33,6 +33,11 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 .facts div { display: flex; gap: 0.5rem; }
 .facts dt { font-weight: 700; color: var(--ink); }
 .facts dd { margin: 0; }
+.since { margin: -1rem 0 2.25rem; font-weight: 700; }
+.resolved { margin-bottom: 2rem; }
+.resolved h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
+.resolved ul { margin: 0; padding-left: 1.1rem; }
+.new { display: inline-block; background: var(--marker); font-size: 0.8125rem; font-weight: 800; padding: 0.05em 0.5em; border-radius: 0.2em 0.6em 0.3em 0.5em; vertical-align: 0.15em; }
 .summary { border-top: 3px solid var(--ink); padding-top: 1.25rem; margin-bottom: 2.5rem; }
 .summary h2, .notes h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
 .summary p { margin: 0 0 0.5rem; max-width: 46rem; }
@@ -58,17 +63,39 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 .fix { border-left: 5px solid var(--ink); background: var(--band); padding: 0.9rem 1.1rem; margin: 0 0 0.75rem; }
 .fix[data-risk="dangerous"] { border-left-color: var(--red); background: var(--red-wash); }
 .fix h3 { font-size: 1rem; font-weight: 800; margin: 0; }
+.fix label { display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; }
+.fix input { flex: none; width: 1.25rem; height: 1.25rem; margin: 0.1rem 0 0; accent-color: var(--ink); cursor: pointer; }
+.fix[data-risk="dangerous"] input { accent-color: var(--red); }
+.fix input:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
+.fix:has(input:checked) { border-left-width: 11px; }
 .risk { margin: 0.1rem 0 0.6rem; font-weight: 700; }
 .fix[data-risk="dangerous"] .risk { color: var(--red); }
-.command { display: flex; align-items: flex-start; gap: 0.75rem; background: var(--ink); color: var(--paper); padding: 0.6rem 0.6rem 0.6rem 0.9rem; margin: 0.5rem 0; }
-.command code { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.command button {
-  font: 800 0.875rem/1 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--marker);
-  border: 0; padding: 0.45rem 0.8rem; min-width: 4.75rem; cursor: pointer;
-}
-.command button:hover { background: #fff; }
-.command button:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
+.command { background: var(--ink); color: var(--paper); padding: 0.6rem 0.9rem; margin: 0.5rem 0; }
+.command code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wayback { margin: 0.6rem 0 0; overflow-wrap: anywhere; }
+
+.script { border-top: 3px solid var(--ink); padding-top: 1.25rem; margin-bottom: 2rem; scroll-margin-top: 1rem; }
+.script h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
+.script p { margin: 0 0 0.9rem; max-width: 46rem; }
+.script pre { margin: 0; background: var(--ink); color: var(--paper); padding: 1rem 1.1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.script code { font-weight: 400; }
+
+/* The decision, always in view: what the ticked fixes save, and the one button. */
+.bar {
+  position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.5rem;
+  margin: 2rem -1.75rem 0; padding: 0.9rem 1.75rem; background: var(--ink); color: var(--paper);
+}
+.bar p { flex: 1 1 20rem; margin: 0; }
+.bar strong { display: inline-block; font: 700 1.375rem/1.2 var(--print); background: var(--marker); color: var(--ink); padding: 0.05em 0.35em; margin-right: 0.2rem; border-radius: 0.2em 0.7em 0.3em 0.6em; }
+.bar .permanent { color: var(--red-on-ink); font-weight: 700; }
+.bar a { color: var(--paper); }
+.bar button {
+  font: 800 1rem/1 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--marker);
+  border: 0; padding: 0.7rem 1.1rem; min-width: 8.5rem; cursor: pointer;
+}
+.bar button:hover { background: #fff; }
+.bar button:disabled { background: var(--line); cursor: not-allowed; }
+.bar a:focus-visible, .bar button:focus-visible { outline: 3px solid var(--red-on-ink); outline-offset: 2px; }
 
 .notes { border-top: 3px solid var(--ink); margin-top: 0.5rem; padding-top: 1.25rem; font-family: var(--print); color: var(--soft); }
 .notes p, .notes li { overflow-wrap: anywhere; }
@@ -78,14 +105,17 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
   .finding { grid-template-columns: 1fr; row-gap: 0.6rem; }
   .amount { text-align: left; }
   .amount small { display: inline; margin-left: 0.5rem; }
+  .bar { margin-inline: -1.1rem; padding-inline: 1.1rem; }
 }
 @media print {
   body { font-size: 10.5pt; }
   main { max-width: none; padding: 0; }
   .finding, .fix, .summary { break-inside: avoid; }
-  .command { background: #fff; color: #000; border: 1px solid #000; }
-  .command button { display: none; }
-  .replay, .amount mark, .fix { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .command, .script pre { background: #fff; color: #000; border: 1px solid #000; }
+  .bar { position: static; margin-inline: 0; background: #fff; color: #000; border: 1px solid #000; }
+  .bar .permanent { color: var(--red); }
+  .bar a, .bar button { display: none; }
+  .replay, .amount mark, .bar strong, .fix { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 </style>
 </head>
@@ -96,9 +126,11 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 <dl class="facts">
 <div><dt>Account</dt><dd>123456789012</dd></div>
 <div><dt>Regions</dt><dd>ap-south-1</dd></div>
-<div><dt>Scanned</dt><dd>2026-10-03T09:55:34.319Z</dd></div>
-<div><dt>Prices</dt><dd>aws-price-list-api, fetched 2026-10-03T09:55:36.741Z</dd></div>
+<div><dt>Scanned</dt><dd>2026-10-03T14:01:30.509Z</dd></div>
+<div><dt>Prices</dt><dd>aws-price-list-api, fetched 2026-10-03T14:01:32.828Z</dd></div>
 </dl>
+
+
 <section class="summary">
 <h2>Summary</h2>
 <p>Estimated waste: $151.53 per month across 10 findings in ap-south-1.</p>
@@ -122,7 +154,7 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 <p class="amount"><mark>$57.00</mark><small>a month</small></p>
 <div>
 <h2>Unattached 500 GB gp2 volume</h2>
-<p class="where"><span class="id">vol-00000000000000001</span> in ap-south-1, AWS::EC2::Volume, rule confidence 95%</p>
+<p class="where"><span class="id" title="vol-00000000000000001">vol-00000000000000001</span> in ap-south-1, AWS::EC2::Volume, rule confidence 95%</p>
 <ul>
 <li>State is &quot;available&quot; with no attachments</li>
 <li>Created 2026-10-02T09:44:19.711Z</li>
@@ -130,15 +162,19 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 </ul>
 <p class="basis">Cost: 500 GB x $0.114/GB-month (gp2)</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="0" data-usd="57" data-risk="dangerous" data-lines="# Unattached 500 GB gp2 volume (vol-00000000000000001) in ap-south-1: saves $57.00 a month
+# PERMANENT. Deleting a volume is permanent. To keep a way back, snapshot it first: aws ec2 create-snapshot --volume-id vol-00000000000000001 --region ap-south-1
+aws ec2 delete-volume --volume-id vol-00000000000000001 --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 delete-volume --volume-id vol-00000000000000001 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 delete-volume --volume-id vol-00000000000000001 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Deleting a volume is permanent. To keep a way back, snapshot it first: aws ec2 create-snapshot --volume-id vol-00000000000000001 --region ap-south-1</p>
 </section>
 <section class="fix" data-risk="caution">
-<h3>Or: If the volume must be kept, convert it from gp2 to gp3, saving $11.40 a month</h3>
+<h3><label><input type="checkbox" data-finding="0" data-usd="11.4" data-risk="caution" data-lines="# Unattached 500 GB gp2 volume: If the volume must be kept, convert it from gp2 to gp3 (vol-00000000000000001) in ap-south-1: saves $11.40 a month
+# Way back: Online and reversible: the volume can be changed back to gp2 after AWS&#39;s 6-hour modification cooldown.
+aws ec2 modify-volume --volume-id vol-00000000000000001 --volume-type gp3 --region ap-south-1" checked><span>Or: If the volume must be kept, convert it from gp2 to gp3, saving $11.40 a month</span></label></h3>
 <p class="risk">Review before running. It can be undone.</p>
-<div class="command"><code>aws ec2 modify-volume --volume-id vol-00000000000000001 --volume-type gp3 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 modify-volume --volume-id vol-00000000000000001 --volume-type gp3 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Online and reversible: the volume can be changed back to gp2 after AWS&#39;s 6-hour modification cooldown.</p>
 </section>
 </div>
@@ -147,7 +183,7 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 <p class="amount"><mark>$57.00</mark><small>a month</small></p>
 <div>
 <h2>Unattached 500 GB gp2 volume</h2>
-<p class="where"><span class="id">vol-00000000000000002</span> in ap-south-1, AWS::EC2::Volume, rule confidence 95%</p>
+<p class="where"><span class="id" title="vol-00000000000000002">vol-00000000000000002</span> in ap-south-1, AWS::EC2::Volume, rule confidence 95%</p>
 <ul>
 <li>State is &quot;available&quot; with no attachments</li>
 <li>Created 2026-10-02T09:44:19.720Z</li>
@@ -155,15 +191,19 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 </ul>
 <p class="basis">Cost: 500 GB x $0.114/GB-month (gp2)</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="1" data-usd="57" data-risk="dangerous" data-lines="# Unattached 500 GB gp2 volume (vol-00000000000000002) in ap-south-1: saves $57.00 a month
+# PERMANENT. Deleting a volume is permanent. To keep a way back, snapshot it first: aws ec2 create-snapshot --volume-id vol-00000000000000002 --region ap-south-1
+aws ec2 delete-volume --volume-id vol-00000000000000002 --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 delete-volume --volume-id vol-00000000000000002 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 delete-volume --volume-id vol-00000000000000002 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Deleting a volume is permanent. To keep a way back, snapshot it first: aws ec2 create-snapshot --volume-id vol-00000000000000002 --region ap-south-1</p>
 </section>
 <section class="fix" data-risk="caution">
-<h3>Or: If the volume must be kept, convert it from gp2 to gp3, saving $11.40 a month</h3>
+<h3><label><input type="checkbox" data-finding="1" data-usd="11.4" data-risk="caution" data-lines="# Unattached 500 GB gp2 volume: If the volume must be kept, convert it from gp2 to gp3 (vol-00000000000000002) in ap-south-1: saves $11.40 a month
+# Way back: Online and reversible: the volume can be changed back to gp2 after AWS&#39;s 6-hour modification cooldown.
+aws ec2 modify-volume --volume-id vol-00000000000000002 --volume-type gp3 --region ap-south-1" checked><span>Or: If the volume must be kept, convert it from gp2 to gp3, saving $11.40 a month</span></label></h3>
 <p class="risk">Review before running. It can be undone.</p>
-<div class="command"><code>aws ec2 modify-volume --volume-id vol-00000000000000002 --volume-type gp3 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 modify-volume --volume-id vol-00000000000000002 --volume-type gp3 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Online and reversible: the volume can be changed back to gp2 after AWS&#39;s 6-hour modification cooldown.</p>
 </section>
 </div>
@@ -172,7 +212,7 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 <p class="amount"><mark>$18.24</mark><small>a month</small></p>
 <div>
 <h2>Unattached 200 GB gp3 volume</h2>
-<p class="where"><span class="id">vol-00000000000000003</span> in ap-south-1, AWS::EC2::Volume, rule confidence 95%</p>
+<p class="where"><span class="id" title="vol-00000000000000003">vol-00000000000000003</span> in ap-south-1, AWS::EC2::Volume, rule confidence 95%</p>
 <ul>
 <li>State is &quot;available&quot; with no attachments</li>
 <li>Created 2026-10-02T09:44:19.725Z</li>
@@ -180,19 +220,20 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 </ul>
 <p class="basis">Cost: 200 GB x $0.0912/GB-month (gp3)</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="2" data-usd="18.240000000000002" data-risk="dangerous" data-lines="# Unattached 200 GB gp3 volume (vol-00000000000000003) in ap-south-1: saves $18.24 a month
+# PERMANENT. Deleting a volume is permanent. To keep a way back, snapshot it first: aws ec2 create-snapshot --volume-id vol-00000000000000003 --region ap-south-1
+aws ec2 delete-volume --volume-id vol-00000000000000003 --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 delete-volume --volume-id vol-00000000000000003 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 delete-volume --volume-id vol-00000000000000003 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Deleting a volume is permanent. To keep a way back, snapshot it first: aws ec2 create-snapshot --volume-id vol-00000000000000003 --region ap-south-1</p>
 </section>
-
 </div>
 </article>
 <article class="finding">
 <p class="amount"><mark>$8.91</mark><small>a month</small></p>
 <div>
 <h2>Idle t3.micro: CPU never above 0.7%</h2>
-<p class="where"><span class="id">i-00000000000000004</span> in ap-south-1, AWS::EC2::Instance, rule confidence 90%</p>
+<p class="where"><span class="id" title="i-00000000000000004">i-00000000000000004</span> in ap-south-1, AWS::EC2::Instance, rule confidence 90%</p>
 <ul>
 <li>CloudWatch CPUUtilization over the last 24.0 h: average 0.19%, maximum 0.68% (288 datapoints)</li>
 <li>Launched 2026-10-02T09:44:20.000Z</li>
@@ -200,37 +241,39 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 </ul>
 <p class="basis">Cost: $0.0112/hour x 730 hours + 8 GB gp3</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="3" data-usd="8.9056" data-risk="dangerous" data-lines="# Idle t3.micro: CPU never above 0.7% (i-00000000000000004) in ap-south-1: saves $8.91 a month
+# PERMANENT. Termination is permanent. To keep a way back, image it first: aws ec2 create-image --instance-id i-00000000000000004 --name backup-i-00000000000000004 --region ap-south-1
+aws ec2 terminate-instances --instance-ids i-00000000000000004 --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 terminate-instances --instance-ids i-00000000000000004 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 terminate-instances --instance-ids i-00000000000000004 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Termination is permanent. To keep a way back, image it first: aws ec2 create-image --instance-id i-00000000000000004 --name backup-i-00000000000000004 --region ap-south-1</p>
 </section>
-
 </div>
 </article>
 <article class="finding">
 <p class="amount"><mark>$3.65</mark><small>a month</small></p>
 <div>
 <h2>Elastic IP 203.0.113.10 is not associated</h2>
-<p class="where"><span class="id">eipalloc-00000000000000005</span> in ap-south-1, AWS::EC2::EIP, rule confidence 95%</p>
+<p class="where"><span class="id" title="eipalloc-00000000000000005">eipalloc-00000000000000005</span> in ap-south-1, AWS::EC2::EIP, rule confidence 95%</p>
 <ul>
 <li>No association with an instance or network interface</li>
 </ul>
 <p class="basis">Cost: $0.005/hour idle public IPv4 x 730 hours</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="4" data-usd="3.65" data-risk="dangerous" data-lines="# Elastic IP 203.0.113.10 is not associated (eipalloc-00000000000000005) in ap-south-1: saves $3.65 a month
+# PERMANENT. The address goes back to AWS&#39;s pool and usually cannot be reclaimed. Check nothing (DNS, allow-lists) still points at it.
+aws ec2 release-address --allocation-id eipalloc-00000000000000005 --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 release-address --allocation-id eipalloc-00000000000000005 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 release-address --allocation-id eipalloc-00000000000000005 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> The address goes back to AWS&#39;s pool and usually cannot be reclaimed. Check nothing (DNS, allow-lists) still points at it.</p>
 </section>
-
 </div>
 </article>
 <article class="finding">
 <p class="amount"><mark>$2.74</mark><small>a month</small></p>
 <div>
 <h2>Stopped t3.micro still pays for 30 GB gp3</h2>
-<p class="where"><span class="id">i-00000000000000006</span> in ap-south-1, AWS::EC2::Instance, rule confidence 80%</p>
+<p class="where"><span class="id" title="i-00000000000000006">i-00000000000000006</span> in ap-south-1, AWS::EC2::Instance, rule confidence 80%</p>
 <ul>
 <li>Instance state is stopped: no compute charge, but its EBS volumes are still billed</li>
 <li>State transition: User initiated (2026-10-02 09:44:42 GMT)</li>
@@ -238,19 +281,20 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 </ul>
 <p class="basis">Cost: 30 GB gp3 at EBS GB-month prices</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="5" data-usd="2.736" data-risk="dangerous" data-lines="# Stopped t3.micro still pays for 30 GB gp3 (i-00000000000000006) in ap-south-1: saves $2.74 a month
+# PERMANENT. Termination is permanent. To keep a way back, image it first: aws ec2 create-image --instance-id i-00000000000000006 --name backup-i-00000000000000006 --region ap-south-1
+aws ec2 terminate-instances --instance-ids i-00000000000000006 --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 terminate-instances --instance-ids i-00000000000000006 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 terminate-instances --instance-ids i-00000000000000006 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Termination is permanent. To keep a way back, image it first: aws ec2 create-image --instance-id i-00000000000000006 --name backup-i-00000000000000006 --region ap-south-1</p>
 </section>
-
 </div>
 </article>
 <article class="finding">
 <p class="amount"><mark>$2.50</mark><small>a month</small></p>
 <div>
 <h2>Snapshot of a deleted 50 GB volume</h2>
-<p class="where"><span class="id">snap-00000000000000007</span> in ap-south-1, AWS::EC2::Snapshot, rule confidence 80%</p>
+<p class="where"><span class="id" title="snap-00000000000000007">snap-00000000000000007</span> in ap-south-1, AWS::EC2::Snapshot, rule confidence 80%</p>
 <ul>
 <li>Source volume vol-00000000000000008 no longer exists</li>
 <li>No AMI in this account references the snapshot</li>
@@ -258,19 +302,20 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 </ul>
 <p class="basis">Cost: 50 GB provisioned x $0.05/GB-month. Upper bound: snapshots are billed for stored blocks only.</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="6" data-usd="2.5" data-risk="dangerous" data-lines="# Snapshot of a deleted 50 GB volume (snap-00000000000000007) in ap-south-1: saves $2.50 a month
+# PERMANENT. Deleting a snapshot is permanent, and with the source volume gone it may be the only copy of that data.
+aws ec2 delete-snapshot --snapshot-id snap-00000000000000007 --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 delete-snapshot --snapshot-id snap-00000000000000007 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 delete-snapshot --snapshot-id snap-00000000000000007 --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Deleting a snapshot is permanent, and with the source volume gone it may be the only copy of that data.</p>
 </section>
-
 </div>
 </article>
 <article class="finding">
 <p class="amount"><mark>$1.50</mark><small>a month</small></p>
 <div>
 <h2>AMI cloudpilot-waste-lab-w7-unused-ami is used by nothing</h2>
-<p class="where"><span class="id">ami-00000000000000009</span> in ap-south-1, AWS::EC2::Image, rule confidence 70%</p>
+<p class="where"><span class="id" title="ami-00000000000000009">ami-00000000000000009</span> in ap-south-1, AWS::EC2::Image, rule confidence 70%</p>
 <ul>
 <li>No instance in this region (running or stopped) was launched from it</li>
 <li>No launch template references it</li>
@@ -279,82 +324,163 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 </ul>
 <p class="basis">Cost: 30 GB provisioned x $0.05/GB-month. Upper bound: snapshots are billed for stored blocks only.</p>
 <section class="fix" data-risk="dangerous">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="7" data-usd="1.5" data-risk="dangerous" data-lines="# AMI cloudpilot-waste-lab-w7-unused-ami is used by nothing (ami-00000000000000009) in ap-south-1: saves $1.50 a month
+# PERMANENT. Deregistering and deleting the snapshots is permanent. Auto Scaling launch configurations and other accounts the AMI is shared with are not visible to this scan - check them first.
+aws ec2 deregister-image --image-id ami-00000000000000009 --region ap-south-1
+aws ec2 delete-snapshot --snapshot-id snap-0000000000000000a --region ap-south-1"><span>Fix</span></label></h3>
 <p class="risk">Permanent. Needs explicit approval before anyone runs it.</p>
-<div class="command"><code>aws ec2 deregister-image --image-id ami-00000000000000009 --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
-<div class="command"><code>aws ec2 delete-snapshot --snapshot-id snap-0000000000000000a --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws ec2 deregister-image --image-id ami-00000000000000009 --region ap-south-1</code></div>
+<div class="command"><code>aws ec2 delete-snapshot --snapshot-id snap-0000000000000000a --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Deregistering and deleting the snapshots is permanent. Auto Scaling launch configurations and other accounts the AMI is shared with are not visible to this scan - check them first.</p>
 </section>
-
 </div>
 </article>
 <article class="finding">
 <p class="amount"><mark>$0.00</mark><small>a month</small></p>
 <div>
 <h2>Incomplete multipart upload in cloudpilot-waste-lab-123456789012</h2>
-<p class="where"><span class="id">EXAMPLE-UPLOAD-ID</span> in ap-south-1, AWS::S3::MultipartUpload, rule confidence 90%</p>
+<p class="where"><span class="id" title="EXAMPLE-UPLOAD-ID">ulI75LezK.EE_twj..._gpu6n</span> in ap-south-1, AWS::S3::MultipartUpload, rule confidence 90%</p>
 <ul>
 <li>Key uploads/video-export-2026-01.bin, started 2026-10-02T09:47:48.000Z, never completed</li>
 <li>5242880 bytes of parts are stored and billed, but do not show up in object listings</li>
 </ul>
 <p class="basis">Cost: 5242880 bytes x $0.025/GB-month</p>
 <section class="fix" data-risk="caution">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="8" data-usd="0.0001220703125" data-risk="caution" data-lines="# Incomplete multipart upload in cloudpilot-waste-lab-123456789012 (ulI75LezK.EE_twj..._gpu6n) in ap-south-1: saves $0.00 a month
+# Way back: Aborting discards the uploaded parts; the upload would have to start again from the beginning.
+aws s3api abort-multipart-upload --bucket cloudpilot-waste-lab-123456789012 --key uploads/video-export-2026-01.bin --upload-id EXAMPLE-UPLOAD-ID --region ap-south-1" checked><span>Fix</span></label></h3>
 <p class="risk">Review before running. It can be undone.</p>
-<div class="command"><code>aws s3api abort-multipart-upload --bucket cloudpilot-waste-lab-123456789012 --key uploads/video-export-2026-01.bin --upload-id EXAMPLE-UPLOAD-ID --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws s3api abort-multipart-upload --bucket cloudpilot-waste-lab-123456789012 --key uploads/video-export-2026-01.bin --upload-id EXAMPLE-UPLOAD-ID --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Aborting discards the uploaded parts; the upload would have to start again from the beginning.</p>
 </section>
-
 </div>
 </article>
 <article class="finding">
 <p class="amount"><mark>$0.00</mark><small>a month</small></p>
 <div>
 <h2>Bucket cloudpilot-waste-lab-123456789012 has no lifecycle rule</h2>
-<p class="where"><span class="id">cloudpilot-waste-lab-123456789012</span> in ap-south-1, AWS::S3::Bucket, rule confidence 90%</p>
+<p class="where"><span class="id" title="cloudpilot-waste-lab-123456789012">cloudpilot-waste-lab-123456789012</span> in ap-south-1, AWS::S3::Bucket, rule confidence 90%</p>
 <ul>
 <li>No lifecycle configuration: objects never transition or expire, and incomplete multipart uploads are never cleaned up</li>
 <li>3 object(s), 228 bytes in S3 Standard</li>
 </ul>
 <p class="basis">Cost: 228 bytes x $0.025/GB-month (S3 Standard)</p>
 <section class="fix" data-risk="caution">
-<h3>Fix</h3>
+<h3><label><input type="checkbox" data-finding="9" data-usd="5.308538675308228e-9" data-risk="caution" data-lines="# Bucket cloudpilot-waste-lab-123456789012 has no lifecycle rule (cloudpilot-waste-lab-123456789012) in ap-south-1: saves $0.00 a month
+# Way back: Remove the rule again with: aws s3api delete-bucket-lifecycle --bucket cloudpilot-waste-lab-123456789012 --region ap-south-1. Objects already moved to Standard-IA stay there.
+aws s3api put-bucket-lifecycle-configuration --bucket cloudpilot-waste-lab-123456789012 --lifecycle-configuration &#39;{&quot;Rules&quot;:[{&quot;ID&quot;:&quot;cloudpilot-abort-incomplete-uploads-and-tier-down&quot;,&quot;Status&quot;:&quot;Enabled&quot;,&quot;Filter&quot;:{},&quot;AbortIncompleteMultipartUpload&quot;:{&quot;DaysAfterInitiation&quot;:7},&quot;Transitions&quot;:[{&quot;Days&quot;:30,&quot;StorageClass&quot;:&quot;STANDARD_IA&quot;}]}]}&#39; --region ap-south-1" checked><span>Fix</span></label></h3>
 <p class="risk">Review before running. It can be undone.</p>
-<div class="command"><code>aws s3api put-bucket-lifecycle-configuration --bucket cloudpilot-waste-lab-123456789012 --lifecycle-configuration &#39;{&quot;Rules&quot;:[{&quot;ID&quot;:&quot;cloudpilot-abort-incomplete-uploads-and-tier-down&quot;,&quot;Status&quot;:&quot;Enabled&quot;,&quot;Filter&quot;:{},&quot;AbortIncompleteMultipartUpload&quot;:{&quot;DaysAfterInitiation&quot;:7},&quot;Transitions&quot;:[{&quot;Days&quot;:30,&quot;StorageClass&quot;:&quot;STANDARD_IA&quot;}]}]}&#39; --region ap-south-1</code><button type="button" data-copy>Copy</button></div>
+<div class="command"><code>aws s3api put-bucket-lifecycle-configuration --bucket cloudpilot-waste-lab-123456789012 --lifecycle-configuration &#39;{&quot;Rules&quot;:[{&quot;ID&quot;:&quot;cloudpilot-abort-incomplete-uploads-and-tier-down&quot;,&quot;Status&quot;:&quot;Enabled&quot;,&quot;Filter&quot;:{},&quot;AbortIncompleteMultipartUpload&quot;:{&quot;DaysAfterInitiation&quot;:7},&quot;Transitions&quot;:[{&quot;Days&quot;:30,&quot;StorageClass&quot;:&quot;STANDARD_IA&quot;}]}]}&#39; --region ap-south-1</code></div>
 <p class="wayback"><strong>Way back:</strong> Remove the rule again with: aws s3api delete-bucket-lifecycle --bucket cloudpilot-waste-lab-123456789012 --region ap-south-1. Objects already moved to Standard-IA stay there.</p>
 </section>
-
 </div>
 </article>
+<section class="script" id="script">
+<h2>Your script</h2>
+<p>Every fix you tick lands here, as one script to read and run yourself. Fixes that can be undone start ticked. Permanent ones are left for you to decide.</p>
+<pre><code id="script-text"># CloudPilot fix script for AWS account 123456789012
+# From the scan of 2026-10-03T14:01:30.509Z. CloudPilot has run none of this.
+# Read every line before you run it.
+
+# Unattached 500 GB gp2 volume: If the volume must be kept, convert it from gp2 to gp3 (vol-00000000000000001) in ap-south-1: saves $11.40 a month
+# Way back: Online and reversible: the volume can be changed back to gp2 after AWS&#39;s 6-hour modification cooldown.
+aws ec2 modify-volume --volume-id vol-00000000000000001 --volume-type gp3 --region ap-south-1
+
+# Unattached 500 GB gp2 volume: If the volume must be kept, convert it from gp2 to gp3 (vol-00000000000000002) in ap-south-1: saves $11.40 a month
+# Way back: Online and reversible: the volume can be changed back to gp2 after AWS&#39;s 6-hour modification cooldown.
+aws ec2 modify-volume --volume-id vol-00000000000000002 --volume-type gp3 --region ap-south-1
+
+# Incomplete multipart upload in cloudpilot-waste-lab-123456789012 (ulI75LezK.EE_twj..._gpu6n) in ap-south-1: saves $0.00 a month
+# Way back: Aborting discards the uploaded parts; the upload would have to start again from the beginning.
+aws s3api abort-multipart-upload --bucket cloudpilot-waste-lab-123456789012 --key uploads/video-export-2026-01.bin --upload-id EXAMPLE-UPLOAD-ID --region ap-south-1
+
+# Bucket cloudpilot-waste-lab-123456789012 has no lifecycle rule (cloudpilot-waste-lab-123456789012) in ap-south-1: saves $0.00 a month
+# Way back: Remove the rule again with: aws s3api delete-bucket-lifecycle --bucket cloudpilot-waste-lab-123456789012 --region ap-south-1. Objects already moved to Standard-IA stay there.
+aws s3api put-bucket-lifecycle-configuration --bucket cloudpilot-waste-lab-123456789012 --lifecycle-configuration &#39;{&quot;Rules&quot;:[{&quot;ID&quot;:&quot;cloudpilot-abort-incomplete-uploads-and-tier-down&quot;,&quot;Status&quot;:&quot;Enabled&quot;,&quot;Filter&quot;:{},&quot;AbortIncompleteMultipartUpload&quot;:{&quot;DaysAfterInitiation&quot;:7},&quot;Transitions&quot;:[{&quot;Days&quot;:30,&quot;StorageClass&quot;:&quot;STANDARD_IA&quot;}]}]}&#39; --region ap-south-1
+</code></pre>
+</section>
 <section class="notes">
 <p>End of statement. CloudPilot is read-only: it printed these commands and ran none of them.</p>
 
 
 </section>
+<div class="bar" role="status">
+<p><strong id="saving">$22.80</strong> <span id="tally">a month saved by the 4 fixes in your script.</span> <span id="risk">All of them can be undone.</span></p>
+<a href="#script">Read the script</a>
+<button type="button" id="copy" hidden>Copy script</button>
+</div>
 </main>
 <script>
-document.addEventListener("click", function (event) {
-  var button = event.target.closest("button[data-copy]");
-  if (!button) return;
-  var code = button.parentElement.querySelector("code");
-  var done = function () {
-    button.textContent = "Copied";
-    setTimeout(function () { button.textContent = "Copy"; }, 1500);
-  };
-  var select = function () {
-    var range = document.createRange();
-    range.selectNodeContents(code);
-    var selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    try { if (document.execCommand("copy")) done(); } catch (error) {}
-  };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(code.textContent).then(done, select);
-  } else {
-    select();
+(function () {
+  
+function tally(count, usd, permanent) {
+  if (count === 0) return ["$0.00", "a month. Nothing is in your script yet: tick a fix to add it.", ""];
+  var fixes = count === 1 ? "the 1 fix" : "the " + count + " fixes";
+  var risk = permanent === 0
+    ? (count === 1 ? "It can be undone." : "All of them can be undone.")
+    : (count === 1 ? "It is permanent." : permanent + " of them " + (permanent === 1 ? "is" : "are") + " permanent.");
+  return ["$" + usd.toFixed(2), "a month saved by " + fixes + " in your script.", risk];
+}
+function scriptText(head, parts) {
+  return head + "\n\n" + (parts.length ? parts.join("\n\n") : "# Nothing chosen yet. Tick a fix in the report to add it here.") + "\n";
+}
+
+  var HEAD = "# CloudPilot fix script for AWS account 123456789012\n# From the scan of 2026-10-03T14:01:30.509Z. CloudPilot has run none of this.\n# Read every line before you run it.";
+  var code = document.getElementById("script-text");
+  if (!code) return;
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("input[data-lines]"));
+  var copy = document.getElementById("copy");
+  var show = function (id, text) { document.getElementById(id).textContent = text; };
+
+  function update() {
+    var chosen = boxes.filter(function (box) { return box.checked; });
+    var usd = chosen.reduce(function (sum, box) { return sum + Number(box.getAttribute("data-usd")); }, 0);
+    var permanent = chosen.filter(function (box) { return box.getAttribute("data-risk") === "dangerous"; }).length;
+    var words = tally(chosen.length, usd, permanent);
+    show("saving", words[0]);
+    show("tally", words[1]);
+    show("risk", words[2]);
+    document.getElementById("risk").className = permanent ? "permanent" : "";
+    code.textContent = scriptText(HEAD, chosen.map(function (box) { return box.getAttribute("data-lines"); }));
+    copy.disabled = chosen.length === 0;
   }
-});
+
+  document.addEventListener("change", function (event) {
+    var box = event.target;
+    if (boxes.indexOf(box) === -1) return;
+    // A finding is fixed one way or the other, never both.
+    if (box.checked) {
+      boxes.forEach(function (other) {
+        if (other !== box && other.getAttribute("data-finding") === box.getAttribute("data-finding")) other.checked = false;
+      });
+    }
+    update();
+  });
+
+  copy.addEventListener("click", function () {
+    var done = function () {
+      copy.textContent = "Copied";
+      setTimeout(function () { copy.textContent = "Copy script"; }, 1500);
+    };
+    // Where the clipboard is unavailable, select the script so it can be copied by hand.
+    var select = function () {
+      var range = document.createRange();
+      range.selectNodeContents(code);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try { if (document.execCommand("copy")) done(); } catch (error) {}
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code.textContent).then(done, select);
+    } else {
+      select();
+    }
+  });
+
+  copy.hidden = false;
+  update();
+})();
 </script>
 </body>
 </html>

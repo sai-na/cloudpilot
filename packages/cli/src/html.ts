@@ -1,9 +1,13 @@
 /**
  * The scan as one self-contained HTML file: no fonts, images, scripts or
  * styles are fetched from anywhere, so it opens offline and prints cleanly.
+ *
+ * The reader makes one decision, not one per command: they tick the fixes
+ * they want, the saving and the script follow at once, and they copy one
+ * script. Fixes that can be undone start ticked; permanent ones never do.
  */
 import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine } from "./report.js";
-import type { Fix, ScanResult } from "./types.js";
+import type { Finding, Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -19,7 +23,7 @@ const STYLE = `
    the money that bought nothing, red for what cannot be undone. Light only. */
 :root {
   --paper: #fcfdf8; --band: #e4f1e3; --ink: #0d0d0d; --soft: #4b4f48; --line: #b9beb2;
-  --marker: #fff04a; --red: #cf2318; --red-wash: #fbeceb;
+  --marker: #fff04a; --red: #cf2318; --red-wash: #fbeceb; --red-on-ink: #ff9a90;
   --print: "Courier New", Courier, ui-monospace, monospace;
   color-scheme: light;
 }
@@ -73,17 +77,39 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 .fix { border-left: 5px solid var(--ink); background: var(--band); padding: 0.9rem 1.1rem; margin: 0 0 0.75rem; }
 .fix[data-risk="dangerous"] { border-left-color: var(--red); background: var(--red-wash); }
 .fix h3 { font-size: 1rem; font-weight: 800; margin: 0; }
+.fix label { display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; }
+.fix input { flex: none; width: 1.25rem; height: 1.25rem; margin: 0.1rem 0 0; accent-color: var(--ink); cursor: pointer; }
+.fix[data-risk="dangerous"] input { accent-color: var(--red); }
+.fix input:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
+.fix:has(input:checked) { border-left-width: 11px; }
 .risk { margin: 0.1rem 0 0.6rem; font-weight: 700; }
 .fix[data-risk="dangerous"] .risk { color: var(--red); }
-.command { display: flex; align-items: flex-start; gap: 0.75rem; background: var(--ink); color: var(--paper); padding: 0.6rem 0.6rem 0.6rem 0.9rem; margin: 0.5rem 0; }
-.command code { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.command button {
-  font: 800 0.875rem/1 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--marker);
-  border: 0; padding: 0.45rem 0.8rem; min-width: 4.75rem; cursor: pointer;
-}
-.command button:hover { background: #fff; }
-.command button:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
+.command { background: var(--ink); color: var(--paper); padding: 0.6rem 0.9rem; margin: 0.5rem 0; }
+.command code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wayback { margin: 0.6rem 0 0; overflow-wrap: anywhere; }
+
+.script { border-top: 3px solid var(--ink); padding-top: 1.25rem; margin-bottom: 2rem; scroll-margin-top: 1rem; }
+.script h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
+.script p { margin: 0 0 0.9rem; max-width: 46rem; }
+.script pre { margin: 0; background: var(--ink); color: var(--paper); padding: 1rem 1.1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.script code { font-weight: 400; }
+
+/* The decision, always in view: what the ticked fixes save, and the one button. */
+.bar {
+  position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.5rem;
+  margin: 2rem -1.75rem 0; padding: 0.9rem 1.75rem; background: var(--ink); color: var(--paper);
+}
+.bar p { flex: 1 1 20rem; margin: 0; }
+.bar strong { display: inline-block; font: 700 1.375rem/1.2 var(--print); background: var(--marker); color: var(--ink); padding: 0.05em 0.35em; margin-right: 0.2rem; border-radius: 0.2em 0.7em 0.3em 0.6em; }
+.bar .permanent { color: var(--red-on-ink); font-weight: 700; }
+.bar a { color: var(--paper); }
+.bar button {
+  font: 800 1rem/1 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--marker);
+  border: 0; padding: 0.7rem 1.1rem; min-width: 8.5rem; cursor: pointer;
+}
+.bar button:hover { background: #fff; }
+.bar button:disabled { background: var(--line); cursor: not-allowed; }
+.bar a:focus-visible, .bar button:focus-visible { outline: 3px solid var(--red-on-ink); outline-offset: 2px; }
 
 .notes { border-top: 3px solid var(--ink); margin-top: 0.5rem; padding-top: 1.25rem; font-family: var(--print); color: var(--soft); }
 .notes p, .notes li { overflow-wrap: anywhere; }
@@ -93,41 +119,103 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
   .finding { grid-template-columns: 1fr; row-gap: 0.6rem; }
   .amount { text-align: left; }
   .amount small { display: inline; margin-left: 0.5rem; }
+  .bar { margin-inline: -1.1rem; padding-inline: 1.1rem; }
 }
 @media print {
   body { font-size: 10.5pt; }
   main { max-width: none; padding: 0; }
   .finding, .fix, .summary { break-inside: avoid; }
-  .command { background: #fff; color: #000; border: 1px solid #000; }
-  .command button { display: none; }
-  .replay, .amount mark, .fix { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .command, .script pre { background: #fff; color: #000; border: 1px solid #000; }
+  .bar { position: static; margin-inline: 0; background: #fff; color: #000; border: 1px solid #000; }
+  .bar .permanent { color: var(--red); }
+  .bar a, .bar button { display: none; }
+  .replay, .amount mark, .bar strong, .fix { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 `;
 
-/** Copies the command next to the button; falls back to selecting it where the clipboard API is unavailable. */
-const SCRIPT = `
-document.addEventListener("click", function (event) {
-  var button = event.target.closest("button[data-copy]");
-  if (!button) return;
-  var code = button.parentElement.querySelector("code");
-  var done = function () {
-    button.textContent = "Copied";
-    setTimeout(function () { button.textContent = "Copy"; }, 1500);
-  };
-  var select = function () {
-    var range = document.createRange();
-    range.selectNodeContents(code);
-    var selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    try { if (document.execCommand("copy")) done(); } catch (error) {}
-  };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(code.textContent).then(done, select);
-  } else {
-    select();
+/**
+ * The words and the script that follow from what is ticked. This one piece of
+ * JavaScript is run here for the first paint and shipped in the page for every
+ * change after it, so the two can never disagree.
+ */
+const SHARED = `
+function tally(count, usd, permanent) {
+  if (count === 0) return ["$0.00", "a month. Nothing is in your script yet: tick a fix to add it.", ""];
+  var fixes = count === 1 ? "the 1 fix" : "the " + count + " fixes";
+  var risk = permanent === 0
+    ? (count === 1 ? "It can be undone." : "All of them can be undone.")
+    : (count === 1 ? "It is permanent." : permanent + " of them " + (permanent === 1 ? "is" : "are") + " permanent.");
+  return ["$" + usd.toFixed(2), "a month saved by " + fixes + " in your script.", risk];
+}
+function scriptText(head, parts) {
+  return head + "\\n\\n" + (parts.length ? parts.join("\\n\\n") : "# Nothing chosen yet. Tick a fix in the report to add it here.") + "\\n";
+}
+`;
+const shared = new Function(`${SHARED}; return { tally: tally, scriptText: scriptText };`)() as {
+  tally(count: number, usd: number, permanent: number): [saving: string, sentence: string, risk: string];
+  scriptText(head: string, parts: string[]): string;
+};
+
+/** Keeps the tally and the script in step with the ticked fixes, and copies the script. */
+const pageScript = (head: string) => `
+(function () {
+  ${SHARED}
+  var HEAD = ${JSON.stringify(head).replace(/</g, "\\u003c")};
+  var code = document.getElementById("script-text");
+  if (!code) return;
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("input[data-lines]"));
+  var copy = document.getElementById("copy");
+  var show = function (id, text) { document.getElementById(id).textContent = text; };
+
+  function update() {
+    var chosen = boxes.filter(function (box) { return box.checked; });
+    var usd = chosen.reduce(function (sum, box) { return sum + Number(box.getAttribute("data-usd")); }, 0);
+    var permanent = chosen.filter(function (box) { return box.getAttribute("data-risk") === "dangerous"; }).length;
+    var words = tally(chosen.length, usd, permanent);
+    show("saving", words[0]);
+    show("tally", words[1]);
+    show("risk", words[2]);
+    document.getElementById("risk").className = permanent ? "permanent" : "";
+    code.textContent = scriptText(HEAD, chosen.map(function (box) { return box.getAttribute("data-lines"); }));
+    copy.disabled = chosen.length === 0;
   }
-});
+
+  document.addEventListener("change", function (event) {
+    var box = event.target;
+    if (boxes.indexOf(box) === -1) return;
+    // A finding is fixed one way or the other, never both.
+    if (box.checked) {
+      boxes.forEach(function (other) {
+        if (other !== box && other.getAttribute("data-finding") === box.getAttribute("data-finding")) other.checked = false;
+      });
+    }
+    update();
+  });
+
+  copy.addEventListener("click", function () {
+    var done = function () {
+      copy.textContent = "Copied";
+      setTimeout(function () { copy.textContent = "Copy script"; }, 1500);
+    };
+    // Where the clipboard is unavailable, select the script so it can be copied by hand.
+    var select = function () {
+      var range = document.createRange();
+      range.selectNodeContents(code);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try { if (document.execCommand("copy")) done(); } catch (error) {}
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code.textContent).then(done, select);
+    } else {
+      select();
+    }
+  });
+
+  copy.hidden = false;
+  update();
+})();
 `;
 
 /** Paragraphs stay paragraphs; runs of "- " lines become a list. */
@@ -152,17 +240,54 @@ function summaryBlocks(summary: string): string {
   return blocks.join("\n");
 }
 
-const commands = (list: string[]) =>
-  list
-    .map((c) => `<div class="command"><code>${escape(c)}</code><button type="button" data-copy>Copy</button></div>`)
-    .join("\n");
+const commands = (list: string[]) => list.map((c) => `<div class="command"><code>${escape(c)}</code></div>`).join("\n");
 
-function fixBlock(title: string, fix: Fix): string {
-  return `<section class="fix" data-risk="${fix.risk}">
-<h3>${escape(title)}</h3>
-<p class="risk">${RISK_NOTE[fix.risk]}</p>
-${commands(fix.commands)}
-<p class="wayback"><strong>Way back:</strong> ${escape(fix.rollback)}</p>
+/** One thing a reader can put in their script: a finding's fix, or its gentler alternative. */
+interface Choice {
+  /** Which finding it belongs to: a finding takes one of its choices at most. */
+  finding: number;
+  heading: string;
+  fix: Fix;
+  savingUsd: number;
+  /** Ticked when the report opens. Only ever a fix that can be undone. */
+  chosen: boolean;
+  /** What it adds to the script. */
+  lines: string;
+}
+
+const comment = (text: string) => `# ${text.replace(/\s*\n\s*/g, " ")}`;
+
+function scriptLines(f: Finding, fix: Fix, what: string, savingUsd: number): string {
+  return [
+    comment(`${what} (${f.resourceIds.map(shortId).join(", ")}) in ${f.region}: saves ${money(savingUsd)} a month`),
+    comment(fix.risk === "dangerous" ? `PERMANENT. ${fix.rollback}` : `Way back: ${fix.rollback}`),
+    ...fix.commands,
+  ].join("\n");
+}
+
+function choicesFor(f: Finding, finding: number): Choice[] {
+  const alt = f.alternative;
+  const main: Choice = { finding, heading: "Fix", fix: f.fix, savingUsd: f.monthlyCostUsd, chosen: f.fix.risk === "caution", lines: scriptLines(f, f.fix, f.title, f.monthlyCostUsd) };
+  if (!alt) return [main];
+  return [
+    main,
+    {
+      finding,
+      heading: `Or: ${alt.description}, saving ${money(alt.monthlySavingUsd)} a month`,
+      fix: alt,
+      savingUsd: alt.monthlySavingUsd,
+      chosen: !main.chosen && alt.risk === "caution",
+      lines: scriptLines(f, alt, `${f.title}: ${alt.description}`, alt.monthlySavingUsd),
+    },
+  ];
+}
+
+function fixBlock(c: Choice): string {
+  return `<section class="fix" data-risk="${c.fix.risk}">
+<h3><label><input type="checkbox" data-finding="${c.finding}" data-usd="${c.savingUsd}" data-risk="${c.fix.risk}" data-lines="${escape(c.lines)}"${c.chosen ? " checked" : ""}><span>${escape(c.heading)}</span></label></h3>
+<p class="risk">${RISK_NOTE[c.fix.risk]}</p>
+${commands(c.fix.commands)}
+<p class="wayback"><strong>Way back:</strong> ${escape(c.fix.rollback)}</p>
 </section>`;
 }
 
@@ -183,9 +308,21 @@ export function renderHtml(result: ScanResult, options: ReportOptions & { summar
   const resolved = result.comparison?.resolved ?? [];
   const shown = shownFindings(result, options.onlyNew);
   const note = [since, onlyNewLine(result, shown, options)].filter(Boolean).join(" ");
+  const choices = shown.map(choicesFor);
+  const chosen = choices.flat().filter((c) => c.chosen);
+  const head = [
+    `# CloudPilot fix script for AWS account ${result.accountId}`,
+    `# From the scan of ${result.scannedAt}. CloudPilot has run none of this.`,
+    "# Read every line before you run it.",
+  ].join("\n");
+  const [saving, sentence, risk] = shared.tally(
+    chosen.length,
+    chosen.reduce((sum, c) => sum + c.savingUsd, 0),
+    chosen.filter((c) => c.fix.risk === "dangerous").length,
+  );
   const findings = shown
     .map(
-      (f) => `<article class="finding">
+      (f, n) => `<article class="finding">
 <p class="amount"><mark>${money(f.monthlyCostUsd)}</mark><small>a month</small></p>
 <div>
 <h2>${f.isNew ? '<span class="new">New</span> ' : ""}${escape(f.title)}</h2>
@@ -194,8 +331,7 @@ export function renderHtml(result: ScanResult, options: ReportOptions & { summar
 ${f.evidence.map((e) => `<li>${escape(e)}</li>`).join("\n")}
 </ul>
 <p class="basis">Cost: ${escape(f.costBasis)}</p>
-${fixBlock("Fix", f.fix)}
-${f.alternative ? fixBlock(`Or: ${f.alternative.description}, saving ${money(f.alternative.monthlySavingUsd)} a month`, f.alternative) : ""}
+${choices[n]!.map(fixBlock).join("\n")}
 </div>
 </article>`,
     )
@@ -229,13 +365,31 @@ ${note ? `<p class="since">${escape(note)}</p>` : ""}
 ${resolved.length > 0 ? `<section class="resolved">\n<h2>Resolved since the last scan</h2>\n<ul>\n${resolved.map((r) => `<li>${escape(r.title)} (${escape(r.resourceIds.map(shortId).join(", "))}), ${money(r.monthlyCostUsd)} a month</li>`).join("\n")}\n</ul>\n</section>` : ""}
 ${options.summary ? `<section class="summary">\n<h2>Summary</h2>\n${summaryBlocks(options.summary)}\n</section>` : ""}
 ${findings}
+${
+  shown.length > 0
+    ? `<section class="script" id="script">
+<h2>Your script</h2>
+<p>Every fix you tick lands here, as one script to read and run yourself. Fixes that can be undone start ticked. Permanent ones are left for you to decide.</p>
+<pre><code id="script-text">${escape(shared.scriptText(head, chosen.map((c) => c.lines)))}</code></pre>
+</section>`
+    : ""
+}
 <section class="notes">
 <p>End of statement. CloudPilot is read-only: it printed these commands and ran none of them.</p>
 ${skipped ? `<p>${escape(skipped)}</p>` : ""}
 ${warnings}
 </section>
+${
+  shown.length > 0
+    ? `<div class="bar" role="status">
+<p><strong id="saving">${saving}</strong> <span id="tally">${sentence}</span> <span id="risk">${risk}</span></p>
+<a href="#script">Read the script</a>
+<button type="button" id="copy" hidden>Copy script</button>
+</div>`
+    : ""
+}
 </main>
-<script>${SCRIPT}</script>
+${shown.length > 0 ? `<script>${pageScript(head)}</script>` : ""}
 </body>
 </html>
 `;

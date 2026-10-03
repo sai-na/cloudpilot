@@ -110,11 +110,13 @@ test("the HTML report is one self-contained file carrying the replay banner and 
   assert.equal(html.match(/<article class="finding">/g)?.length, 10);
   assert.match(html, /rule confidence \d+%/);
   assert.ok((html.match(/data-risk="dangerous"/g)?.length ?? 0) >= 8);
-  assert.ok((html.match(/<button type="button" data-copy>Copy<\/button>/g)?.length ?? 0) >= 10);
+  assert.equal(html.match(/<button\b/g)?.length, 1, "one button copies the whole script");
+  assert.ok((html.match(/<input type="checkbox"/g)?.length ?? 0) >= 10, "every fix can be ticked");
   assert.match(html, /<strong>Way back:<\/strong>/);
   assert.match(html, /<h2>Summary<\/h2>/);
   // The only 12-digit number anywhere in the file is the stand-in account ID.
   assert.deepEqual([...new Set(html.match(/\b\d{12}\b/g))], ["123456789012"]);
-  // Nothing is fetched: no links, sources, imports or CSS urls.
-  assert.doesNotMatch(html, /\b(?:src|href)=|@import|url\(|https?:\/\//);
+  // Nothing is fetched: no sources, imports or CSS urls, and the only link points within the page.
+  assert.doesNotMatch(html, /\bsrc=|\bhref="(?!#)|@import|url\(|https?:\/\//);
+  assert.deepEqual(html.match(/\bhref="[^"]*"/g), ['href="#script"']);
 });
