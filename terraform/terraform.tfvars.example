@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+budget_email = "you@example.com"
+account_id   = "123456789012"

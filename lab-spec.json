@@ -1,0 +1,22 @@
+{
+  "region": "ap-south-1",
+  "az": "ap-south-1a",
+  "seed_profile": "cloudpilot-seed",
+  "project_tag": "cloudpilot-waste-lab",
+  "readonly_role": "cloudpilot-readonly",
+  "bucket_prefix": "cloudpilot-waste-lab",
+  "budget": { "limit_usd": 15, "thresholds_percent": [50, 100] },
+  "w1": { "count": 2, "size_gb": 500, "type": "gp2" },
+  "w2": { "size_gb": 200, "type": "gp3" },
+  "w4": { "instance_type": "t3.micro", "root_gb": 30, "root_type": "gp3" },
+  "w5": { "instance_type": "t3.micro", "root_gb": 8, "root_type": "gp3" },
+  "w6": { "size_gb": 50, "type": "gp3" },
+  "w8": {
+    "objects": {
+      "reports/2025-q4-summary.csv": "region,service,cost_usd\nap-south-1,ec2,412.10\nap-south-1,s3,38.45\nap-south-1,ebs,121.90\n",
+      "exports/users-sample.json": "{\"users\":[{\"id\":1,\"plan\":\"free\"},{\"id\":2,\"plan\":\"pro\"}]}\n",
+      "logs/app-2026-01-01.log": "2026-01-01T00:00:00Z INFO service started\n2026-01-01T00:00:05Z INFO healthcheck ok\n"
+    }
+  },
+  "w9": { "key": "uploads/video-export-2026-01.bin", "part_mb": 5 }
+}

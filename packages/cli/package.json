@@ -1,0 +1,73 @@
+{
+  "name": "@meruapps/cloudpilot",
+  "version": "0.1.0",
+  "description": "Read-only agent that finds wasted AWS spend and prints the commands that would fix it.",
+  "keywords": [
+    "aws",
+    "cost",
+    "finops",
+    "cloud-cost",
+    "cloudshell",
+    "cli"
+  ],
+  "license": "AGPL-3.0-only",
+  "author": "Meru Apps",
+  "homepage": "https://github.com/sai-na/cloudpilot#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sai-na/cloudpilot.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/sai-na/cloudpilot/issues"
+  },
+  "type": "module",
+  "bin": {
+    "cloudpilot": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "test": "tsx --test test/*.test.ts",
+    "test:lab": "tsx --test test/lab/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@aws-sdk/client-cloudwatch": "3.929.0",
+    "@aws-sdk/client-ec2": "3.929.0",
+    "@aws-sdk/client-pricing": "3.929.0",
+    "@aws-sdk/client-s3": "3.929.0",
+    "@aws-sdk/client-sts": "3.929.0",
+    "@aws-sdk/credential-providers": "3.929.0",
+    "@smithy/node-http-handler": "^4.12.1",
+    "@smithy/protocol-http": "^5.6.2",
+    "commander": "^13.1.0",
+    "openai": "^4.104.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/bedrock-sdk": ">=0.30.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/bedrock-sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.34.2",
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

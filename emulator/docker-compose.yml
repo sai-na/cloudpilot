@@ -1,0 +1,7 @@
+# Moto server: local AWS emulator for the venue-wifi fallback.
+# Host port 5050, because macOS AirPlay Receiver already holds 5000.
+services:
+  moto:
+    image: motoserver/moto:latest
+    ports:
+      - "5050:5000"

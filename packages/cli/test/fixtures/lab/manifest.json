@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "accountId": "123456789012",
+  "sessions": [
+    {
+      "id": "scan",
+      "command": "scan",
+      "homeRegion": "ap-south-1",
+      "region": "ap-south-1",
+      "regions": [
+        "ap-south-1"
+      ],
+      "recordedAt": "2026-10-03T07:08:26.099Z"
+    },
+    {
+      "id": "ask-88bc6aba9740",
+      "command": "ask",
+      "question": "What should I fix first, and what is the risk?",
+      "homeRegion": "ap-south-1",
+      "region": "ap-south-1",
+      "regions": [
+        "ap-south-1"
+      ],
+      "recordedAt": "2026-10-03T07:08:44.573Z"
+    },
+    {
+      "id": "ask-14a18f21221c",
+      "command": "ask",
+      "question": "Is the running instance really idle? Check its CPU over the last 12 hours.",
+      "homeRegion": "ap-south-1",
+      "region": "ap-south-1",
+      "regions": [
+        "ap-south-1"
+      ],
+      "recordedAt": "2026-10-03T07:09:03.982Z"
+    }
+  ]
+}

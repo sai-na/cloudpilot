@@ -1,0 +1,62 @@
+{
+  "region": "ap-south-1",
+  "currency": "USD",
+  "fetched_at": "2026-10-02T09:35:03Z",
+  "source": "AWS Price List Query API (pricing:GetProducts), endpoint region us-east-1, profile cloudpilot-seed",
+  "prices": {
+    "ebs_gp2_gb_month": {
+      "usd": 0.114,
+      "unit": "GB-Mo",
+      "description": "$0.114 per GB-month of General Purpose SSD (gp2) provisioned storage - Asia Pacific (Mumbai)",
+      "sku": "4MB6SVGV7JKWFBUJ",
+      "usagetype": "APS3-EBS:VolumeUsage.gp2",
+      "publication_date": "2026-09-25T17:45:21Z",
+      "tier": "flat"
+    },
+    "ebs_gp3_gb_month": {
+      "usd": 0.0912,
+      "unit": "GB-Mo",
+      "description": "$0.0912 per GB-month of General Purpose (gp3) provisioned storage - Asia Pacific (Mumbai)",
+      "sku": "D7RMW443YWTMZ4V5",
+      "usagetype": "APS3-EBS:VolumeUsage.gp3",
+      "publication_date": "2026-09-25T17:45:21Z",
+      "tier": "flat"
+    },
+    "ebs_snapshot_gb_month": {
+      "usd": 0.05,
+      "unit": "GB-Mo",
+      "description": "$0.05 per GB-Month of snapshot data stored - Asia Pacific (Mumbai)",
+      "sku": "VDPTV7U529CYAXWY",
+      "usagetype": "APS3-EBS:SnapshotUsage",
+      "publication_date": "2026-09-25T17:45:21Z",
+      "tier": "flat"
+    },
+    "eip_idle_hour": {
+      "usd": 0.005,
+      "unit": "Hrs",
+      "description": "$0.005 per Idle public IPv4 address per hour",
+      "sku": "CSRJTKHMAVNJSJAK",
+      "usagetype": "APS3-PublicIPv4:IdleAddress",
+      "publication_date": "2026-09-17T19:05:28Z",
+      "tier": "flat"
+    },
+    "ec2_t3_micro_hour": {
+      "usd": 0.0112,
+      "unit": "Hrs",
+      "description": "$0.0112 per On Demand Linux t3.micro Instance Hour",
+      "sku": "9NX7BP9ZGC9GB8AX",
+      "usagetype": "APS3-BoxUsage:t3.micro",
+      "publication_date": "2026-09-25T17:45:21Z",
+      "tier": "flat"
+    },
+    "s3_standard_gb_month": {
+      "usd": 0.025,
+      "unit": "GB-Mo",
+      "description": "$0.025 per GB - first 50 TB / month of storage used",
+      "sku": "USGUTP2JY23N9GH2",
+      "usagetype": "APS3-TimedStorage-ByteHrs",
+      "publication_date": "2026-09-28T23:04:16Z",
+      "tier": "first tier only"
+    }
+  }
+}

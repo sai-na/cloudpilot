@@ -1,0 +1,34 @@
+# Terraform
+*.tfstate*
+.terraform/
+*.tfvars
+
+# Local secrets and lab state
+.env
+lab-state/
+*accessKeys*.csv
+docs/internal/
+
+# The lab's answer key: generated, and it names the AWS account and its resources
+lab-manifest.json
+
+# Python
+__pycache__/
+
+# CloudPilot CLI
+node_modules/
+dist/
+.cloudpilot/
+
+# macOS
+.DS_Store
+
+# Task Master (local task tracking and its scaffolding)
+.taskmaster/
+.mcp.json
+.env.example
+.claude/
+/CLAUDE.md
+
+# Record/replay captures
+recordings/

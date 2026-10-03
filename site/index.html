@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CloudPilot: find the money your AWS account is wasting</title>
+<meta name="description" content="A read-only, open-source command that scans your AWS account for wasted spend and prints the exact fix for each item. It changes nothing.">
+<style>
+/* The page is a printed statement that someone has audited by hand:
+   black ink on paper, ledger bands, highlighter over the waste, a red stamp. */
+:root {
+  --paper: #fcfdf8; --band: #e4f1e3; --ink: #0d0d0d; --soft: #4b4f48; --line: #b9beb2;
+  --marker: #fff04a; --red: #cf2318;
+  --print: "Courier New", Courier, ui-monospace, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 1.0625rem/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+a { color: inherit; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--red); outline-offset: 3px;
+}
+
+/* Continuous-feed paper: sprocket holes down both edges. */
+body::before, body::after {
+  content: ""; position: fixed; top: 0; bottom: 0; width: 2.25rem; z-index: 1; pointer-events: none;
+  background: radial-gradient(circle, #d5d8cd 0 0.34rem, transparent 0.38rem) center top / 2.25rem 2.5rem repeat-y;
+}
+body::before { left: 0; border-right: 1px dashed var(--line); }
+body::after { right: 0; border-left: 1px dashed var(--line); }
+
+.sheet { max-width: 66rem; margin: 0 auto; padding: 0 4rem; }
+
+.top { display: flex; justify-content: space-between; align-items: baseline; padding-block: 1.5rem; font-weight: 800; }
+.top span { font-size: 1.25rem; letter-spacing: -0.02em; }
+
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 23.5rem); column-gap: 2.5rem; align-items: center; padding-block: 2.5rem 4.5rem; }
+.hero-art { width: 100%; height: auto; margin-top: 0.5rem; }
+
+/* One moment on load: the statement feeds out, then gets marked up. */
+.art-paper { animation: feed 1.5s cubic-bezier(0.2, 0.7, 0.2, 1) 0.3s both; }
+.art-mark { transform-box: fill-box; transform-origin: left center; animation: swipe 0.3s ease-out both; animation-delay: calc(1.9s + var(--n) * 0.16s); }
+.art-circle { stroke-dasharray: 330; stroke-dashoffset: 330; animation: draw 0.7s ease-out 3s forwards; }
+@keyframes feed { from { transform: translateY(-330px); } }
+@keyframes swipe { from { transform: scaleX(0); } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .art-paper, .art-mark { animation: none; }
+  .art-circle { animation: none; stroke-dashoffset: 0; }
+}
+h1 {
+  font-size: clamp(2.75rem, 5.4vw, 3.95rem); line-height: 0.97; font-weight: 900; letter-spacing: -0.035em; word-spacing: 0.08em;
+  margin: 0 0 2.75rem;
+}
+h1 .keep { white-space: nowrap; }
+.command {
+  display: inline-flex; align-items: center; gap: 1.5rem; max-width: 100%;
+  background: var(--ink); color: var(--paper); padding: 0.9rem 0.9rem 0.9rem 1.4rem; margin-bottom: 1.5rem;
+}
+.command code { font: 700 1.25rem/1.3 var(--print); overflow-wrap: anywhere; }
+.command code::before { content: "$ "; opacity: 0.55; user-select: none; }
+.command button {
+  font: inherit; font-weight: 800; color: var(--ink); background: var(--marker);
+  border: 0; padding: 0.5rem 1.1rem; min-width: 5.5rem; cursor: pointer;
+}
+.command button:hover { background: #fff; }
+.hero p { max-width: 36rem; margin: 0 0 0.75rem; font-size: 1.1875rem; }
+
+section { padding-block: 4rem; border-top: 2px dashed var(--line); }
+h2 { font-size: clamp(1.9rem, 4.6vw, 3rem); line-height: 1; font-weight: 900; letter-spacing: -0.035em; margin: 0 0 1rem; }
+h3 { font-size: 1.1875rem; line-height: 1.25; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 0.3rem; }
+.lead { max-width: 38rem; margin: 0 0 2.25rem; font-size: 1.1875rem; }
+
+/* The statement: one line item per band, amounts in the right-hand column. */
+.statement { position: relative; font-family: var(--print); margin: 0; padding: 0; list-style: none; border-top: 3px solid var(--ink); }
+.statement li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 1.5rem; padding: 0.9rem 1.1rem; }
+.statement li:nth-child(odd) { background: var(--band); }
+.statement .item { font-weight: 700; font-size: 1.125rem; display: flex; align-items: baseline; gap: 0.6rem; min-width: 0; }
+.statement .item::after { content: ""; flex: 1; border-bottom: 2px dotted var(--soft); transform: translateY(-0.25rem); min-width: 1rem; }
+.statement .amount { font-weight: 700; font-size: 1.125rem; text-align: right; white-space: nowrap; }
+.statement .note { grid-column: 1 / -1; margin: 0.15rem 0 0; color: var(--soft); max-width: 46rem; }
+.statement .total { border-top: 3px solid var(--ink); background: none; }
+.statement .total .item, .statement .total .amount { font-size: 1.375rem; }
+.statement .total .amount { border-bottom: 5px double var(--red); }
+
+/* What an auditor's highlighter does: marks the money that bought nothing. */
+mark { display: inline-block; background: var(--marker); color: inherit; padding: 0.05em 0.45em; border-radius: 0.2em 0.7em 0.3em 0.6em; transform: rotate(-1.2deg); }
+.statement li:nth-child(even) mark { transform: rotate(0.9deg); }
+
+.stamp {
+  display: inline-block; font: 900 1.05rem/1 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--red);
+  border: 3px solid var(--red); outline: 1px solid var(--red); outline-offset: 3px;
+  padding: 0.5rem 0.8rem; transform: rotate(-5deg); opacity: 0.88; filter: url(#ink);
+}
+.statement-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 2rem; margin-bottom: 1.25rem; }
+.statement-head p { font-family: var(--print); margin: 0; color: var(--soft); }
+
+.safe-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 2rem; }
+.safe-top .stamp { font-size: 1.9rem; padding: 0.7rem 1.1rem; margin: 0.5rem 1.5rem 0 0; transform: rotate(7deg); flex: none; }
+.safe { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem 3.5rem; margin: 1rem 0 2.5rem; max-width: 54rem; }
+.safe p { margin: 0; color: var(--soft); }
+details summary { cursor: pointer; font-weight: 800; }
+details table { font-family: var(--print); border-collapse: collapse; width: 100%; max-width: 54rem; margin-top: 1.25rem; border-top: 3px solid var(--ink); }
+details th, details td { text-align: left; padding: 0.45rem 1.1rem; vertical-align: top; }
+details tbody tr:nth-child(odd) { background: var(--band); }
+details td:nth-child(2) { font-weight: 700; }
+
+/* The report as a sheet torn off the printer: sharp, upright, ragged where it continues. */
+figure { margin: 0; }
+.torn { filter: drop-shadow(0 2px 0 var(--ink)) drop-shadow(0 -2px 0 var(--ink)) drop-shadow(2px 0 0 var(--ink)) drop-shadow(-2px 0 0 var(--ink)); }
+.torn a {
+  display: block; background: var(--paper);
+  -webkit-mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / 1.5rem 100%;
+  mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) 50% / 1.5rem 100%;
+}
+.torn img { display: block; width: 100%; height: auto; }
+figcaption { margin-top: 1.5rem; max-width: 40rem; }
+
+.prices { max-width: 46rem; }
+
+/* The tear-off slip at the foot of a bill. */
+.slip { position: relative; border: 2px dashed var(--ink); padding: 2rem; max-width: 46rem; }
+.slip .scissors { position: absolute; top: -0.85rem; left: 1.5rem; width: 1.9rem; height: 1.6rem; background: var(--paper); padding: 0 0.25rem; box-sizing: content-box; }
+.slip h2 { font-size: clamp(1.6rem, 3.6vw, 2.25rem); }
+.slip > p { margin: 0 0 1.5rem; max-width: 34rem; }
+form { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem 1.5rem; }
+label { display: block; font: 700 0.9375rem/1.3 var(--print); margin-bottom: 0.25rem; }
+input, select {
+  width: 100%; height: 2.75rem; font: inherit; color: var(--ink); background: transparent;
+  border: 0; border-bottom: 2px solid var(--ink); border-radius: 0; padding: 0 0.25rem;
+}
+form button {
+  grid-column: 1 / -1; justify-self: start; font: inherit; font-weight: 800; color: var(--paper); background: var(--ink);
+  border: 0; height: 3rem; padding: 0 1.6rem; cursor: pointer;
+}
+form button:hover { background: var(--red); }
+form button:disabled { background: none; color: var(--soft); border: 2px solid var(--line); cursor: not-allowed; }
+.slip .formnote { margin: 1.25rem 0 0; color: var(--soft); font-family: var(--print); }
+
+.faq { max-width: 42rem; }
+.faq h3 { font-size: 1.375rem; margin-top: 2.25rem; }
+.faq p { margin: 0 0 0.75rem; }
+
+footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.5rem; font-family: var(--print); color: var(--soft); }
+
+@media (max-width: 46rem) {
+  body::before, body::after { width: 1rem; background-size: 1rem 2rem; }
+  .sheet { padding: 0 1.75rem; }
+  .hero { grid-template-columns: 1fr; row-gap: 2.5rem; }
+  .hero-art { max-width: 22rem; }
+  .safe, form { grid-template-columns: 1fr; }
+  .safe-top, .statement-head { flex-direction: column-reverse; align-items: flex-start; }
+  .safe-top .stamp { margin: 0 0 0.5rem; font-size: 1.4rem; }
+  .statement li { padding-inline: 0.7rem; }
+  .statement .item::after { display: none; }
+  .slip { padding: 1.25rem; }
+  .command { flex-direction: column; align-items: stretch; gap: 0.75rem; padding: 0.9rem; }
+}
+@media print { body::before, body::after { display: none; } }
+</style>
+</head>
+<body>
+
+<!-- Slightly uneven ink for the stamps. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="ink"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" result="grain"/><feDisplacementMap in="SourceGraphic" in2="grain" scale="2.2"/></filter>
+</svg>
+
+<header class="sheet top">
+  <span>CloudPilot</span>
+  <a href="https://github.com/sai-na/cloudpilot" data-github>GitHub</a>
+</header>
+
+<main class="sheet">
+
+<div class="hero">
+  <div>
+    <h1>Find the money your AWS account is wasting. <span class="keep">Read-only.</span> <span class="keep">Two minutes.</span></h1>
+    <div class="command">
+      <code id="one-liner">npx @meruapps/cloudpilot</code>
+      <button type="button" data-copy="one-liner">Copy</button>
+    </div>
+    <p>Paste it into AWS CloudShell. It reads every region with the credentials CloudShell already has, then prints an itemised statement of what you are paying for and not using, with the exact command that would fix each line.</p>
+    <p>It changes nothing. <a href="https://github.com/sai-na/cloudpilot" data-github>Read the source on GitHub</a>.</p>
+  </div>
+
+  <svg class="hero-art" viewBox="0 0 440 520" role="img" aria-label="A CloudShell window runs the CloudPilot command across 17 regions and prints a statement of waste for the test account: unattached volumes $132.24, idle instance $8.91, idle Elastic IP $3.65, stopped instance $2.74, orphaned snapshot $2.50, total $151.53 a month. Each amount is marked with a highlighter and the total is circled in red.">
+    <defs><clipPath id="slot"><rect x="0" y="182" width="440" height="340"/></clipPath></defs>
+
+    <!-- The statement, fed out of the terminal like paper from a printer. -->
+    <g clip-path="url(#slot)">
+      <g class="art-paper" font-family="'Courier New', Courier, monospace" font-size="12.5" font-weight="700" fill="#0d0d0d">
+        <path d="M 50 150 L 390 150 L 390 472 L 373 478 L 356 466 L 339 478 L 322 466 L 305 478 L 288 466 L 271 478 L 254 466 L 237 478 L 220 466 L 203 478 L 186 466 L 169 478 L 152 466 L 135 478 L 118 466 L 101 478 L 84 466 L 67 478 L 50 466 L 50 472 Z" fill="#fcfdf8" stroke="#0d0d0d" stroke-width="2" stroke-linejoin="round"/>
+        <g fill="#d5d8cd"><circle cx="64" cy="196" r="4"/><circle cx="376" cy="196" r="4"/><circle cx="64" cy="222" r="4"/><circle cx="376" cy="222" r="4"/><circle cx="64" cy="248" r="4"/><circle cx="376" cy="248" r="4"/><circle cx="64" cy="274" r="4"/><circle cx="376" cy="274" r="4"/><circle cx="64" cy="300" r="4"/><circle cx="376" cy="300" r="4"/><circle cx="64" cy="326" r="4"/><circle cx="376" cy="326" r="4"/><circle cx="64" cy="352" r="4"/><circle cx="376" cy="352" r="4"/><circle cx="64" cy="378" r="4"/><circle cx="376" cy="378" r="4"/><circle cx="64" cy="404" r="4"/><circle cx="376" cy="404" r="4"/><circle cx="64" cy="430" r="4"/><circle cx="376" cy="430" r="4"/><circle cx="64" cy="456" r="4"/><circle cx="376" cy="456" r="4"/></g>
+        <path d="M 77 184 V 462 M 363 184 V 462" stroke="#b9beb2" stroke-dasharray="4 4" fill="none"/>
+        <text x="90" y="212" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="900" letter-spacing="-0.3">Statement of waste</text>
+        <text x="90" y="230" font-size="10.5" font-weight="400" fill="#4b4f48">Per month</text>
+        <g transform="rotate(-6 308 212)">
+          <rect x="256" y="200" width="104" height="22" fill="none" stroke="#cf2318" stroke-width="2"/>
+          <text x="308" y="215" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="9.5" font-weight="900" letter-spacing="1.2" fill="#cf2318">TEST ACCOUNT</text>
+        </g>
+      <rect x="78" y="244" width="284" height="30" fill="#e4f1e3"/>
+      <g transform="rotate(-1.6 322.0 259)"><rect class="art-mark" style="--n:0" x="287" y="250" width="70" height="18" rx="4" fill="#fff04a"/></g>
+      <text x="90" y="264">Unattached volumes</text><text x="352" y="264" text-anchor="end">$132.24</text>
+      
+      <g transform="rotate(1.2 329.0 289)"><rect class="art-mark" style="--n:1" x="301" y="280" width="56" height="18" rx="4" fill="#fff04a"/></g>
+      <text x="90" y="294">Idle instance</text><text x="352" y="294" text-anchor="end">$8.91</text>
+      <rect x="78" y="304" width="284" height="30" fill="#e4f1e3"/>
+      <g transform="rotate(-1.6 329.0 319)"><rect class="art-mark" style="--n:2" x="301" y="310" width="56" height="18" rx="4" fill="#fff04a"/></g>
+      <text x="90" y="324">Idle Elastic IP</text><text x="352" y="324" text-anchor="end">$3.65</text>
+      
+      <g transform="rotate(1.2 329.0 349)"><rect class="art-mark" style="--n:3" x="301" y="340" width="56" height="18" rx="4" fill="#fff04a"/></g>
+      <text x="90" y="354">Stopped instance</text><text x="352" y="354" text-anchor="end">$2.74</text>
+      <rect x="78" y="364" width="284" height="30" fill="#e4f1e3"/>
+      <g transform="rotate(-1.6 329.0 379)"><rect class="art-mark" style="--n:4" x="301" y="370" width="56" height="18" rx="4" fill="#fff04a"/></g>
+      <text x="90" y="384">Orphaned snapshot</text><text x="352" y="384" text-anchor="end">$2.50</text>
+        <path d="M 78 398 H 362" stroke="#0d0d0d" stroke-width="2.5"/>
+        <text x="90" y="428" font-size="14">Waste found</text><text x="352" y="428" text-anchor="end" font-size="14">$151.53</text>
+        <path class="art-circle" d="M 281 430 C 272 410, 318 402, 348 406 C 372 410, 372 436, 344 441 C 318 446, 286 444, 279 428" fill="none" stroke="#cf2318" stroke-width="3" stroke-linecap="round"/>
+      </g>
+    </g>
+
+    <!-- The CloudShell window, with the lines the command really prints. -->
+    <rect x="10" y="10" width="420" height="176" fill="#0d0d0d"/>
+    <text x="28" y="36" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="11.5" font-weight="700" fill="#9a9d96">AWS CloudShell</text>
+    <path d="M 10 48 H 430" stroke="#33352f"/>
+    <g font-family="'Courier New', Courier, monospace" font-size="13" font-weight="700" fill="#fcfdf8">
+      <text x="28" y="76"><tspan fill="#9a9d96">$ </tspan>npx @meruapps/cloudpilot</text>
+      <text x="28" y="100" fill="#9a9d96">Reading 17 regions (read-only)...</text>
+      <text x="28" y="124">[ 8/17] ap-south-1  10 findings</text>
+      <text x="28" y="148">[17/17] us-east-2   nothing found</text>
+    </g>
+    <rect x="40" y="178" width="360" height="8" fill="#33352f"/>
+
+    <!-- The highlighter that marked it up. -->
+    <g transform="translate(388 492) rotate(-158)" stroke="#0d0d0d" stroke-width="2" stroke-linejoin="round">
+      <rect x="0" y="-12" width="118" height="24" rx="5" fill="#fff04a"/>
+      <rect x="118" y="-10" width="38" height="20" fill="#0d0d0d"/>
+      <path d="M 156 -7 L 172 -4 L 172 5 L 156 7 Z" fill="#fff04a"/>
+      <path d="M 22 -12 V 12" fill="none"/>
+    </g>
+  </svg>
+</div>
+
+<section id="finds">
+  <h2>What it finds</h2>
+  <p class="lead">Nine kinds of waste. Below is the statement for our test account: an AWS account we filled with waste on purpose. It is not a customer's.</p>
+  <div class="statement-head">
+    <p>Account 123456789012, ap-south-1<br>One scan, amounts per month</p>
+    <span class="stamp">Test account</span>
+  </div>
+  <ol class="statement">
+    <li>
+      <span class="item">Unattached EBS volumes</span><span class="amount"><mark>$132.24</mark></span>
+      <p class="note">Disks with nothing attached to them. In the test account: three volumes, 1,200 GB.</p>
+    </li>
+    <li>
+      <span class="item">gp2 volumes that could be gp3</span><span class="amount"><mark>$22.80</mark> saved</span>
+      <p class="note">The older disk type, where the newer one costs less. In the test account: converting two 500 GB volumes instead of deleting them.</p>
+    </li>
+    <li>
+      <span class="item">Idle running instances</span><span class="amount"><mark>$8.91</mark></span>
+      <p class="note">Servers whose CPU never rises above 5%. In the test account: one t3.micro averaging 0.19%.</p>
+    </li>
+    <li>
+      <span class="item">Idle Elastic IPs</span><span class="amount"><mark>$3.65</mark></span>
+      <p class="note">Public addresses attached to nothing, billed by the hour. In the test account: one address.</p>
+    </li>
+    <li>
+      <span class="item">Stopped instances</span><span class="amount"><mark>$2.74</mark></span>
+      <p class="note">Switched off, but their disks are still billed. In the test account: one instance with a 30 GB disk.</p>
+    </li>
+    <li>
+      <span class="item">Snapshots of deleted volumes</span><span class="amount">up to <mark>$2.50</mark></span>
+      <p class="note">The disk is gone and no machine image uses the copy. In the test account: one snapshot of a 50 GB volume.</p>
+    </li>
+    <li>
+      <span class="item">Unused machine images</span><span class="amount">up to <mark>$1.50</mark></span>
+      <p class="note">AMIs that no instance and no launch template refers to. In the test account: one image backed by 30 GB.</p>
+    </li>
+    <li>
+      <span class="item">Buckets with no lifecycle rule</span><span class="amount">under <mark>$0.01</mark></span>
+      <p class="note">Nothing in the bucket ever expires or moves to cheaper storage. In the test account: a bucket holding three tiny files.</p>
+    </li>
+    <li>
+      <span class="item">Incomplete multipart uploads</span><span class="amount">under <mark>$0.01</mark></span>
+      <p class="note">Upload parts that are billed but never appear in the bucket listing. In the test account: one abandoned 5 MB part.</p>
+    </li>
+    <li class="total">
+      <span class="item">Waste found in the test account</span><span class="amount">$151.53</span>
+      <p class="note">Ten findings. The gp2 saving is an alternative to deleting those volumes, so it is not added to the total.</p>
+    </li>
+  </ol>
+</section>
+
+<section id="safe">
+  <div class="safe-top">
+    <h2>How it stays safe</h2>
+    <span class="stamp">Read-only</span>
+  </div>
+  <div class="safe">
+    <div>
+      <h3>It only reads</h3>
+      <p>Every AWS call it makes is a Describe, a List or a Get. A test in the repository fails if the code ever calls anything else.</p>
+    </div>
+    <div>
+      <h3>It never runs a command</h3>
+      <p>It prints each fix for you to review and says which ones are permanent. Running them is your decision.</p>
+    </div>
+    <div>
+      <h3>It runs inside your own account</h3>
+      <p>The scan happens in your CloudShell or terminal, with your credentials. There is no CloudPilot server in the path, and the tool sends no telemetry.</p>
+    </div>
+    <div>
+      <h3>It is open source</h3>
+      <p>The code is on GitHub under the AGPL, so you can read exactly what it checks before you run it.</p>
+    </div>
+  </div>
+  <details id="api-calls">
+    <summary>The full list of AWS API calls it makes: 18 kinds, none of which can change anything</summary>
+    <table>
+      <thead><tr><th>Service</th><th>Call</th><th>Used for</th></tr></thead>
+      <tbody>
+        <tr><td>STS</td><td>GetCallerIdentity</td><td>The account ID shown in the report</td></tr>
+        <tr><td>EC2</td><td>DescribeRegions</td><td>The regions enabled for the account</td></tr>
+        <tr><td>EC2</td><td>DescribeVolumes</td><td>Unattached and gp2 volumes</td></tr>
+        <tr><td>EC2</td><td>DescribeSnapshots</td><td>Snapshots of deleted volumes</td></tr>
+        <tr><td>EC2</td><td>DescribeImages</td><td>Unused machine images</td></tr>
+        <tr><td>EC2</td><td>DescribeInstances</td><td>Stopped and idle instances</td></tr>
+        <tr><td>EC2</td><td>DescribeAddresses</td><td>Idle Elastic IPs</td></tr>
+        <tr><td>EC2</td><td>DescribeLaunchTemplates</td><td>Whether an image is still referenced</td></tr>
+        <tr><td>EC2</td><td>DescribeLaunchTemplateVersions</td><td>Whether an image is still referenced</td></tr>
+        <tr><td>S3</td><td>ListBuckets</td><td>The buckets in each region</td></tr>
+        <tr><td>S3</td><td>GetBucketLocation</td><td>A bucket's region, when the listing omits it</td></tr>
+        <tr><td>S3</td><td>GetBucketLifecycleConfiguration</td><td>Buckets with no lifecycle rule</td></tr>
+        <tr><td>S3</td><td>GetBucketTagging</td><td>The tag that tells CloudPilot to skip a bucket</td></tr>
+        <tr><td>S3</td><td>ListObjectsV2</td><td>Object count and size; contents are never read</td></tr>
+        <tr><td>S3</td><td>ListMultipartUploads</td><td>Incomplete uploads</td></tr>
+        <tr><td>S3</td><td>ListParts</td><td>The size of an incomplete upload</td></tr>
+        <tr><td>CloudWatch</td><td>GetMetricData</td><td>CPU history of running instances</td></tr>
+        <tr><td>Pricing</td><td>GetProducts</td><td>Unit prices for what was found</td></tr>
+      </tbody>
+    </table>
+  </details>
+</section>
+
+<section id="report">
+  <h2>Sample report</h2>
+  <p class="lead">Add <code>--html report.html</code> and the same scan is saved as a single file you can open, print or send to whoever approves the cleanup.</p>
+  <figure>
+    <div class="torn">
+      <a href="sample-report.html">
+        <img src="sample-report.png" width="1100" height="1640" alt="The top of a CloudPilot report for the test account: $151.53 a month of estimated waste in 10 findings, a summary by kind of waste, then the first finding, an unattached 500 GB volume at $57.00 a month, with the command that would delete it marked as permanent.">
+      </a>
+    </div>
+    <figcaption>The top of the report for our test account. The account ID, resource IDs and IP address are replaced with stand-ins; the findings and amounts are as scanned. <a href="sample-report.html">Open the whole report</a>: all ten findings, with working copy buttons.</figcaption>
+  </figure>
+</section>
+
+<section id="pricing">
+  <h2>Pricing</h2>
+  <ol class="statement prices">
+    <li>
+      <span class="item">Open source</span><span class="amount">Free</span>
+      <p class="note">The command on this page: every check, the terminal report and the HTML report.</p>
+    </li>
+    <li>
+      <span class="item">Pro, per account</span><span class="amount">$49 a month</span>
+      <p class="note">Coming soon. It cannot be bought yet.</p>
+    </li>
+    <li>
+      <span class="item">Team</span><span class="amount">$149 a month</span>
+      <p class="note">Coming soon. It cannot be bought yet.</p>
+    </li>
+  </ol>
+</section>
+
+<section id="waitlist">
+  <div class="slip">
+    <svg class="scissors" viewBox="0 0 38 32" aria-hidden="true" fill="none" stroke="#0d0d0d" stroke-width="2.4" stroke-linecap="round">
+      <circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="24" r="5.5"/><path d="M 12.5 11 L 36 26 M 12.5 21 L 36 6"/>
+    </svg>
+    <h2>Hosted beta waitlist</h2>
+    <p>We are building a hosted version. Fill in this slip and we will write to you when the beta opens.</p>
+    <form action="https://formspree.io/f/YOUR_FORM_ID" method="POST" data-waitlist>
+      <div>
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+      </div>
+      <div>
+        <label for="spend">Monthly AWS spend</label>
+        <select id="spend" name="monthly_aws_spend" required>
+          <option value="" selected disabled>Choose a range</option>
+          <option>Under $500</option>
+          <option>$500 to $2k</option>
+          <option>$2k to $10k</option>
+          <option>$10k+</option>
+        </select>
+      </div>
+      <button type="submit">Join the waitlist</button>
+    </form>
+    <p class="formnote" data-waitlist-note>We use your email only to tell you about the beta.</p>
+  </div>
+</section>
+
+<section id="faq">
+  <h2>Questions</h2>
+  <div class="faq">
+    <h3>Isn't this a one-time cleanup?</h3>
+    <p>The first scan usually finds the most. But waste comes back as a team ships: a volume gets detached, a test instance is left running, a snapshot outlives its volume. CloudPilot is one command, so you can run it again whenever you like, for example before each month's bill.</p>
+
+    <h3>Do you see my data?</h3>
+    <p>No. CloudPilot runs in your CloudShell or terminal and talks to AWS with your credentials. The results are printed there and nowhere else. It reads the size of your S3 objects but never their contents.</p>
+    <p>One option changes this, and it is off unless you ask for it: <code>--explain</code> and <code>ask</code> send the findings to the AI provider whose API key you supply, so it can write the summary.</p>
+
+    <h3>Why not just use AWS's own tools?</h3>
+    <p>You can, and they are good. They are also spread across several consoles: Cost Explorer shows what you spent, while Trusted Advisor and Compute Optimizer suggest changes, and some of their checks need a paid support plan. CloudPilot is one command that puts every finding in one list, each with its evidence, its monthly cost and the exact command to fix it. And because it is open source, you can read what it checks.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="sheet">
+  <p>End of statement. CloudPilot is made by Meru Apps and released under the AGPL. <a href="https://github.com/sai-na/cloudpilot" data-github>Source on GitHub</a>.</p>
+</footer>
+
+<script>
+// Copy the one-liner; if the clipboard is unavailable, select it so Ctrl+C works.
+document.addEventListener("click", function (event) {
+  var button = event.target.closest("button[data-copy]");
+  if (!button) return;
+  var code = document.getElementById(button.getAttribute("data-copy"));
+  var done = function () {
+    button.textContent = "Copied";
+    setTimeout(function () { button.textContent = "Copy"; }, 1500);
+  };
+  var select = function () {
+    var range = document.createRange();
+    range.selectNodeContents(code);
+    var selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    try { if (document.execCommand("copy")) done(); } catch (error) {}
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(code.textContent).then(done, select);
+  } else {
+    select();
+  }
+});
+
+// Until a real form address is set, say so instead of sending the email nowhere.
+(function () {
+  var form = document.querySelector("form[data-waitlist]");
+  if (form.action.indexOf("YOUR_FORM_ID") === -1) return;
+  form.querySelector("button").disabled = true;
+  document.querySelector("[data-waitlist-note]").textContent = "The waitlist form is not connected yet.";
+  form.addEventListener("submit", function (event) { event.preventDefault(); });
+})();
+</script>
+</body>
+</html>
