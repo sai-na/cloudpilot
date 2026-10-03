@@ -76,8 +76,9 @@ needs [`agg`](https://github.com/asciinema/agg); without it only the cast is
 written.
 
 `(cd packages/cli && npm test)` fails when the capture no longer matches what
-the commands print, or when the Kubernetes recording stops replaying. Then run the script again;
-after a change to how the cluster is read, record the lab again first:
+the commands print, when a scene no longer fits the screen the GIF is rendered
+at, or when the Kubernetes recording stops replaying. Then run the script
+again; after a change to how the cluster is read, record the lab again first:
 
 ```sh
 node packages/cli/dist/index.js kube --context kind-cloudpilot-lab --lookback-hours 1 --no-compare --record demo/cluster-lab

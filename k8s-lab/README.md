@@ -66,3 +66,7 @@ same answer key with no cluster running. Re-record it when the reads change:
 ```sh
 cd packages/cli && npx tsx test/kube-lab/record-fixture.ts > test/fixtures/kube-lab.json
 ```
+
+The capture in the root README holds a second recording of this lab, in
+`demo/cluster-lab`; re-record that one too, as
+[`demo/README.md`](../demo/README.md#the-capture-in-the-readme) says.
