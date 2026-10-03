@@ -740,3 +740,32 @@ test("a run with a scan that has findings of other rules runs only what was name
   assert.equal(l.sent.find((m) => m.event === "first-report").findings.length, everyScan.findings.length);
 });
 
+
+// The documents say what the code does
+
+test("the README and the landing page name exactly the rules that can qualify, the defaults, and that a permanent fix is never run", () => {
+  const readme = readFileSync(resolve(here, "../README.md"), "utf8");
+  const section = readme.slice(readme.indexOf("### Let watch run the fixes that can be undone (autopilot)"), readme.indexOf("### Score it against the waste lab"));
+  assert.ok(section.length > 3000);
+  const rows = [...section.matchAll(/^\| `([a-z0-9-]+)` \|/gm)].map((m) => m[1]);
+  assert.deepEqual(rows, [...AUTOPILOT_QUALIFYING], "the table lists the rules that can qualify, and no other");
+  // The way back it repeats is the finding's own.
+  const found = account([gp2(1)], [bucket("neglected")]);
+  assert.ok(section.includes(found.findings.find((f) => f.pattern === "gp2-volume")!.fix.rollback.replace("the volume can be changed back to gp2 after AWS's 6-hour modification cooldown.", "the volume can be changed back to gp2 after AWS's 6-hour modification cooldown.")));
+  assert.ok(section.includes("Remove the rule again with: `aws s3api delete-bucket-lifecycle --bucket <name>`. Objects already moved to Standard-IA stay there."));
+  assert.match(section, /A fix that cannot be undone is\s+never run by it, under any option\./);
+  assert.match(section, /Start with a dry run\./);
+  for (const [flag, value] of [["--autopilot-min-confidence", AUTOPILOT_DEFAULTS.minConfidence], ["--autopilot-after", AUTOPILOT_DEFAULTS.after], ["--autopilot-max", AUTOPILOT_DEFAULTS.maxPerRound], ["--autopilot-max-total", AUTOPILOT_DEFAULTS.maxTotal]] as const) {
+    assert.match(section.replace(/\s+/g, " "), new RegExp(`\`${flag}\`[^.]*\\(default \`${String(value).replace(".", "\\.")}\`[,)]`), flag);
+  }
+  for (const rule of Object.keys(AUTOPILOT_RULES).filter((r) => !AUTOPILOT_RULES[r as keyof typeof AUTOPILOT_RULES].ok)) {
+    assert.ok(!rows.includes(rule), rule);
+  }
+
+  const top = readFileSync(resolve(here, "../../../README.md"), "utf8");
+  assert.match(top, /`watch --autopilot` is the one other thing that can change anything|`watch --autopilot` is the one other thing that can, off unless/);
+  const page = readFileSync(resolve(here, "../../../site/index.html"), "utf8");
+  assert.match(page, /The one other thing that can change anything is <code>watch --autopilot<\/code>\. It is off unless you turn it on, it acts only for the rules you name, and only for fixes that can be undone/);
+  assert.match(page, /A fix that cannot be undone is never run by it, under any option\./);
+  assert.match(readme.slice(0, 900), /`watch --autopilot` is the one other thing that can: it is off\s+unless you turn it on, it acts only for the rules you name, and only for fixes\s+that can be undone\./);
+});
