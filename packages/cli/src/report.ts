@@ -183,9 +183,13 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
       lines.push(dim(`    ${f.resourceType}  ${f.resourceIds.map(shortId).join(", ")}${region}  rule confidence ${Math.round(f.confidence * 100)}%`));
       for (const e of f.evidence) lines.push(`    - ${e}`);
       lines.push(dim(`    cost: ${f.costBasis}`));
-      lines.push(`    fix (${RISK_LABEL[f.fix.risk]}):`);
-      for (const c of f.fix.commands) lines.push(paint("cyan", `      ${c}`));
-      lines.push(dim(`    way back: ${f.fix.rollback}`));
+      if (f.fix.commands.length === 0) {
+        lines.push(`    no fix command: ${f.fix.rollback}`);
+      } else {
+        lines.push(`    fix (${RISK_LABEL[f.fix.risk]}):`);
+        for (const c of f.fix.commands) lines.push(paint("cyan", `      ${c}`));
+        lines.push(dim(`    way back: ${f.fix.rollback}`));
+      }
       if (f.alternative) {
         lines.push(`    or: ${f.alternative.description} (saves ${money(f.alternative.monthlySavingUsd)}/mo):`);
         for (const c of f.alternative.commands) lines.push(paint("cyan", `      ${c}`));
@@ -236,6 +240,9 @@ export function renderPlainText(result: ScanResult, summary?: string, banner?: s
   return `${parts.join("\n\n")}\n`;
 }
 
+/** Text for inside a Markdown code span: a backtick in it would end the span, so none is let through. */
+const inSpan = (text: string) => text.replace(/`/g, "'");
+
 /** Report as a Markdown document. */
 export function renderMarkdown(result: ScanResult, summary?: string, banner?: string, options: ReportOptions = {}): string {
   const lines: string[] = ["# CloudPilot scan", "", ...(banner ? [`> ${banner}`, ""] : []), ...header(result).map((h) => `- ${h}`), ""];
@@ -254,17 +261,21 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
   if (shown.length > 0) {
     lines.push("| # | Per month | Finding | Resource | Region | Fix risk |", "|---|---|---|---|---|---|");
     shown.forEach((f, n) => {
-      lines.push(`| ${n + 1} | ${money(f.monthlyCostUsd)} | ${f.isNew ? "**New:** " : ""}${f.title} | \`${f.resourceIds.map(shortId).join("`, `")}\` | ${f.region} | ${f.fix.risk} |`);
+      lines.push(`| ${n + 1} | ${money(f.monthlyCostUsd)} | ${f.isNew ? "**New:** " : ""}${f.title} | \`${f.resourceIds.map((id) => inSpan(shortId(id))).join("`, `")}\` | ${f.region} | ${f.fix.risk} |`);
     });
     lines.push("");
     shown.forEach((f, n) => {
       lines.push(`## ${n + 1}. ${f.title}${f.isNew ? " (new)" : ""}`, "");
       lines.push(`- **Cost:** ${money(f.monthlyCostUsd)} per month (${f.costBasis})`);
-      lines.push(`- **Resource:** ${f.resourceType} \`${f.resourceIds.join("`, `")}\` in ${f.region}`);
+      lines.push(`- **Resource:** ${f.resourceType} \`${f.resourceIds.map(inSpan).join("`, `")}\` in ${f.region}`);
       lines.push(`- **Rule confidence:** ${Math.round(f.confidence * 100)}%`);
       lines.push("- **Evidence:**", ...f.evidence.map((e) => `  - ${e}`));
-      lines.push(`- **Fix** (${RISK_LABEL[f.fix.risk]}):`, "", "```sh", ...f.fix.commands, "```", "");
-      lines.push(`- **Way back:** ${f.fix.rollback}`);
+      if (f.fix.commands.length === 0) {
+        lines.push(`- **No fix command:** ${f.fix.rollback}`);
+      } else {
+        lines.push(`- **Fix** (${RISK_LABEL[f.fix.risk]}):`, "", "```sh", ...f.fix.commands, "```", "");
+        lines.push(`- **Way back:** ${f.fix.rollback}`);
+      }
       if (f.alternative) {
         lines.push(
           `- **Alternative:** ${f.alternative.description}, saving ${money(f.alternative.monthlySavingUsd)} per month:`,
@@ -283,7 +294,7 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
     lines.push(`## ${ADVISORY_HEADING}`, "", advisoryIntro(result), "");
     advisories.forEach((a, n) => {
       lines.push(`### ${n + 1}. ${a.title}`, "");
-      lines.push(`- **Object:** ${a.kind} \`${a.resource}\`${a.namespace === "(cluster)" ? "" : ` in ${a.namespace}`}${a.container ? `, container \`${a.container}\`` : ""}`);
+      lines.push(`- **Object:** ${a.kind} \`${inSpan(a.resource)}\`${a.namespace === "(cluster)" ? "" : ` in ${a.namespace}`}${a.container ? `, container \`${inSpan(a.container)}\`` : ""}`);
       lines.push(`- **Rule:** ${a.rule}`);
       lines.push("- **Evidence:**", ...a.evidence.map((e) => `  - ${e}`));
       lines.push(`- **What to do:** ${a.advice}`);

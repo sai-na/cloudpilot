@@ -280,6 +280,7 @@ export type Pattern = (typeof PATTERNS)[number];
 export type Risk = "caution" | "dangerous";
 
 export interface Fix {
+  /** Empty when CloudPilot prints no command, for example for an object whose name is not a valid Kubernetes name. `rollback` then says why. */
   commands: string[];
   risk: Risk;
   /** What cannot be undone, and how to keep a way back. */

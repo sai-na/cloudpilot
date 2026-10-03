@@ -119,7 +119,7 @@ export interface Workload {
   /** Labelled or annotated cloudpilot/ignore=true, so no finding is raised for it. */
   ignored: boolean;
   containers: WorkloadContainer[];
-  /** How many of its pods are bound to each node, by node name. Absent when the pods were not read with their nodes. */
+  /** How many of its pods are bound to each node, by node name. Absent when no pod of it is bound to a node. */
   nodes?: Record<string, number>;
 }
 
@@ -356,6 +356,37 @@ export function safeText(text: unknown, max = 240): string {
   return flat.length > max ? `${flat.slice(0, max - 3).trimEnd()}...` : flat;
 }
 
+/**
+ * A name from the cluster, made safe to print. The API server checks most
+ * names, but an owner reference's kind and name only have to be non-empty, so
+ * a name can hold anything. Every character outside a valid name's own is shown
+ * as "?" (not trimmed or collapsed, so a name never reads as another object's),
+ * which keeps terminal control bytes, quotes, backticks and markup out of
+ * everything printed. A valid name comes back as it was.
+ */
+export function displayName(value: unknown, max = 253): string {
+  const text = String(value ?? "").replace(/[^A-Za-z0-9._-]/g, "?");
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+/** A DNS-1123 subdomain: how Kubernetes names most objects, pods, nodes, claims and volumes among them. */
+const DNS_SUBDOMAIN = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+const isSubdomain = (value: string) => value.length <= 253 && DNS_SUBDOMAIN.test(value);
+const isLabel = (value: string) => value.length <= 63 && DNS_LABEL.test(value);
+
+/**
+ * The first of these names that is not a valid Kubernetes name, shown safely, or
+ * undefined when all are. A namespace or a container is a DNS-1123 label, the
+ * rest a subdomain. A command is printed only for names that pass.
+ */
+export function invalidName(names: { subdomain?: string[]; label?: string[] }): string | undefined {
+  const bad = names.subdomain?.find((n) => !isSubdomain(n)) ?? names.label?.find((n) => !isLabel(n));
+  return bad === undefined ? undefined : displayName(bad);
+}
+
+/** Why a finding for an object with an invalid name carries no command. */
+export const noCommandFor = (shown: string) => `No command is printed for it: "${shown}" is not a valid Kubernetes name, and a command pasted with a name like that could act on something else.`;
+
 const requestOf = (pod: any, resource: "cpu" | "memory") =>
   (pod.spec?.containers ?? []).reduce((sum: number, c: any) => sum + ((resource === "cpu" ? parseCpu(c.resources?.requests?.cpu) : parseBytes(c.resources?.requests?.memory)) ?? 0), 0);
 
@@ -372,17 +403,18 @@ function nodesFrom(nodes: any[], pods: any[], skipped: string[]): NodeInfo[] {
   }
   const out: NodeInfo[] = [];
   for (const node of nodes) {
-    const name = String(node.metadata?.name ?? "");
+    const raw = String(node.metadata?.name ?? "");
+    const name = displayName(raw);
     const cpu = parseCpu(node.status?.allocatable?.cpu);
     const memory = parseBytes(node.status?.allocatable?.memory);
-    if (!name || cpu === undefined || memory === undefined) {
+    if (!raw || cpu === undefined || memory === undefined) {
       skipped.push(name || "(unnamed)");
       continue;
     }
     const labels = node.metadata?.labels ?? {};
     const tainted = (node.spec?.taints ?? []).some((t: any) => t.effect === "NoSchedule" || t.effect === "NoExecute");
     const leftOut: NodeLeftOut | undefined = CONTROL_PLANE_ROLES.some((role) => role in labels) ? "control-plane" : tainted ? "tainted" : node.spec?.unschedulable ? "cordoned" : undefined;
-    const used = load.get(name);
+    const used = load.get(raw);
     out.push({ name, allocatableCpuCores: cpu, allocatableMemoryBytes: memory, ...(leftOut ? { leftOut } : {}), requestedCpuCores: Math.round((used?.cpu ?? 0) * 1000) / 1000, requestedMemoryBytes: used?.memory ?? 0, pods: used?.pods ?? 0 });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -427,11 +459,16 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
   const workloadOfPod = new Map<string, Workload>();
   const wantAdvisories = options.advisories !== false;
   const podFacts: PodFacts[] = [];
+  // Maps are keyed by the names as the cluster gave them; what is stored and printed is the safe form.
+  const podKeys: string[] = [];
   for (const pod of pods) {
     if (["Succeeded", "Failed"].includes(pod.status?.phase)) continue;
     const owner = (pod.metadata.ownerReferences ?? []).find((o: any) => o.controller) ?? pod.metadata.ownerReferences?.[0];
     const namespace: string = pod.metadata.namespace;
-    if (wantAdvisories) podFacts.push(podFactsOf(pod, owner, deploymentOf));
+    if (wantAdvisories) {
+      podFacts.push(podFactsOf(pod, owner, deploymentOf));
+      podKeys.push(`${namespace}/${pod.metadata.name}`);
+    }
     if (!owner) continue;
     let kind: WorkloadKind;
     let name: string = owner.name;
@@ -450,21 +487,23 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
     const key = `${namespace}/${kind}/${name}`;
     let workload = workloads.get(key);
     if (!workload) {
-      workload = { kind, name, namespace, replicas: 0, ignored: false, containers: [] };
+      workload = { kind, name: displayName(name), namespace: displayName(namespace, 63), replicas: 0, ignored: false, containers: [] };
       workloads.set(key, workload);
     }
     workload.replicas += 1;
     if (pod.spec?.nodeName) {
+      const node = displayName(pod.spec.nodeName);
       workload.nodes ??= {};
-      workload.nodes[pod.spec.nodeName] = (workload.nodes[pod.spec.nodeName] ?? 0) + 1;
+      workload.nodes[node] = (workload.nodes[node] ?? 0) + 1;
     }
     workload.ignored ||= isIgnored(pod.metadata);
     workloadOfPod.set(`${namespace}/${pod.metadata.name}`, workload);
     for (const spec of pod.spec?.containers ?? []) {
-      let container = workload.containers.find((c) => c.name === spec.name);
+      const containerName = displayName(spec.name, 63);
+      let container = workload.containers.find((c) => c.name === containerName);
       if (!container) {
         container = {
-          name: spec.name,
+          name: containerName,
           cpuRequestCores: parseCpu(spec.resources?.requests?.cpu),
           memoryRequestBytes: parseBytes(spec.resources?.requests?.memory),
           oomKilled: false,
@@ -511,7 +550,7 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
       }
     }
     // A label on the workload is not on its pods: a pod belongs to whatever its workload says.
-    for (const fact of podFacts) fact.ignored ||= workloadOfPod.get(`${fact.namespace}/${fact.name}`)?.ignored ?? false;
+    podFacts.forEach((fact, n) => (fact.ignored ||= workloadOfPod.get(podKeys[n]!)?.ignored ?? false));
     advisories = { nodes, pods: podFacts, warnings: advisoryWarnings };
   }
 
@@ -522,24 +561,24 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
       const claim = volume.persistentVolumeClaim?.claimName;
       if (!claim) continue;
       const key = `${pod.metadata.namespace}/${claim}`;
-      mounted.set(key, [...(mounted.get(key) ?? []), pod.metadata.name]);
+      mounted.set(key, [...(mounted.get(key) ?? []), displayName(pod.metadata.name)]);
     }
   }
-  const policyOf = new Map<string, string>(volumes.map((v) => [String(v.metadata.name), String(v.spec?.persistentVolumeReclaimPolicy ?? "")]));
+  const policyOf = new Map<string, string>(volumes.map((v) => [String(v.metadata.name), displayName(v.spec?.persistentVolumeReclaimPolicy)]));
 
   return {
     context,
     server,
     collectedAt: now.toISOString(),
-    namespaces,
+    namespaces: namespaces.map((n) => displayName(n, 63)),
     workloads: [...workloads.values()].sort((a, b) => `${a.namespace}/${a.name}`.localeCompare(`${b.namespace}/${b.name}`)),
     claims: claims.map((c) => ({
-      name: c.metadata.name,
-      namespace: c.metadata.namespace,
+      name: displayName(c.metadata.name),
+      namespace: displayName(c.metadata.namespace, 63),
       phase: c.status?.phase ?? "",
       capacityBytes: parseBytes(c.status?.capacity?.storage ?? c.spec?.resources?.requests?.storage) ?? 0,
-      storageClass: c.spec?.storageClassName,
-      volumeName: c.spec?.volumeName,
+      storageClass: c.spec?.storageClassName === undefined ? undefined : displayName(c.spec.storageClassName),
+      volumeName: c.spec?.volumeName === undefined ? undefined : displayName(c.spec.volumeName),
       reclaimPolicy: policyOf.get(c.spec?.volumeName) || undefined,
       createdAt: c.metadata.creationTimestamp,
       mountedBy: mounted.get(`${c.metadata.namespace}/${c.metadata.name}`) ?? [],
@@ -548,12 +587,12 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
     volumes: volumes
       .filter((v) => !namespace || v.spec?.claimRef?.namespace === namespace)
       .map((v) => ({
-        name: v.metadata.name,
+        name: displayName(v.metadata.name),
         phase: v.status?.phase ?? "",
         capacityBytes: parseBytes(v.spec?.capacity?.storage) ?? 0,
-        storageClass: v.spec?.storageClassName,
-        reclaimPolicy: v.spec?.persistentVolumeReclaimPolicy,
-        claim: v.spec?.claimRef ? { namespace: v.spec.claimRef.namespace, name: v.spec.claimRef.name } : undefined,
+        storageClass: v.spec?.storageClassName === undefined ? undefined : displayName(v.spec.storageClassName),
+        reclaimPolicy: v.spec?.persistentVolumeReclaimPolicy === undefined ? undefined : displayName(v.spec.persistentVolumeReclaimPolicy),
+        claim: v.spec?.claimRef ? { namespace: displayName(v.spec.claimRef.namespace, 63), name: displayName(v.spec.claimRef.name) } : undefined,
         ignored: isIgnored(v.metadata),
       })),
     prometheus: prometheus ? prometheusLabel(prometheus) : undefined,
@@ -567,14 +606,14 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
 function podFactsOf(pod: any, owner: any, deploymentOf: Map<string, string>): PodFacts {
   const namespace: string = pod.metadata.namespace;
   let resolved: PodFacts["owner"];
-  if (owner?.kind === "ReplicaSet" && deploymentOf.has(`${namespace}/${owner.name}`)) resolved = { kind: "Deployment", name: deploymentOf.get(`${namespace}/${owner.name}`)! };
-  else if (owner) resolved = { kind: String(owner.kind), name: String(owner.name) };
+  if (owner?.kind === "ReplicaSet" && deploymentOf.has(`${namespace}/${owner.name}`)) resolved = { kind: "Deployment", name: displayName(deploymentOf.get(`${namespace}/${owner.name}`)!) };
+  else if (owner) resolved = { kind: displayName(owner.kind, 63), name: displayName(owner.name) };
   const scheduled = (pod.status?.conditions ?? []).find((c: any) => c.type === "PodScheduled");
   const containers: ContainerFacts[] = (pod.spec?.containers ?? []).map((spec: any) => {
     const status = (pod.status?.containerStatuses ?? []).find((s: any) => s.name === spec.name);
     const stopped = status?.lastState?.terminated ?? status?.state?.terminated;
     return {
-      name: spec.name,
+      name: displayName(spec.name, 63),
       cpuRequestCores: parseCpu(spec.resources?.requests?.cpu),
       memoryRequestBytes: parseBytes(spec.resources?.requests?.memory),
       memoryLimitBytes: parseBytes(spec.resources?.limits?.memory),
@@ -586,8 +625,8 @@ function podFactsOf(pod: any, owner: any, deploymentOf: Map<string, string>): Po
     };
   });
   return {
-    namespace,
-    name: String(pod.metadata.name),
+    namespace: displayName(namespace, 63),
+    name: displayName(pod.metadata.name),
     phase: String(pod.status?.phase ?? ""),
     owner: resolved,
     ownerIsWorkload: resolved !== undefined && ["Deployment", "StatefulSet", "DaemonSet"].includes(resolved.kind),
@@ -670,7 +709,8 @@ async function readUsage(
   const containerFor = (s: Series[number]) => {
     const workload =
       input.workloadOfPod.get(`${s.namespace}/${s.pod}`) ?? patterns.find((p) => p.workload.namespace === s.namespace && p.pattern.test(s.pod))?.workload;
-    return workload?.containers.find((c) => c.name === s.container);
+    const container = displayName(s.container, 63);
+    return workload?.containers.find((c) => c.name === container);
   };
   for (const s of cpu) {
     const c = containerFor(s);
