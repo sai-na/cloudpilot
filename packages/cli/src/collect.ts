@@ -712,20 +712,16 @@ const MAX_COST_PAGES = 10;
  * tax are left out: a credit running out or the month's tax landing on the
  * first would otherwise read as a service costing more.
  */
-export function anomalyQuery(at: Date, days: number): { start: string; end: string; input: GetCostAndUsageCommandInput } {
+export function anomalyQuery(at: Date, days: number): GetCostAndUsageCommandInput {
   const day = (d: Date) => d.toISOString().slice(0, 10);
   const end = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
   const start = new Date(end.getTime() - days * 86_400_000);
   return {
-    start: day(start),
-    end: day(end),
-    input: {
-      TimePeriod: { Start: day(start), End: day(end) },
-      Granularity: "DAILY",
-      Metrics: ["UnblendedCost"],
-      GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }],
-      Filter: { Not: { Dimensions: { Key: "RECORD_TYPE", Values: ["Credit", "Refund", "Tax"] } } },
-    },
+    TimePeriod: { Start: day(start), End: day(end) },
+    Granularity: "DAILY",
+    Metrics: ["UnblendedCost"],
+    GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }],
+    Filter: { Not: { Dimensions: { Key: "RECORD_TYPE", Values: ["Credit", "Refund", "Tax"] } } },
   };
 }
 
@@ -738,7 +734,7 @@ export function anomalyQuery(at: Date, days: number): { start: string; end: stri
  * amount that is not a number) is an error that says why, never a figure.
  */
 export async function readDailyCosts(opts: { profile?: string; days: number }): Promise<{ days: DayCost[]; requests: number }> {
-  const { input } = anomalyQuery(now(), opts.days);
+  const input = anomalyQuery(now(), opts.days);
   // Cost Explorer is one global endpoint, served from us-east-1.
   const client = labelClient(new CostExplorerClient(clientConfig({ region: "us-east-1", profile: opts.profile })), "CostExplorer");
   const parts: DayCost[] = [];
