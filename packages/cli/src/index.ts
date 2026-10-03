@@ -766,13 +766,20 @@ program
     let scan: () => Promise<{ result: ScanResult; banner?: string }>;
     if (options.kube) {
       startLive({ redact: false });
-      const lookbackHours = amount(options.lookbackHours ?? "168", "--lookback-hours");
-      if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
-      const prices = clusterPrices(options as KubeOptions);
-      const clusterName = clusterNameOf(options);
       // The context in force now, kept for every round: a later `kubectl config use-context` must not move the watch to another cluster.
       // A watch that cannot even start must say so: it is not going to keep trying.
-      const { context, inCluster } = await notifying(targets, () => contextSubject(options), () => kubectlReader(options.context, undefined, clusterName).identity());
+      const { context, inCluster, clusterName, lookbackHours, prices } = await notifying(
+        targets,
+        () => contextSubject(options),
+        async () => {
+          const lookbackHours = amount(options.lookbackHours ?? "168", "--lookback-hours");
+          if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
+          const prices = clusterPrices(options as KubeOptions);
+          const clusterName = clusterNameOf(options);
+          const identity = await kubectlReader(options.context, undefined, clusterName).identity();
+          return { ...identity, clusterName, lookbackHours, prices };
+        },
+      );
       // Inside a cluster there is no context to pin: kubectl uses the pod's service account every round.
       const reader = kubectlReader(inCluster ? undefined : context, undefined, clusterName);
       subject = `cluster ${context}`;

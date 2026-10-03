@@ -135,3 +135,20 @@ test("left as it is shipped, the placeholder name is refused before anything is 
   assert.equal(run.kubectl.started(), false, "kubectl was not even started");
   assert.equal(existsSync(join(run.cwd, ".cloudpilot")), false);
 });
+
+test("the Secret made but the name left as shipped: the webhook hears why, rather than a pod crash-looping in silence", async () => {
+  const server = await hook(() => ({ status: 200, body: "ok" }));
+  try {
+    // The one step of the three the README asks for that nothing else can catch: the Secret exists, so CLOUDPILOT_NOTIFY is set.
+    const run = await inThePod({ CLOUDPILOT_NOTIFY: server.url });
+    assert.equal(run.status, 1);
+    assert.equal(run.kubectl.started(), false, "kubectl was not even started");
+    assert.equal(server.requests.length, 1, "a watch that cannot start says so once");
+    const body = JSON.parse(server.requests[0]!.body);
+    assert.equal(body.event, "check-failed");
+    assert.match(body.error, /"<your-kubectl-context-name>" cannot be a cluster name/);
+    assert.equal(body.subject, "cluster <your-kubectl-context-name>");
+  } finally {
+    await server.close();
+  }
+});
