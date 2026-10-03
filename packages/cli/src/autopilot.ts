@@ -405,7 +405,7 @@ export function createAutopilot(settings: AutopilotSettings, io: AutopilotIO): A
         }
 
         if (ready.length >= slots) {
-          const why = totalLeft <= roundCap ? `the cap of ${settings.maxTotal} fixes for this watch was reached` : `the cap of ${roundCap} fixes a round was reached`;
+          const why = totalLeft <= roundCap ? `the cap of ${times(settings.maxTotal, "fix")} for this watch was reached` : `the cap of ${times(roundCap, "fix")} a round was reached`;
           capped.push({ f, gates, reason: `${why[0]!.toUpperCase()}${why.slice(1)}.` });
           continue;
         }

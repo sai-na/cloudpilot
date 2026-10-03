@@ -492,6 +492,7 @@ test("the total for the whole watch holds across rounds, and everything past it 
   const none = pilot({ maxTotal: 1, maxPerRound: 5 });
   await none.round(account([gp2(1), gp2(2)]));
   assert.equal(none.ran.length, 1);
+  assert.equal(none.log.filter((e) => e.outcome === "held-back").at(-1)!.reason, "The cap of 1 fix for this watch was reached.");
 });
 
 // The first failure
@@ -631,7 +632,7 @@ test("an entry autopilot writes is an entry the audit log reads back, and the au
   assert.match(text, /APPLIED {3}vol-\S+ {2}\(account 123456789012, ap-south-1\) {2}by sai \[autopilot\]/);
   assert.match(text, /Autopilot gates passed: rule named; fix can be undone; confidence 0\.9 \(at least 0\.9\); in 1 round of this watch in a row \(at least 1\); scan taken in this round, region read in full; no earlier fix on this resource; within the caps \(1 of 1 this round, 1 of 10 in all\)/);
   assert.match(text, /HELD-BACK {2}vol-\S+/);
-  assert.match(text, /The cap of 1 fixes a round was reached\./);
+  assert.match(text, /The cap of 1 fix a round was reached\./);
   assert.match(text, /Way back: Online and reversible/);
   // An entry whose autopilot field is not a list of gates is not an entry.
   assert.equal(isAuditEntry({ ...p.log[0]!, autopilot: { gates: "all" } }), false);
@@ -884,7 +885,7 @@ test("the README and the landing page name exactly the rules that can qualify, t
   assert.deepEqual(rows, [...AUTOPILOT_QUALIFYING], "the table lists the rules that can qualify, and no other");
   // The way back it repeats is the finding's own.
   const found = account([gp2(1)], [bucket("neglected")]);
-  assert.ok(section.includes(found.findings.find((f) => f.pattern === "gp2-volume")!.fix.rollback.replace("the volume can be changed back to gp2 after AWS's 6-hour modification cooldown.", "the volume can be changed back to gp2 after AWS's 6-hour modification cooldown.")));
+  assert.ok(section.includes(found.findings.find((f) => f.pattern === "gp2-volume")!.fix.rollback));
   assert.ok(section.includes("Remove the rule again with: `aws s3api delete-bucket-lifecycle --bucket <name>`. Objects already moved to Standard-IA stay there."));
   assert.match(section, /A fix that cannot be undone is\s+never run by it, under any option\./);
   assert.match(section, /Start with a dry run\./);

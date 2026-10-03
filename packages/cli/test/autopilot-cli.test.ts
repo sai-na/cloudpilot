@@ -217,7 +217,7 @@ test("the cap on a round runs the biggest savings first and holds the rest back,
     const run = await r.run(r.watchArgs("--autopilot", "gp2-volume", "--autopilot-after", "1", "--autopilot-max-total", "1"));
     assert.equal(run.status, 0, run.stderr);
     assert.equal(r.calls().length, 1);
-    assert.match(auditOf(r.cwd).at(-1)!.reason!, /The cap of 1 fixes for this watch was reached/);
+    assert.match(auditOf(r.cwd).at(-1)!.reason!, /The cap of 1 fix for this watch was reached/);
   });
 });
 
