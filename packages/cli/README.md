@@ -206,8 +206,9 @@ day, compared with that service's own days before it. It does not look for
 waste and it reads no resources: it reads the account's daily cost per service
 from AWS Cost Explorer (`ce:GetCostAndUsage`, unblended cost, before credits,
 refunds and tax) and applies a fixed rule. **AWS charges $0.01 for each Cost
-Explorer request.** The command makes one request (more only if AWS splits the
-answer into pages, and it says how many it made), CloudPilot never spends your
+Explorer request.** The command makes one request (more only if AWS splits
+the answer into pages, at most 10, after which it stops rather than be
+charged for more; it says how many it made), CloudPilot never spends your
 money unasked, and so the first line of its output, and its `--help`, say so
 before anything is read. No model is involved: the same days always give the
 same answer, and there is no `--explain`.
@@ -513,7 +514,8 @@ and to 3,000 for Slack; the list gives way, the headline and the closing lines
 do not, and the message says how many findings were left out. A generic
 webhook has no such limit. It receives one JSON object: `source`
 (`cloudpilot`), `event` (`first-report`, `new-findings`, `check-failed`,
-`check-recovered` or, from `anomalies`, `spend-anomalies`), `text` (the message above as plain lines) and `subject`.
+`check-recovered` or, from `anomalies`, `spend-anomalies`), `text` (the
+message above as plain lines) and `subject`.
 A report adds `scannedAt`, `totalMonthlyWasteUsd`, `comparison`, `warnings`
 and `findings`, which holds the new findings exactly as `--json` has them,
 evidence and fix commands included; a failure or a recovery adds `at` and
@@ -833,20 +835,21 @@ the cluster tools are not offered: the server replays an account only.
 
 ### Record and replay
 
-`--record <dir>` on `scan`, `ask` and `anomalies` runs normally and saves every AWS
-response and every model event of that run. `--replay <dir>` repeats the run
-from that recording with no network calls and no credentials: the clock is
-pinned to the recording time, so ages, CloudWatch windows and results match
-exactly. Every replay starts with a `REPLAY MODE` banner naming when and
-where it was recorded, so it cannot pass for a live run. A request or a
-question the recording does not hold is an error, never a silent fallback to
-the network. `--live-llm` replays AWS but calls the model live, and
-`--redact-account` shows the account ID as `123456789012` in output and
-recordings. Recordings hold no credentials or signatures and `recordings/`
-is gitignored. A recording is replayed by the CloudPilot version that made
-it: requests are matched exactly, so a different version may not find them. `demo/record.sh` at the repo root records the demo set
-(`scan --explain` and two questions) in one go, and `demo/replay.sh` plays it
-back.
+`--record <dir>` on `scan`, `ask` and `anomalies` runs normally and saves
+every AWS response and every model event of that run. `--replay <dir>`
+repeats the run from that recording with no network calls and no
+credentials: the clock is pinned to the recording time, so ages, CloudWatch
+windows and results match exactly. Every replay starts with a `REPLAY MODE`
+banner naming when and where it was recorded, so it cannot pass for a live
+run. A request or a question the recording does not hold is an error, never
+a silent fallback to the network. `--live-llm` replays AWS but calls the
+model live, and `--redact-account` shows the account ID as `123456789012` in
+output and recordings. Recordings hold no credentials or signatures and
+`recordings/` is gitignored. A recording is replayed by the CloudPilot
+version that made it: requests are matched exactly, so a different version
+may not find them. `demo/record.sh` at the repo root records the demo set
+(`scan --explain` and two questions) in one go, and `demo/replay.sh` plays
+it back.
 
 `kube` and `ask --kube` record and replay the same way, with
 `--record <dir>` and `--replay <dir>`. A cluster recording holds every answer
@@ -872,12 +875,12 @@ and notes the `--days` it was made with. Its replay needs no credentials and
 makes no request, so nothing is charged.
 
 An account and a cluster can be recorded into one directory. Each session
-has a folder of its own (`scan/`, `ask-<hash>/`, `anomalies/` for the account; `kube/`,
-`kube-ask-<hash>/` for a cluster) and a line in `manifest.json`, so recording
-one never touches the other, and `scan --replay`, `kube --replay` and the two
-kinds of `ask` each find only their own sessions. Account sessions keep
-their `aws.json`; cluster sessions hold `kube.json` instead. A directory
-that holds only clusters has no account ID in its manifest.
+has a folder of its own (`scan/`, `ask-<hash>/`, `anomalies/` for the account;
+`kube/`, `kube-ask-<hash>/` for a cluster) and a line in `manifest.json`, so
+recording one never touches the other, and `scan --replay`, `kube --replay`
+and the two kinds of `ask` each find only their own sessions. Account
+sessions keep their `aws.json`; cluster sessions hold `kube.json` instead. A
+directory that holds only clusters has no account ID in its manifest.
 
 What a cluster recording leaves out: fields of pods and workloads that a scan
 never reads and that can hold a secret (container environment, commands and
@@ -1032,9 +1035,9 @@ These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
 [Kubernetes](#kubernetes). `anomalies` takes `--days`, `--sensitivity` and
 `--min-increase`, and the options below that name it: see
-[Spend anomalies](#spend-anomalies). `ask --kube` takes the `kube` options named there
-in place of the AWS ones. `init` takes `--profile`, `--region`, `--context`,
-`--prometheus`, `--json` and `--print-policy`: see
+[Spend anomalies](#spend-anomalies). `ask --kube` takes the `kube` options
+named there in place of the AWS ones. `init` takes `--profile`, `--region`,
+`--context`, `--prometheus`, `--json` and `--print-policy`: see
 [Check first with `init`](#check-first-with-init). `watch` takes the ones that
 say so: see [Watch it](#watch-it).
 
@@ -1354,7 +1357,9 @@ the check on what the model writes; `src/recording.ts` holds record and replay
 for both.
 The cluster side is the same split: `src/kube.ts` holds every read through
 kubectl and Prometheus, `src/kube-detect.ts` the rules over it.
-`src/compare.ts` is a pure function from two scans to what changed.
+`src/compare.ts` is a pure function from two scans to what changed, and
+`src/anomaly.ts` a pure function from daily costs to the services that cost
+more than usual, with no clock and no AWS in it.
 `src/preflight.ts` holds the `init` checks as functions over injected probes,
 with the real AWS probes beside them.
 `src/notify.ts` builds and sends the messages, and `src/watch.ts` is the loop
