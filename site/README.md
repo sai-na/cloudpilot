@@ -1,7 +1,10 @@
 # Landing page
 
-One static page, `index.html`, plus `sample-report.png`. No build step, no
-backend, and nothing is loaded from another site.
+One static page, `index.html`, with its own images and fonts beside it. No
+build step, no backend, and nothing is loaded from another site.
+
+The typefaces are Archivo and Courier Prime, both under the SIL Open Font
+License; the font files and their licence texts are in `fonts/`.
 
 ## Preview
 
@@ -11,14 +14,18 @@ open site/index.html
 
 ## Before deploying
 
-`site/check.sh` lists what is still a placeholder or a claim the repository
-does not back up, and exits non-zero until all of it is settled:
+`site/check.sh` lists what is still a placeholder, a claim the repository
+does not back up, or a file the page asks for and does not have, and exits
+non-zero until all of it is settled:
 
 - the waitlist form's address (`YOUR_FORM_ID` in the form's `action`; a
   Formspree form address works as it is)
 - the GitHub link (the repository has to exist and be public)
 - the one-liner (the package has to be on npm)
 - the licence named on the page has to match `packages/cli/package.json`
+- the page has to stay one self-contained file that loads nothing from
+  another site, and every file it points at has to be in `site/`: the
+  screenshot, the fonts and their licence texts
 
 ## Deploying
 

@@ -6,12 +6,19 @@
 <title>CloudPilot: find the money your AWS account is wasting</title>
 <meta name="description" content="A read-only, open-source command that scans your AWS account, and your Kubernetes clusters, for wasted spend and prints the exact fix for each item. It changes nothing.">
 <style>
+/* Two typefaces, served from this site's own files (both under the SIL Open
+   Font License): Archivo for everything said, Courier Prime for everything
+   printed on the statement. */
+@font-face { font-family: "Archivo"; src: url("fonts/archivo-latin-variable.woff2") format("woff2"); font-weight: 400 900; font-display: swap; }
+@font-face { font-family: "Courier Prime"; src: url("fonts/courier-prime-latin-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Courier Prime"; src: url("fonts/courier-prime-latin-700.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+
 /* The page is a printed statement that someone has audited by hand:
    black ink on paper, ledger bands, highlighter over the waste, a red stamp. */
 :root {
   --paper: #fcfdf8; --band: #e4f1e3; --ink: #0d0d0d; --soft: #4b4f48; --line: #b9beb2;
   --marker: #fff04a; --red: #cf2318;
-  --print: "Courier New", Courier, ui-monospace, monospace;
+  --print: "Courier Prime", "Courier New", Courier, ui-monospace, monospace;
   color-scheme: light;
 }
 * { box-sizing: border-box; }
@@ -19,7 +26,7 @@ html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
   margin: 0; background: var(--paper); color: var(--ink);
-  font: 1.0625rem/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font: 1.0625rem/1.55 Archivo, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-variant-numeric: tabular-nums;
 }
 a { color: inherit; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
@@ -55,7 +62,7 @@ body::after { right: 0; border-left: 1px dashed var(--line); }
   .art-circle { animation: none; stroke-dashoffset: 0; }
 }
 h1 {
-  font-size: clamp(2.75rem, 5.4vw, 3.95rem); line-height: 0.97; font-weight: 900; letter-spacing: -0.035em; word-spacing: 0.08em;
+  font-size: clamp(2.6rem, 5vw, 3.55rem); line-height: 0.98; font-weight: 900; letter-spacing: -0.04em; word-spacing: 0.04em;
   margin: 0 0 2.75rem;
 }
 h1 .keep { white-space: nowrap; }
@@ -73,7 +80,7 @@ h1 .keep { white-space: nowrap; }
 .hero p { max-width: 36rem; margin: 0 0 0.75rem; font-size: 1.1875rem; }
 
 section { padding-block: 4rem; border-top: 2px dashed var(--line); }
-h2 { font-size: clamp(1.9rem, 4.6vw, 3rem); line-height: 1; font-weight: 900; letter-spacing: -0.035em; margin: 0 0 1rem; }
+h2 { font-size: clamp(1.8rem, 4.2vw, 2.75rem); line-height: 1; font-weight: 900; letter-spacing: -0.04em; margin: 0 0 1rem; }
 h3 { font-size: 1.1875rem; line-height: 1.25; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 0.3rem; }
 .lead { max-width: 38rem; margin: 0 0 2.25rem; font-size: 1.1875rem; }
 
@@ -94,7 +101,7 @@ mark { display: inline-block; background: var(--marker); color: inherit; padding
 .statement li:nth-child(even) mark { transform: rotate(0.9deg); }
 
 .stamp {
-  display: inline-block; font: 900 1.05rem/1 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  display: inline-block; font: 900 1.05rem/1 Archivo, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   text-transform: uppercase; letter-spacing: 0.12em; color: var(--red);
   border: 3px solid var(--red); outline: 1px solid var(--red); outline-offset: 3px;
   padding: 0.5rem 0.8rem; transform: rotate(-5deg); opacity: 0.88; filter: url(#ink);
@@ -197,15 +204,15 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
 
     <!-- The statement, fed out of the terminal like paper from a printer. -->
     <g clip-path="url(#slot)">
-      <g class="art-paper" font-family="'Courier New', Courier, monospace" font-size="12.5" font-weight="700" fill="#0d0d0d">
+      <g class="art-paper" font-family="'Courier Prime', 'Courier New', Courier, monospace" font-size="12.5" font-weight="700" fill="#0d0d0d">
         <path d="M 50 150 L 390 150 L 390 472 L 373 478 L 356 466 L 339 478 L 322 466 L 305 478 L 288 466 L 271 478 L 254 466 L 237 478 L 220 466 L 203 478 L 186 466 L 169 478 L 152 466 L 135 478 L 118 466 L 101 478 L 84 466 L 67 478 L 50 466 L 50 472 Z" fill="#fcfdf8" stroke="#0d0d0d" stroke-width="2" stroke-linejoin="round"/>
         <g fill="#d5d8cd"><circle cx="64" cy="196" r="4"/><circle cx="376" cy="196" r="4"/><circle cx="64" cy="222" r="4"/><circle cx="376" cy="222" r="4"/><circle cx="64" cy="248" r="4"/><circle cx="376" cy="248" r="4"/><circle cx="64" cy="274" r="4"/><circle cx="376" cy="274" r="4"/><circle cx="64" cy="300" r="4"/><circle cx="376" cy="300" r="4"/><circle cx="64" cy="326" r="4"/><circle cx="376" cy="326" r="4"/><circle cx="64" cy="352" r="4"/><circle cx="376" cy="352" r="4"/><circle cx="64" cy="378" r="4"/><circle cx="376" cy="378" r="4"/><circle cx="64" cy="404" r="4"/><circle cx="376" cy="404" r="4"/><circle cx="64" cy="430" r="4"/><circle cx="376" cy="430" r="4"/><circle cx="64" cy="456" r="4"/><circle cx="376" cy="456" r="4"/></g>
         <path d="M 77 184 V 462 M 363 184 V 462" stroke="#b9beb2" stroke-dasharray="4 4" fill="none"/>
-        <text x="90" y="212" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="900" letter-spacing="-0.3">Statement of waste</text>
+        <text x="90" y="212" font-family="Archivo, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="15" font-weight="900" letter-spacing="-0.3">Statement of waste</text>
         <text x="90" y="230" font-size="10.5" font-weight="400" fill="#4b4f48">Per month</text>
         <g transform="rotate(-6 308 212)">
           <rect x="256" y="200" width="104" height="22" fill="none" stroke="#cf2318" stroke-width="2"/>
-          <text x="308" y="215" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="9.5" font-weight="900" letter-spacing="1.2" fill="#cf2318">TEST ACCOUNT</text>
+          <text x="308" y="215" text-anchor="middle" font-family="Archivo, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="9.5" font-weight="900" letter-spacing="1.2" fill="#cf2318">TEST ACCOUNT</text>
         </g>
       <rect x="78" y="244" width="284" height="30" fill="#e4f1e3"/>
       <g transform="rotate(-1.6 322.0 259)"><rect class="art-mark" style="--n:0" x="287" y="250" width="70" height="18" rx="4" fill="#fff04a"/></g>
@@ -230,9 +237,9 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
 
     <!-- The CloudShell window, with the lines the command really prints. -->
     <rect x="10" y="10" width="420" height="176" fill="#0d0d0d"/>
-    <text x="28" y="36" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="11.5" font-weight="700" fill="#9a9d96">AWS CloudShell</text>
+    <text x="28" y="36" font-family="Archivo, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif" font-size="11.5" font-weight="700" fill="#9a9d96">AWS CloudShell</text>
     <path d="M 10 48 H 430" stroke="#33352f"/>
-    <g font-family="'Courier New', Courier, monospace" font-size="13" font-weight="700" fill="#fcfdf8">
+    <g font-family="'Courier Prime', 'Courier New', Courier, monospace" font-size="13" font-weight="700" fill="#fcfdf8">
       <text x="28" y="76"><tspan fill="#9a9d96">$ </tspan>npx @meruapps/cloudpilot</text>
       <text x="28" y="100" fill="#9a9d96">Reading 17 regions (read-only)...</text>
       <text x="28" y="124">[ 8/17] ap-south-1  10 findings</text>
