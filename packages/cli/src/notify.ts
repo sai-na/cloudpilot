@@ -190,7 +190,9 @@ function draft(notice: Notice, code: (s: string) => string): Draft {
       headline: `CloudPilot: ${plural(n, "service")} cost${n === 1 ? "s" : ""} more than usual on ${report.latestDay}, ${money(report.totalIncreaseUsd)} a day more, AWS account ${notice.accountId}`,
       intro: [
         ...banner,
-        `Each service is compared with its own usual day: the median of the ${report.baseline?.days} days before, and, where the weekday could be checked, higher than the earlier days on the same weekday. Cost Explorer can take a day or two to settle, so these figures may still change.`,
+        `Each service is compared with its own usual day: the median of the ${report.baseline?.days} days before${
+          report.rule.weekdayCheck ? ", and, where the weekday could be checked, higher than the earlier days on the same weekday" : ". The weekday check is off, so a day is not compared with the earlier days on its own weekday"
+        }. Cost Explorer can take a day or two to settle, so these figures may still change.`,
       ],
       items: report.anomalies.map(
         (a, i) => `${i + 1}. ${a.service}: ${money(a.costUsd)} on ${a.day}, ${a.kind === "new" ? "new spend, nothing before" : `usually ${money(a.medianUsd)}`} (+${money(a.increaseUsd)} a day)`,
@@ -287,6 +289,7 @@ export function compose(notice: Notice, target: Pick<Target, "kind">): string {
       day: report.latestDay,
       totalIncreaseUsd: report.totalIncreaseUsd,
       totalMonthlyIfContinuesUsd: report.totalMonthlyIfContinuesUsd,
+      rule: { weekdayCheck: report.rule.weekdayCheck },
       anomalies: report.anomalies.map(anomalyJson),
     });
   }

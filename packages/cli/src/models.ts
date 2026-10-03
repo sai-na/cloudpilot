@@ -43,15 +43,18 @@ export const modelFor = (provider: "anthropic" | "bedrock", job: ModelJob, optio
 /** Tried in order when no OpenAI model is named; the first family the key can use wins. */
 const OPENAI_FAMILIES = [/^gpt-6\.1/, /^gpt-6/, /^gpt-5\.5/, /^gpt-5/, /^gpt-4/];
 const NOT_A_CHAT_MODEL = /audio|realtime|image|tts|transcribe|search|embedding|moderation|codex|instruct/;
-/** OpenAI's name for the small, fast model of a family: gpt-5-mini next to gpt-5. */
-const SMALL = /-mini(?![a-z0-9])/;
+/** OpenAI's names for the smaller, faster models of a family: gpt-5-mini and gpt-5-nano next to gpt-5. */
+const MINI = /-mini(?![a-z0-9])/;
+const SMALL = /-(mini|nano)(?![a-z0-9])/;
+const NANO = /-nano(?![a-z0-9])/;
 
 /**
  * Pick a default from the models a key can list. The shortest match is the
  * undated alias rather than a snapshot. For `ask`, the first family that has a
- * full-size model wins; for the summary, the first family that has a "-mini"
- * one. Where there is none of the kind wanted, any model of the first family
- * will do, so a key that can use only one kind works as it always did.
+ * full-size model wins (never a "-mini" or "-nano" one); for the summary, the
+ * first family that has a "-mini" one, else the first that has a "-nano".
+ * Where there is none of the kind wanted, any model of the first family will
+ * do, so a key that can use only one kind works as it always did.
  * Undefined when the key can use no chat model at all.
  */
 export function pickOpenAIModel(ids: string[], job: ModelJob): string | undefined {
@@ -63,5 +66,6 @@ export function pickOpenAIModel(ids: string[], job: ModelJob): string | undefine
     }
     return undefined;
   };
-  return (job === "summary" ? first((id) => SMALL.test(id)) : first((id) => !SMALL.test(id))) ?? first(() => true);
+  if (job === "summary") return first((id) => MINI.test(id)) ?? first((id) => NANO.test(id)) ?? first(() => true);
+  return first((id) => !SMALL.test(id)) ?? first(() => true);
 }
