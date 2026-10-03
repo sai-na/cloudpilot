@@ -32,8 +32,24 @@ docker info >/dev/null 2>&1 || fail "Docker is not running"
 
 if [[ "${SKIP_BUILD:-}" != "1" ]]; then
   echo "Building $IMAGE ..."
-  docker build -t "$IMAGE" "$ROOT"
+  # --load, because a buildx container or cloud driver otherwise leaves the
+  # result in the build cache and the checks below would run against whatever
+  # image already carries the tag. The --iidfile check catches that anyway.
+  docker build --load --iidfile "$WORK/iid" -t "$IMAGE" "$ROOT"
+  built="$(tr -d '[:space:]' <"$WORK/iid")"
+  built="${built#sha256:}"
+  [[ -n "$built" ]] || fail "the build wrote no image ID"
+else
+  built=""
 fi
+
+tagged="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
+tagged="${tagged#sha256:}"
+[[ -n "$tagged" ]] || fail "$IMAGE is not in the local daemon, so there is nothing to test"
+if [[ -n "$built" && "$tagged" != "$built" ]]; then
+  fail "$IMAGE in the daemon is $tagged, but the build produced $built: the build result was not loaded, so these checks would test a stale image"
+fi
+pass "testing $IMAGE ($tagged)"
 
 # 1. The entrypoint is cloudpilot.
 if docker run --rm --network none "$IMAGE" scan --help >"$WORK/help.txt" 2>&1; then
@@ -57,7 +73,9 @@ pass "--network none leaves only the loopback interface"
 # 4. kubectl is there and is the client the cluster scan will use.
 docker run --rm --network none --entrypoint kubectl "$IMAGE" version --client >"$WORK/kubectl.txt" 2>&1 \
   || fail "kubectl --client did not run: $(cat "$WORK/kubectl.txt")"
-pass "$(grep 'Client Version' "$WORK/kubectl.txt")"
+kubectl_version="$(grep 'Client Version' "$WORK/kubectl.txt")" \
+  || fail "kubectl version --client printed no client version: $(cat "$WORK/kubectl.txt")"
+pass "$kubectl_version"
 
 # `cloudpilot kube` with no kubeconfig must fail inside kubectl, not because
 # kubectl is missing.

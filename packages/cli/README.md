@@ -309,6 +309,13 @@ checked in the build against a SHA-256 written in the `Dockerfile`. Building
 needs network and BuildKit (the default in current Docker), for `linux/amd64`
 or `linux/arm64`.
 
+The command is PID 1 in the container, where Node does not act on Ctrl-C or
+`docker stop` on its own. Add `--init` to stop a long scan straight away:
+
+```sh
+docker run --rm --init cloudpilot scan --profile cloudpilot-readonly
+```
+
 ### Scan an AWS account
 
 Give the container credentials when you run it. From a shared profile on this
@@ -340,7 +347,9 @@ docker run --rm \
 ```
 
 The container user is uid 1000, so on Linux the mounted files must be
-readable by it.
+readable by it, and a directory mounted at `/work` must be writable by it
+(`chown 1000 cloudpilot-out`, or run with `--user "$(id -u):$(id -g)"`).
+Otherwise the scan runs and then fails to write the report.
 
 Files the command writes (`--html`, `--out`, and `.cloudpilot/last-scan.json`,
 which a repeat scan compares with) land in `/work` inside the container and
