@@ -164,7 +164,7 @@ export function autopilotRefusal(watching: { replay?: string; redactAccount?: bo
   return undefined;
 }
 
-const times = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+const times = (n: number, noun: string) => `${n} ${n === 1 ? noun : noun === "fix" ? "fixes" : `${noun}s`}`;
 
 /** What the watch says when it starts with autopilot on: plain words, before the first round. */
 export function autopilotBanner(s: AutopilotSettings): string[] {
@@ -228,7 +228,7 @@ const reasonOf = (err: unknown) => (err instanceof Error ? err.message : String(
 const SKEW_MS = 5 * 60_000;
 
 /** The line a recorded entry tells. */
-function lineOf(e: AuditEntry): AutopilotLine {
+export function lineOf(e: AuditEntry): AutopilotLine {
   const firstFailure = e.commands.findIndex((c) => c.exitCode !== undefined && c.exitCode !== 0);
   return {
     outcome: e.outcome === "applied" || e.outcome === "failed" || e.outcome === "held-back" ? e.outcome : "refused",

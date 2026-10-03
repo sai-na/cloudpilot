@@ -91,7 +91,7 @@ export const subjectOf = (result: ScanResult) => (result.cluster ? `cluster ${re
 /** The findings a notice is about: the new ones, or all of them on a first report. */
 export const freshFindings = (result: ScanResult, first: boolean): Finding[] => (first ? result.findings : shownFindings(result, true));
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const plural = (n: number, word: string) => `${n} ${n === 1 ? word : word === "fix" ? "fixes" : `${word}s`}`;
 
 /** The message as lines, before it is dressed for one service. Figures and IDs come from the scan as they are. */
 interface Draft {
