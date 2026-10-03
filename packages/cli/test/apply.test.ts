@@ -358,6 +358,34 @@ test("an old scan, a missing scan and a dry run all leave everything alone", () 
   assert.equal(existsSync(join(ws.cwd, ".cloudpilot/audit.jsonl")), false);
 });
 
+test("apply runs nothing when the audit log cannot take a line, and a dry run does not care", () => {
+  const ws = saved();
+  // A directory where the log should be: the same refusal as a read-only disk, without needing to change permissions.
+  mkdirSync(join(ws.cwd, ".cloudpilot/audit.jsonl"), { recursive: true });
+  const blocked = ws.run(["apply", VOLUME, "--yes"]);
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /apply needs to write \.cloudpilot\/audit\.jsonl before it runs anything, and cannot: /);
+  assert.deepEqual(ws.calls(), [], "the fix was not started");
+
+  const dry = ws.run(["apply", VOLUME, "--dry-run"]);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /Dry run: nothing was run\./);
+});
+
+test("a record that cannot be written after a fix ran still prints the entry and the outcome, and nothing more is run", async () => {
+  const { ran, runner } = recorder();
+  const { ctx, said } = context({ runner, yes: true, record: async () => { throw new Error("ENOSPC: no space left on device"); } });
+  const plans = plan([account, cluster], [VOLUME, "deployment/reports"], options);
+  assert.deepEqual(await apply(plans, ctx), ["applied", "refused"]);
+  assert.equal(ran.length, 1, "the second fix is not started, for it could not be recorded either");
+  const lost = said.find((line) => line.includes("This entry was NOT recorded"))!;
+  assert.match(lost, /Could not write the audit log \(ENOSPC: no space left on device\)/);
+  assert.match(lost, /"outcome":"applied"/);
+  assert.ok(lost.includes(VOLUME));
+  assert.ok(said.some((line) => line.includes("Done.")));
+  assert.ok(said.some((line) => line.includes("the audit log could not take the last record")));
+});
+
 test("a failing command makes apply fail, stop, and say so in the record", () => {
   const ws = saved();
   const run = ws.run(["apply", VOLUME, "deployment/reports", "--yes"], { STAND_IN_FAIL: "modify-volume" });

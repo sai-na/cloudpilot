@@ -302,6 +302,16 @@ const OUTPUT_KEPT = 2000;
 export async function apply(plans: Plan[], ctx: ApplyContext): Promise<Array<Outcome | "dry-run">> {
   const outcomes: Array<Outcome | "dry-run"> = [];
   let stopped = false;
+  let unrecorded = false;
+  // A record that cannot be written must not hide that a fix ran: the entry is said instead, and nothing after it is run.
+  const keep = async (entry: AuditEntry) => {
+    try {
+      await ctx.record(entry);
+    } catch (err) {
+      unrecorded = true;
+      ctx.say(`  Could not write the audit log (${err instanceof Error ? err.message : String(err)}). This entry was NOT recorded: ${JSON.stringify(entry)}`);
+    }
+  };
   for (const p of plans) {
     const permanent = p.fix.risk === "dangerous";
     ctx.say("");
@@ -320,10 +330,14 @@ export async function apply(plans: Plan[], ctx: ApplyContext): Promise<Array<Out
     const notRun = p.commands.map((c) => ({ command: c.text }));
     const skip = async (outcome: Outcome, reason: string) => {
       ctx.say(`  ${reason}`);
-      await ctx.record(entry(outcome, notRun, reason));
+      await keep(entry(outcome, notRun, reason));
       outcomes.push(outcome);
     };
 
+    if (unrecorded) {
+      await skip("refused", "Not run: the audit log could not take the last record, so everything after it was left alone.");
+      continue;
+    }
     if (stopped) {
       await skip("refused", "Not run: an earlier fix failed, so everything after it was left alone.");
       continue;
@@ -366,7 +380,7 @@ export async function apply(plans: Plan[], ctx: ApplyContext): Promise<Array<Out
         if (ran.length > 1) ctx.say("  The commands before it had already run, so this fix may be half done. Check the resource, and see the way back above.");
       }
     }
-    await ctx.record(entry(failed ? "failed" : "applied", ran));
+    await keep(entry(failed ? "failed" : "applied", ran));
     outcomes.push(failed ? "failed" : "applied");
     if (failed) stopped = true;
     else ctx.say("  Done. Scan again to see it gone from the findings.");

@@ -1145,6 +1145,13 @@ program
       maxAgeHours: amount(options.maxAgeHours, "--max-age-hours"),
       now: new Date(),
     });
+    // A fix must not run if the record of it cannot be written. A dry run writes none.
+    if (!options.dryRun) {
+      await checkAuditWritable().catch((err) => {
+        throw new Error(`apply needs to write ${AUDIT_LOG} before it runs anything, and cannot: ${err instanceof Error ? err.message : err}`);
+      });
+    }
+    let unrecorded = false;
     // Asking needs a person at a terminal on both ends.
     const terminal = process.stdin.isTTY && process.stdout.isTTY ? createInterface({ input: process.stdin, output: process.stdout }) : undefined;
     try {
@@ -1154,12 +1161,16 @@ program
         yes: options.yes,
         dryRun: options.dryRun,
         say: (line) => console.log(line),
-        record: (entry) => appendAudit(entry),
+        record: (entry) =>
+          appendAudit(entry).catch((err) => {
+            unrecorded = true;
+            throw err;
+          }),
         user: whoAmI(),
         now: () => new Date(),
       });
-      if (!options.dryRun) note(`\nRecorded in ${AUDIT_LOG}. See it with: cloudpilot audit`);
-      if (outcomes.some((o) => o === "failed" || o === "refused")) process.exitCode = 1;
+      if (!options.dryRun) note(unrecorded ? `\nNot everything was recorded in ${AUDIT_LOG}: the entries that were not are printed above.` : `\nRecorded in ${AUDIT_LOG}. See it with: cloudpilot audit`);
+      if (unrecorded || outcomes.some((o) => o === "failed" || o === "refused")) process.exitCode = 1;
     } finally {
       terminal?.close();
     }

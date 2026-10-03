@@ -829,7 +829,11 @@ What it will and will not do:
 Every fix it ran, was told not to run or refused to run is appended to
 `.cloudpilot/audit.jsonl`: who, when, which finding, each command with its
 exit code, and the way back. `cloudpilot audit` prints it as a list to read,
-`cloudpilot audit --json` as the entries themselves.
+`cloudpilot audit --json` as the entries themselves. Before it runs anything it
+checks that a line can be added to the log, and if not it runs nothing (a
+`--dry-run` writes no record and skips the check). If a record cannot be written
+after a fix has run, the entry is printed instead, nothing after it is run, and
+the exit code is 1.
 
 `apply` never sends anything anywhere: it has no `--notify`, `--upload`,
 `--replay` or `--record`, and a webhook or upload token in the environment is
