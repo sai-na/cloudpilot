@@ -1,7 +1,10 @@
 # Landing page
 
-One static page, `index.html`, plus `sample-report.png`. No build step, no
-backend, and nothing is loaded from another site.
+One static page, `index.html`, with its own images and fonts beside it. No
+build step, no backend, and nothing is loaded from another site.
+
+The typefaces are Archivo and Courier Prime, both under the SIL Open Font
+License; the font files and their licence texts are in `fonts/`.
 
 ## Preview
 

@@ -18,8 +18,11 @@ if ! npm view "$package" version >/dev/null 2>&1; then fail "the one-liner's pac
 licence="$(node -p "require('./packages/cli/package.json').license")"
 if grep -q "AGPL" "$page" && [[ "$licence" != AGPL* ]]; then fail "the page says AGPL but the package is licensed $licence"; fi
 
-# The page itself must load nothing from elsewhere: no scripts, styles, fonts or images.
-if grep -Eq '<script[^>]+src=|<link[^>]+href=|@import|url\([^#]|<img[^>]+src="https?:' "$page"; then fail "the page loads something from another site"; fi
-[[ -f site/sample-report.png ]] || fail "site/sample-report.png is missing"
+# The page itself must load nothing from another site: scripts, styles, fonts
+# and images all come from this folder.
+if grep -Eq '<script[^>]+src=|<link[^>]+href=|@import|url\(["'"'"']?(https?:)?//|<img[^>]+src="https?:' "$page"; then fail "the page loads something from another site"; fi
+for file in sample-report.png sample-report.html fonts/archivo-latin-variable.woff2 fonts/courier-prime-latin-400.woff2 fonts/courier-prime-latin-700.woff2 fonts/OFL-Archivo.txt fonts/OFL-CourierPrime.txt; do
+  [[ -f "site/$file" ]] || fail "site/$file is missing"
+done
 
 if [[ "$problems" -eq 0 ]]; then echo "Ready to deploy: no placeholders, every link and claim checks out."; else echo; echo "$problems thing(s) to settle before deploying."; exit 1; fi
