@@ -7,10 +7,12 @@
  * autopilot-cli.test.ts.
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { readAuditWhole } from "../src/audit.js";
 import { apply, commandRisk, isAuditEntry, plan, renderAudit, type AuditEntry, type Runner } from "../src/apply.js";
 import { AUTOPILOT_DEFAULTS, AUTOPILOT_QUALIFYING, AUTOPILOT_RULES, autopilotBanner, autopilotRefusal, createAutopilot, lineOf, parseAutopilot, type AutopilotIO, type AutopilotSettings } from "../src/autopilot.js";
 import { detect, gp3Command, lifecycleCommand } from "../src/detect.js";
@@ -43,7 +45,7 @@ const settings = (over: Partial<AutopilotSettings> = {}): AutopilotSettings => (
 
 // The engine, with a runner that writes down what it was asked to run, and an audit log in memory
 
-function pilot(over: Partial<AutopilotSettings> = {}, opts: { failOn?: string; log?: AuditEntry[]; unreadable?: boolean; unwritable?: boolean; failRecord?: boolean; missingProgram?: boolean; now?: () => Date } = {}) {
+function pilot(over: Partial<AutopilotSettings> = {}, opts: { failOn?: string; log?: AuditEntry[]; unreadable?: boolean; unwritable?: boolean; failRecord?: boolean; missingProgram?: boolean; auditFile?: string; now?: () => Date } = {}) {
   const log: AuditEntry[] = opts.log ?? [];
   const ran: string[][] = [];
   const runner: Runner = {
@@ -57,6 +59,8 @@ function pilot(over: Partial<AutopilotSettings> = {}, opts: { failOn?: string; l
     runner,
     audit: {
       read: async () => {
+        // The real reader, over a real file, when a test gives one.
+        if (opts.auditFile) return readAuditWhole(opts.auditFile);
         if (opts.unreadable) throw new Error(".cloudpilot/audit.jsonl is there but could not be read (EISDIR).");
         return [...log];
       },
@@ -556,6 +560,34 @@ test("with an audit log that cannot be read, or cannot take a line, nothing runs
   const dry = pilot({ dryRun: true }, { unwritable: true });
   await dry.round(account([gp2(1)]));
   assert.equal(dry.said.some((l) => /Dry run: nothing was run/.test(l)), true);
+});
+
+test("an audit log with a line that cannot be read stops autopilot, through the real reader, so a damaged record never lets a resource be fixed again", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cloudpilot-audit-"));
+  const file = join(dir, "audit.jsonl");
+  // The record of a fix on vol 1, with its line cut short as if the process was killed while writing it.
+  const seed = pilot();
+  await seed.round(account([gp2(1)]));
+  const done = seed.log[0]!;
+  const line = JSON.stringify(done);
+  writeFileSync(file, `${line.slice(0, line.length - 20)}\n`);
+
+  const p = pilot({}, { auditFile: file });
+  const round = await p.round(account([gp2(1)]));
+  assert.deepEqual(p.ran, [], "nothing is run on a resource whose record may be the damaged line");
+  assert.equal(round.failed, true);
+  const notice = round.notice as Extract<Notice, { kind: "autopilot" }>;
+  assert.ok(notice.problem!.includes(file), notice.problem);
+  assert.match(notice.problem!, /1 line that cannot be read/);
+  assert.match(notice.problem!, /Repair or remove it\. Apply by hand is not affected\./);
+  assert.deepEqual(p.log, [], "and nothing is written");
+
+  // Mended, the same file is read and the resource is seen as tried: this is the gate working, not the stop.
+  writeFileSync(file, `${line}\n`);
+  const mended = pilot({}, { auditFile: file });
+  await mended.round(account([gp2(1)]));
+  assert.deepEqual(mended.ran, []);
+  assert.match(mended.log[0]!.reason!, /already tried/);
 });
 
 test("an entry autopilot writes is an entry the audit log reads back, and the audit shows that it was autopilot's and which gates it passed", async () => {

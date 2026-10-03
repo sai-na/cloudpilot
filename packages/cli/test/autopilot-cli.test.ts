@@ -361,6 +361,18 @@ test("an audit log that cannot be read stops autopilot before it starts, and not
   });
 });
 
+test("an audit log with a line that cannot be read stops autopilot before it starts, names the file, and runs nothing", async () => {
+  await within(ACCOUNT, async (r) => {
+    mkdirSync(join(r.cwd, ".cloudpilot"), { recursive: true });
+    writeFileSync(join(r.cwd, ".cloudpilot/audit.jsonl"), '{"at":"2026-10-03T12:00:0\n');
+    const run = await r.run(r.watchArgs("--autopilot", BOTH, "--autopilot-after", "1"));
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /--autopilot needs the audit log: \.cloudpilot\/audit\.jsonl has 1 line that cannot be read, so what was tried before is not known\. Repair or remove it\./);
+    assert.deepEqual(r.calls(), []);
+    assert.deepEqual(r.requests, []);
+  });
+});
+
 // Without --autopilot
 
 test("without --autopilot, watch reads and changes nothing: no program is started, no audit log is made, the same account and rules", async () => {

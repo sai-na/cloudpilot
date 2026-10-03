@@ -921,8 +921,10 @@ this order, in a round of the watch:
 It stops at the first failure in a round: the fix that failed is recorded
 with its output, and the fixes after it in that round are held back. A fix of
 several commands that fails after the first says it may be half done, as
-`apply` does. If the audit log cannot be read or cannot take a line, nothing
-is run. Ctrl+C lets a fix that has started finish and be recorded, and starts
+`apply` does. If the audit log cannot be read, has a line that cannot be read
+(a fix whose record is that line would look as if it was never tried), or cannot
+take a line, nothing is run, and the message names the file to repair. `apply`
+by hand is not affected. Ctrl+C lets a fix that has started finish and be recorded, and starts
 no other.
 
 **It refuses to start,** before reading anything, with `--replay` (a recording

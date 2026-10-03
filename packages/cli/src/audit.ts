@@ -32,6 +32,21 @@ export async function readAudit(path = AUDIT_LOG): Promise<{ entries: AuditEntry
   return { entries, unreadable };
 }
 
+/**
+ * Every entry, or a throw when any line of the log cannot be read. For autopilot's
+ * never-twice gate: a line that is skipped is a fix that looks as if it was never
+ * tried, so a damaged log must stop it rather than let a resource be fixed again.
+ */
+export async function readAuditWhole(path = AUDIT_LOG): Promise<AuditEntry[]> {
+  const { entries, unreadable } = await readAudit(path);
+  if (unreadable > 0) {
+    throw new ApplyError(
+      `${path} has ${unreadable} line${unreadable === 1 ? "" : "s"} that cannot be read, so what was tried before is not known. Repair or remove ${unreadable === 1 ? "it" : "them"}. Apply by hand is not affected.`,
+    );
+  }
+  return entries;
+}
+
 export async function appendAudit(entry: AuditEntry, path = AUDIT_LOG): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(entry)}\n`);

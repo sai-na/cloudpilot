@@ -9,7 +9,7 @@ import { buildTools, clusterWorkloads, forModel, MCP_CLUSTER_INSTRUCTIONS, MCP_I
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
 import { anomaliesJson, CHARGE_NOTICE, DEFAULT_DAYS, DEFAULT_MIN_INCREASE_USD, DEFAULT_SENSITIVITY, findAnomalies, MAX_DAYS, MIN_DAYS, renderAnomalies, REPLAY_CHARGE_NOTICE, type AnomalyReport, type AnomalyRule } from "./anomaly.js";
 import { apply, ApplyError, plan, programRunner, renderAudit } from "./apply.js";
-import { appendAudit, AUDIT_LOG, checkAuditWritable, readAudit } from "./audit.js";
+import { appendAudit, AUDIT_LOG, checkAuditWritable, readAudit, readAuditWhole } from "./audit.js";
 import { AUTOPILOT_DEFAULTS, AUTOPILOT_QUALIFYING, autopilotBanner, autopilotRefusal, createAutopilot, parseAutopilot, type AutopilotSettings } from "./autopilot.js";
 import { callerAccount, collect, enabledRegions, mapLimit, readBill, readCpu, readDailyCosts } from "./collect.js";
 import { compareScans, isScanResult } from "./compare.js";
@@ -977,7 +977,7 @@ program
     const autopilot = autopilotOf(options);
     // It needs the record of what was tried before, and a place to write what it does. Said now, not in the first round.
     if (autopilot) {
-      await readAudit().catch((err) => {
+      await readAuditWhole().catch((err) => {
         throw new Error(`--autopilot needs the audit log: ${err instanceof Error ? err.message : err}`);
       });
       if (!autopilot.dryRun) {
@@ -1050,7 +1050,7 @@ program
               autopilot: createAutopilot(autopilot, {
                 // The fixes run with the same profile the scan reads with, as apply's do.
                 runner: programRunner(options.profile ? { ...process.env, AWS_PROFILE: options.profile } : process.env),
-                audit: { read: async () => (await readAudit()).entries, check: () => checkAuditWritable(), record: (entry) => appendAudit(entry) },
+                audit: { read: () => readAuditWhole(), check: () => checkAuditWritable(), record: (entry) => appendAudit(entry) },
                 user: whoAmI(),
                 now: () => new Date(),
               }),
