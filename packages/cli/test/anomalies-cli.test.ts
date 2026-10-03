@@ -12,6 +12,8 @@ import { cli, cliRun, FIXTURE, recordingText, SECRET_MARKERS } from "./helpers.j
 import { answer, type Day, fakeCostExplorer, type Reply, series, together, utcDay } from "./cost-explorer.js";
 import { hook, SECRET } from "./webhook.js";
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 const CHARGE = "Cost Explorer: AWS charges $0.01 for each request, and this makes one (more only if AWS splits the answer into pages).";
 
 const flat = (service: string, usd: number, n: number, today: string) => series(service, Array<number>(n).fill(usd), utcDay(1, new Date(`${today}T00:00:00Z`)));
@@ -110,7 +112,7 @@ test("--json prints one JSON document on stdout and the charge on stderr", async
   assert.equal(run.stderr.trim(), CHARGE);
   assert.deepEqual(Object.keys(json), [
     "command", "accountId", "charge", "status", "today", "windowDays", "latestDay", "latestDayEstimated", "baseline", "baselineDaysFound",
-    "servicesChecked", "rule", "anomalies", "totalIncreaseUsd", "totalMonthlyIfContinuesUsd", "note",
+    "servicesChecked", "rule", "anomalies", "weekdayCleared", "totalIncreaseUsd", "totalMonthlyIfContinuesUsd", "note",
   ]);
   assert.deepEqual([json.command, json.accountId, json.status, json.today, json.latestDay, json.windowDays, json.servicesChecked], ["anomalies", "123456789012", "ok", run.today, utcDay(1), 30, 2]);
   assert.deepEqual(json.charge, { requests: 1, usdPerRequest: 0.01, notice: CHARGE });
@@ -126,8 +128,11 @@ test("--json prints one JSON document on stdout and the charge on stderr", async
       increaseUsd: 32.9,
       monthlyIfContinuesUsd: 987,
       baselineDays: 29,
+      sameWeekday: { weekday: WEEKDAYS[new Date(`${utcDay(1)}T00:00:00Z`).getUTCDay()], days: 4, checked: true, maxUsd: 12.3 },
     },
   ]);
+  assert.deepEqual(json.weekdayCleared, []);
+  assert.deepEqual(json.rule, { sensitivity: 3, minIncreaseUsd: 1, weekdayCheck: true, madScale: 1.4826, flatRise: 0.5, minBaselineDays: 7, minSameWeekdayDays: 2, projectionDays: 30 });
   assert.deepEqual([json.totalIncreaseUsd, json.totalMonthlyIfContinuesUsd], [32.9, 987]);
   assert.equal(json.replay, undefined);
 });
@@ -164,6 +169,57 @@ test("--days sets the window, and --sensitivity and --min-increase move the rule
   const noisy = (today: string) => [answer(series("S", [...Array.from({ length: 29 }, (_, i) => [9, 10, 11][i % 3]!), 15], utcDay(1, new Date(`${today}T00:00:00Z`))))];
   assert.match((await live(noisy)).stdout, /1 service cost more than usual/);
   assert.match((await live(noisy, ["--sensitivity", "6"])).stdout, /^Nothing unusual/m);
+});
+
+/** Thirty complete days of one service that costs 40 on yesterday's weekday and 5 on every other day, yesterday itself costing `last`. */
+const weeklyJob = (last: number) => (today: string): Day[] => {
+  const yesterday = new Date(`${utcDay(1, new Date(`${today}T00:00:00Z`))}T00:00:00Z`);
+  return Array.from({ length: 30 }, (_, i) => {
+    const day = utcDay(30 - i, new Date(`${today}T00:00:00Z`));
+    const weekday = new Date(`${day}T00:00:00Z`).getUTCDay();
+    return { day, costs: { "Nightly export": i === 29 ? last : weekday === yesterday.getUTCDay() ? 40 : 5 } };
+  });
+};
+
+test("a weekly job is not flagged, and the output says which service the weekday check held back", async () => {
+  const run = await live(withAnswer(weeklyJob(40)));
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^Nothing unusual on /m);
+  assert.match(run.stdout, /Not flagged: its day was high against the usual day, but no higher than earlier days on the same weekday:\n  Nightly export: \$40\.00 on \d{4}-\d\d-\d\d; previous \w+days: at most \$40\.00 \(4 days\)/);
+  const json = JSON.parse((await live(withAnswer(weeklyJob(40)), ["--json"])).stdout);
+  assert.deepEqual(json.anomalies, []);
+  assert.deepEqual(json.weekdayCleared.map((c: any) => [c.service, c.costUsd, c.sameWeekday.checked, c.sameWeekday.maxUsd]), [["Nightly export", 40, true, 40]]);
+});
+
+test("a spike far above its previous same weekdays is flagged, with the same-weekday comparison in the text and the JSON", async () => {
+  const run = await live(withAnswer(weeklyJob(400)));
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /1 service cost more than usual on /);
+  assert.match(run.stdout, /\n\s+same weekday\s+previous \w+days: at most \$40\.00 \(4 days\)\n/);
+  assert.doesNotMatch(run.stdout, /Not flagged/);
+  const json = JSON.parse((await live(withAnswer(weeklyJob(400)), ["--json"])).stdout);
+  assert.deepEqual(json.anomalies[0].sameWeekday, { weekday: WEEKDAYS[new Date(`${utcDay(1)}T00:00:00Z`).getUTCDay()], days: 4, checked: true, maxUsd: 40 });
+  assert.deepEqual(json.rule, { sensitivity: 3, minIncreaseUsd: 1, weekdayCheck: true, madScale: 1.4826, flatRise: 0.5, minBaselineDays: 7, minSameWeekdayDays: 2, projectionDays: 30 });
+});
+
+test("--no-weekday-check flags the weekly job again, says the check is off, and shows no weekday comparison", async () => {
+  const run = await live(withAnswer(weeklyJob(40)), ["--no-weekday-check"]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /1 service cost more than usual on /);
+  assert.match(run.stdout, /The weekday check is off \(--no-weekday-check\)/);
+  assert.doesNotMatch(run.stdout, /same weekday|Not flagged/);
+  const json = JSON.parse((await live(withAnswer(weeklyJob(40)), ["--json", "--no-weekday-check"])).stdout);
+  assert.equal(json.rule.weekdayCheck, false);
+  assert.equal(json.anomalies[0].sameWeekday, null);
+  assert.deepEqual(json.weekdayCleared, []);
+});
+
+test("--no-weekday-check also applies to a replay, whatever the recording was made with", async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "cloudpilot-anomalies-")), "recording");
+  const recorded = await live(withAnswer(weeklyJob(40)), ["--record", dir]);
+  assert.equal(recorded.status, 0, recorded.stderr);
+  assert.match(cli(["anomalies", "--replay", dir], REPLAY).stdout, /^Nothing unusual on /m);
+  assert.match(cli(["anomalies", "--replay", dir, "--no-weekday-check"], REPLAY).stdout, /1 service cost more than usual on /);
 });
 
 test("a setting that makes no sense is refused before anything is asked of AWS", () => {
@@ -234,7 +290,7 @@ test("--help says what the request costs, and that no model is involved", () => 
   const text = help.stdout.replace(/\s+/g, " ");
   assert.match(text, /AWS charges \$0\.01 for each Cost Explorer request, and this makes one\./);
   assert.match(text, /median and median absolute deviation/);
-  for (const flag of ["--days <n>", "--sensitivity <k>", "--min-increase <dollars>", "--json", "--profile <name>", "--notify <url>", "--record <dir>", "--replay <dir>", "--redact-account"]) assert.ok(text.includes(flag), `${flag} is offered`);
+  for (const flag of ["--days <n>", "--sensitivity <k>", "--min-increase <dollars>", "--no-weekday-check", "--json", "--profile <name>", "--notify <url>", "--record <dir>", "--replay <dir>", "--redact-account"]) assert.ok(text.includes(flag), `${flag} is offered`);
   assert.doesNotMatch(text, /--explain|--bill|--provider|--model/, "no model option, and no bill option");
   assert.match(cli(["--help"], { blockNetwork: true }).stdout.replace(/\s+/g, " "), /anomalies \[options\] Find services that cost unusually much/);
 });

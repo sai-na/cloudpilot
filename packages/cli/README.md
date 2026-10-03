@@ -232,6 +232,7 @@ Today (2026-10-03) is still in progress and is not used. Cost Explorer can take 
      2026-10-02    $45.20
      usual day     $12.30  (median of the 29 days before)
      difference    +$32.90 a day; if this continues, about +$987.00 over 30 days
+     same weekday  previous Fridays: at most $12.30 (4 days)
 
   2. Amazon Bedrock
      2026-10-02    $8.00
@@ -240,6 +241,9 @@ Today (2026-10-03) is still in progress and is not used. Cost Explorer can take 
 
 Total: +$40.90 a day more than usual across 2 services. If all of it continued, that would add up to about $1227.00 over 30 days.
 The rule says a day was unusual, not why. The 30-day figure is arithmetic on one day, not a forecast.
+
+Not flagged: its day was high against the usual day, but no higher than earlier days on the same weekday:
+  Nightly export: $40.00 on 2026-10-02; previous Fridays: at most $40.00 (4 days)
 
 Cost Explorer requests made: 1 (AWS charges $0.01 each).
 ```
@@ -250,16 +254,32 @@ days before it in the window. Every figure is in whole cents.
 - The usual day is the median of the earlier days, and the spread is their
   median absolute deviation (MAD). Both barely move for a few odd days, which
   is why they are used and not a mean and a standard deviation.
-- A service is flagged when **both** hold. The latest day is above the median
-  plus `k` times 1.4826 times the MAD (`k` is `--sensitivity`, default 3; the
-  1.4826 makes the MAD read like a standard deviation). And it is at least
+- A service is flagged when **all three** hold. The latest day is above the
+  median plus `k` times 1.4826 times the MAD (`k` is `--sensitivity`, default
+  3; the 1.4826 makes the MAD read like a standard deviation). It is at least
   `--min-increase` above the median (default $1.00 a day), so pennies never
-  raise an alarm, however large the rise looks next to a tiny usual cost.
+  raise an alarm, however large the rise looks next to a tiny usual cost. And
+  it is unusual for its own weekday, below.
 - When the MAD is 0 (a flat baseline) there is no spread to measure against,
   so the day must be at least the floor above the median **and** at least 50%
   above it.
+- **The weekday check.** Take the earlier days that fall on the same weekday
+  as the latest day (UTC). If there are at least 2, the latest day must be
+  **above the largest of them by at least `--min-increase`** (the same floor,
+  default $1.00; a day that only equals the largest is never above it). A
+  service whose busy day comes round every week, a Saturday job, is therefore
+  not flagged each Saturday, while a Saturday far above the earlier Saturdays,
+  or a spike on any ordinary weekday, still is. With fewer than 2 earlier days
+  on that weekday (a short window, or days Cost Explorer had nothing for) the
+  check does not apply, the service is flagged on the first two tests alone,
+  and the output says the weekday could not be checked. A full window of 15
+  days or more has at least 2 of every weekday. `--no-weekday-check` switches
+  the check off. For each anomaly the output shows the comparison, for example
+  `previous Fridays: at most $13.10 (4 days)`, and a service the check held
+  back is listed under the anomalies, with its day and that comparison, so
+  that it is never hidden silently.
 - A service with no cost at all in the earlier days that now costs at least
-  the floor is flagged as new spend.
+  the floor is flagged as new spend. The weekday check does not apply to it.
 - A service missing from a day Cost Explorer returned counts as $0 that day. A
   day Cost Explorer returned nothing for at all is not a day.
 - At least 7 earlier days are needed. With fewer, the output says there is not
@@ -288,22 +308,33 @@ Credits, refunds and tax are left out of the request, so a credit running out
 or the month's tax landing on the first does not read as a service costing
 more. Cost Explorer's dates are UTC.
 
-**What it cannot see.** The rule has no idea what a week looks like.
+**What it cannot see.** The weekday check knows what a week looks like and
+nothing longer.
 
 - A service that costs less at weekends is fine: the weekdays are most of the
   days, so the median is the weekday cost, and an ordinary weekday, or a quiet
   weekend, is not flagged.
 - A service whose busy days are the *few* days, a weekly report or a job that
-  runs on Saturdays, is the reverse: the median is the quiet day, so each busy
-  day looks like a spike and is flagged every week. CloudPilot does not try to
-  tell those apart. What it does about it is show the usual day, the number of
-  days compared and their dates, so that you can see why it spoke, and offer
-  `--sensitivity` and `--min-increase`; a longer `--days` does not change this.
+  runs on Saturdays, looks like a spike against the quiet median. The weekday
+  check removes that alarm: the day is only flagged if it is also above the
+  earlier days on the same weekday. What is left of it:
+  - A weekly job that started only one run ago. The one earlier run is the
+    largest same-weekday day, so the second run is not flagged. (When the job
+    has no earlier run in the window at all, the day is new spend or a spike on
+    zeros, and is flagged as before.)
+  - The largest earlier same-weekday day sets the bar. One earlier Saturday that
+    was itself a spike hides later, smaller ones until it leaves the window.
+  - A job whose Saturday cost drifts by a little can set a new high by a dollar
+    or two and be flagged. `--min-increase` raises the margin for that, since
+    the weekday check uses the same floor.
+  - A pattern longer than a week, such as a monthly job, is not seen: it looks
+    like a spike every month, as before.
 - A change that lasts is flagged for as long as it takes to become the usual
   day, which is half the window, and then no more. A daily run therefore
   repeats a sustained rise for a while.
 - A cost that arrives on one day of the month (a support or subscription fee,
-  an upfront reservation payment) can look like a spike on that day.
+  an upfront reservation payment) can look like a spike on that day. The
+  weekday check does not help: the same weekday of earlier weeks cost nothing.
 - It judges one day. It does not say what caused it, whether it is a mistake,
   or what next month's bill will be.
 - It reads what Cost Explorer shows the credentials. Called from an AWS
@@ -312,7 +343,7 @@ more. Cost Explorer's dates are UTC.
   is that account alone. Run it where you mean to look.
 
 **Options.** `--days <n>`, `--sensitivity <k>` (above zero), `--min-increase
-<dollars>` (zero or more), `--json`, `--profile`, `--redact-account`,
+<dollars>` (zero or more), `--no-weekday-check`, `--json`, `--profile`, `--redact-account`,
 `--notify`, `--record` and `--replay`; see [Options](#options). A value that
 makes no sense is refused before anything is asked of AWS.
 
@@ -333,9 +364,12 @@ are dollars to the cent, days are `YYYY-MM-DD` in UTC.
   "baseline": { "days": 29, "from": "2026-09-03", "to": "2026-10-01" },
   "baselineDaysFound": 29,
   "servicesChecked": 4,
-  "rule": { "sensitivity": 3, "minIncreaseUsd": 1, "madScale": 1.4826, "flatRise": 0.5, "minBaselineDays": 7, "projectionDays": 30 },
+  "rule": { "sensitivity": 3, "minIncreaseUsd": 1, "weekdayCheck": true, "madScale": 1.4826, "flatRise": 0.5, "minBaselineDays": 7, "minSameWeekdayDays": 2, "projectionDays": 30 },
   "anomalies": [
-    { "service": "Amazon Elastic Compute Cloud - Compute", "kind": "spike", "day": "2026-10-02", "costUsd": 45.2, "medianUsd": 12.3, "madUsd": 0, "increaseUsd": 32.9, "monthlyIfContinuesUsd": 987, "baselineDays": 29 }
+    { "service": "Amazon Elastic Compute Cloud - Compute", "kind": "spike", "day": "2026-10-02", "costUsd": 45.2, "medianUsd": 12.3, "madUsd": 0, "increaseUsd": 32.9, "monthlyIfContinuesUsd": 987, "baselineDays": 29, "sameWeekday": { "weekday": "Friday", "days": 4, "checked": true, "maxUsd": 12.3 } }
+  ],
+  "weekdayCleared": [
+    { "service": "Nightly export", "day": "2026-10-02", "costUsd": 40, "medianUsd": 5, "sameWeekday": { "weekday": "Friday", "days": 4, "checked": true, "maxUsd": 40 } }
   ],
   "totalIncreaseUsd": 32.9,
   "totalMonthlyIfContinuesUsd": 987,
@@ -344,7 +378,14 @@ are dollars to the cent, days are `YYYY-MM-DD` in UTC.
 ```
 
 `status` is `ok`, `not-enough-history` or `no-data`; with the last two,
-`anomalies` is empty. `kind` is `spike` or `new`. `baseline` is `null` unless
+`anomalies` is empty. `kind` is `spike` or `new`. `sameWeekday` is the weekday
+check for that anomaly: the weekday, how many earlier days fell on it, whether
+it was `checked` (at least `minSameWeekdayDays`) and the largest of those days
+in `maxUsd`, which is `null` when it was not checked. It is `null` for new
+spend, and when `--no-weekday-check` is given (then `rule.weekdayCheck` is
+`false`). `weekdayCleared` lists the services that were high against the usual
+day but not against their own weekday, so were not flagged; it is empty
+otherwise. `baseline` is `null` unless
 `status` is `ok`, and `latestDay` is `null` with `no-data`. A replay adds a
 `replay` field holding the banner, and its `charge.requests` is 0.
 
@@ -1047,8 +1088,8 @@ present. It needs Docker and is not part of `npm test`.
 
 These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
-[Kubernetes](#kubernetes). `anomalies` takes `--days`, `--sensitivity` and
-`--min-increase`, and the options below that name it: see
+[Kubernetes](#kubernetes). `anomalies` takes `--days`, `--sensitivity`,
+`--min-increase` and `--no-weekday-check`, and the options below that name it: see
 [Spend anomalies](#spend-anomalies). `ask --kube` takes the `kube` options
 named there in place of the AWS ones. `init` takes `--profile`, `--region`,
 `--context`, `--cluster-name`, `--prometheus`, `--json` and `--print-policy`: see
@@ -1075,7 +1116,8 @@ say so: see [Watch it](#watch-it).
 | `--cluster-name <name>` | `kube`, `watch --kube`, `ask --kube` and `init`: inside a cluster with no kubeconfig, what to call it (or `CLOUDPILOT_CLUSTER_NAME`). Use the kubectl context name your team uses for it: the fix commands carry `--context <name>`. Ignored when kubectl has a context; not with `--context`. See [Read a cluster from inside it](#read-a-cluster-from-inside-it) |
 | `--days <n>` | `anomalies` only: complete days of cost to read, 8 to 90. Default 30. With `--replay`, the days recorded. AWS charges $0.01 for the one Cost Explorer request `anomalies` makes |
 | `--sensitivity <k>` | `anomalies` only: flag a day above the median plus `k` times 1.4826 times the median absolute deviation. Default 3 |
-| `--min-increase <dollars>` | `anomalies` only: never flag a day less than this far above the median. Default 1.00 |
+| `--min-increase <dollars>` | `anomalies` only: never flag a day less than this far above the median, or less than this far above the largest earlier day on the same weekday. Default 1.00 |
+| `--no-weekday-check` | `anomalies` only: do not also require the day to be above the earlier days on its own weekday. Without it a weekly job, such as one that runs on Saturdays, is not flagged every week |
 | `--bill` | `scan` only: also read last month's total spend from Cost Explorer and say what share of it the waste is. AWS charges $0.01 for this one request, so it is never made unless you ask |
 | `--lookback-hours <n>` | Hours of CPU, database connection and NAT gateway and load balancer traffic history used to judge idle and oversized resources. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
@@ -1346,10 +1388,11 @@ The rules are checked against a seeded cluster: see
   Explorer reports it for the last full calendar month in UTC. A new account,
   or one Cost Explorer was only just enabled for, has none yet.
 - `anomalies` judges one day against the days before it with a fixed rule, and
-  cannot tell a weekly pattern from a spike when the busy days are the few
-  (a weekly job is flagged every week); a rise that lasts is reported until it
-  becomes the usual day; the latest day can still be settling in Cost
-  Explorer. The rule is in [Spend anomalies](#spend-anomalies). It has been
+  does not flag a weekly job each week, since a day must also exceed the
+  earlier days on its own weekday, but it cannot see a monthly pattern or a
+  month-start charge, and a weekly job's second run is not flagged; a rise
+  that lasts is reported until it becomes the usual day; the latest day can
+  still be settling in Cost Explorer. The rule is in [Spend anomalies](#spend-anomalies). It has been
   run against a stand-in for Cost Explorer and recordings made from it, never
   against AWS: the real service's answers, and the `RECORD_TYPE` values the
   request filters on (`Credit`, `Refund`, `Tax`), have not been checked live.

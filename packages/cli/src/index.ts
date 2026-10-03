@@ -771,6 +771,8 @@ interface AnomaliesOptions {
   days?: string;
   sensitivity: string;
   minIncrease: string;
+  /** Commander sets it to false for --no-weekday-check. */
+  weekdayCheck: boolean;
   json?: boolean;
   notify?: string[];
   record?: string;
@@ -788,7 +790,7 @@ function anomalySettings(options: AnomaliesOptions): { rule: AnomalyRule; days?:
   if (days !== undefined && (!/^\d+$/.test(options.days!.trim()) || days < MIN_DAYS || days > MAX_DAYS)) {
     throw new Error(`--days takes a whole number from ${MIN_DAYS} to ${MAX_DAYS}. Got "${options.days}".`);
   }
-  return { rule: { sensitivity, minIncreaseUsd: amount(options.minIncrease, "--min-increase") }, days };
+  return { rule: { sensitivity, minIncreaseUsd: amount(options.minIncrease, "--min-increase"), weekdayCheck: options.weekdayCheck !== false }, days };
 }
 
 /**
@@ -845,11 +847,12 @@ const anomaliesNotice = (report: AnomalyReport, accountId: string, banner?: stri
 program
   .command("anomalies")
   .description(
-    `Find services that cost unusually much on the latest complete day, from daily Cost Explorer data. AWS charges $0.01 for each Cost Explorer request, and this makes one. A fixed rule (median and median absolute deviation) finds them; no model is involved`,
+    `Find services that cost unusually much on the latest complete day, from daily Cost Explorer data. AWS charges $0.01 for each Cost Explorer request, and this makes one. A fixed rule (median and median absolute deviation, and the same weekday's earlier days) finds them; no model is involved`,
   )
   .option("--days <n>", `days of cost to read, ${MIN_DAYS} to ${MAX_DAYS}; the latest complete day is compared with the days before it (default ${DEFAULT_DAYS}; with --replay, the days recorded)`)
   .option("--sensitivity <k>", `flag a day above the median plus k times 1.4826 times the median absolute deviation (default ${DEFAULT_SENSITIVITY})`, String(DEFAULT_SENSITIVITY))
   .option("--min-increase <dollars>", `never flag a day that is less than this many dollars above the median (default ${DEFAULT_MIN_INCREASE_USD.toFixed(2)})`, DEFAULT_MIN_INCREASE_USD.toFixed(2))
+  .option("--no-weekday-check", "do not also require the day to be above the earlier days on its own weekday (by default a weekly job is not flagged every week)")
   .option("--json", "print the result as JSON instead of a report")
   .option("--profile <name>", "AWS profile to read with (default: the standard AWS credential chain)", process.env.AWS_PROFILE)
   .option("--notify <url>", NOTIFY_HELP.replace("what is new", "which services cost more than usual, only when there is one"), collectUrls)
