@@ -7,9 +7,9 @@
  * they want, the saving and the script follow at once, and they copy one
  * script. Fixes that can be undone start ticked; permanent ones never do.
  */
-import { billLines, comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine, words } from "./report.js";
+import { ADVISORY_HEADING, advisoryIntro, allWarnings, billLines, comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownAdvisories, shownFindings, skippedLine, words } from "./report.js";
 import { ARCHIVO, COURIER_PRIME_400, COURIER_PRIME_700 } from "./fonts.js";
-import type { Finding, Fix, ScanResult } from "./types.js";
+import type { Advisory, Finding, Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -121,6 +121,18 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 .bar button:disabled { background: var(--line); cursor: not-allowed; }
 .bar a:focus-visible, .bar button:focus-visible { outline: 3px solid var(--red-on-ink); outline-offset: 2px; }
 
+/* Things to look at that are not waste: no amount in the margin, no tick box, no part of the script. */
+.advisories { border-top: 3px solid var(--ink); margin-top: 2.5rem; padding-top: 1.25rem; }
+.advisories h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
+.advisories > p { margin: 0 0 1rem; max-width: 46rem; }
+.advisory { border-top: 2px dashed var(--line); padding: 1.25rem 0; }
+.advisory h3 { font-size: 1.1875rem; line-height: 1.25; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 0.3rem; }
+.advisory ul { margin: 0 0 0.9rem; padding-left: 1.1rem; }
+.advisory li { margin-bottom: 0.15rem; overflow-wrap: anywhere; }
+.advisory .todo { margin: 0 0 0.75rem; overflow-wrap: anywhere; }
+.suggestion { border-left: 5px solid var(--line); background: var(--band); padding: 0.9rem 1.1rem; margin: 0 0 0.75rem; }
+.suggestion h4 { font-size: 1rem; font-weight: 800; margin: 0 0 0.3rem; }
+
 .notes { border-top: 3px solid var(--ink); margin-top: 0.5rem; padding-top: 1.25rem; font-family: var(--print); color: var(--soft); }
 .notes p, .notes li { overflow-wrap: anywhere; }
 
@@ -134,7 +146,7 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 @media print {
   body { font-size: 10.5pt; }
   main { max-width: none; padding: 0; }
-  .finding, .fix, .summary { break-inside: avoid; }
+  .finding, .fix, .summary, .advisory { break-inside: avoid; }
   .command, .script pre { background: #fff; color: #000; border: 1px solid #000; }
   .bar { position: static; margin-inline: 0; background: #fff; color: #000; border: 1px solid #000; }
   .bar .permanent { color: var(--red); }
@@ -301,6 +313,28 @@ ${commands(c.fix.commands)}
 </section>`;
 }
 
+/** One advisory: its words, and any suggested command shown as text. There is no tick box: nothing here goes into the script. */
+function advisoryBlock(a: Advisory): string {
+  return `<article class="advisory">
+<h3>${escape(a.title)}</h3>
+<p class="where"><span class="id">${escape(a.resource)}</span>${a.namespace === "(cluster)" ? "" : ` in ${escape(a.namespace)}`}, ${escape(a.kind)}${a.container ? `, container ${escape(a.container)}` : ""}, rule ${escape(a.rule)}</p>
+<ul>
+${a.evidence.map((e) => `<li>${escape(e)}</li>`).join("\n")}
+</ul>
+<p class="todo"><strong>What to do:</strong> ${escape(a.advice)}</p>
+${
+  a.suggestion
+    ? `<section class="suggestion">
+<h4>Suggestion</h4>
+<p class="risk">${RISK_NOTE[a.suggestion.risk]}</p>
+${commands(a.suggestion.commands)}
+<p class="wayback"><strong>Way back:</strong> ${escape(a.suggestion.rollback)}</p>
+</section>`
+    : ""
+}
+</article>`;
+}
+
 /** The report as a complete HTML document. */
 export function renderHtml(result: ScanResult, options: ReportOptions & { summary?: string; banner?: string } = {}): string {
   const count = result.findings.length;
@@ -350,10 +384,12 @@ ${choices[n]!.map(fixBlock).join("\n")}
     )
     .join("\n");
 
+  const advisories = shownAdvisories(result);
   const skipped = skippedLine(result);
+  const unrun = allWarnings(result);
   const warnings =
-    result.warnings.length > 0
-      ? `<h2>Checks that could not run</h2>\n<ul>\n${result.warnings.map((w) => `<li>${escape(w)}</li>`).join("\n")}\n</ul>`
+    unrun.length > 0
+      ? `<h2>Checks that could not run</h2>\n<ul>\n${unrun.map((w) => `<li>${escape(w)}</li>`).join("\n")}\n</ul>`
       : "";
 
   return `<!doctype html>
@@ -386,6 +422,15 @@ ${
 <h2>Your script</h2>
 <p>Every fix you tick lands here, as one script to read and run yourself. Fixes that can be undone start ticked. Permanent ones are left for you to decide.</p>
 <pre><code id="script-text">${escape(shared.scriptText(head, chosen.map((c) => c.lines)))}</code></pre>
+</section>`
+    : ""
+}
+${
+  advisories.length > 0
+    ? `<section class="advisories" id="advisories">
+<h2>${escape(ADVISORY_HEADING)}</h2>
+<p>${escape(advisoryIntro(result))}</p>
+${advisories.map(advisoryBlock).join("\n")}
 </section>`
     : ""
 }

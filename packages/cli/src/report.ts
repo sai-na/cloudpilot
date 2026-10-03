@@ -1,4 +1,4 @@
-import type { Finding, Pattern, ScanResult } from "./types.js";
+import type { Advisory, Finding, Pattern, ScanResult } from "./types.js";
 
 export const money = (n: number) => `$${n.toFixed(2)}`;
 
@@ -130,6 +130,29 @@ export function onlyNewLine(result: ScanResult, shown: Finding[], options: Repor
   return `Showing only the ${shown.length} new finding${shown.length === 1 ? "" : "s"}.`;
 }
 
+/** The title of the section that lists advisories, in every kind of report. */
+export const ADVISORY_HEADING = "Also worth a look (not counted as waste)";
+
+/** What a reader needs to know before the first advisory: they are not waste, and they sit outside every total. */
+export const advisoryIntro = (result: ScanResult) =>
+  `These are things to look at, not waste. None of them is in the ${money(result.totalMonthlyWasteUsd)} total above, none is compared with the last scan, and no figure here adds to that total.`;
+
+/** The advisories a report lists. They are always all listed: --only-new cuts findings, and advisories are not compared. */
+export const shownAdvisories = (result: ScanResult): Advisory[] => result.advisories ?? [];
+
+/**
+ * The advisories in a few lines, for a place that holds the findings as JSON
+ * and wants a reader to see at once that these are a separate list. Empty when there are none.
+ */
+export function advisoryDigest(result: ScanResult): string {
+  const advisories = shownAdvisories(result);
+  if (advisories.length === 0) return "";
+  return [`${ADVISORY_HEADING}: ${advisories.length}. ${advisoryIntro(result)}`, ...advisories.map((a) => `- ${a.title}`)].join("\n");
+}
+
+/** The checks that could not run: those the findings depend on, then those only the advisories did. */
+export const allWarnings = (result: ScanResult): string[] => [...result.warnings, ...(result.advisoryWarnings ?? [])];
+
 const resolvedLines = (result: ScanResult) =>
   (result.comparison?.resolved ?? []).map((r) => `${r.title} (${r.resourceIds.map(shortId).join(", ")}), ${money(r.monthlyCostUsd)} a month`);
 
@@ -173,15 +196,33 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
     if (shown.length > 0) lines.push(dim("CloudPilot is read-only: it prints these commands and never runs them."));
   }
 
+  const advisories = shownAdvisories(result);
+  if (advisories.length > 0) {
+    lines.push("", bold(ADVISORY_HEADING), dim(advisoryIntro(result)), "");
+    advisories.forEach((a, n) => {
+      lines.push(bold(`${String(n + 1).padStart(2)}. ${a.title}`));
+      lines.push(dim(`    ${a.kind}  ${a.resource}${a.namespace === "(cluster)" ? "" : `  ${a.namespace}`}${a.container ? `  container ${a.container}` : ""}  rule ${a.rule}`));
+      for (const e of a.evidence) lines.push(`    - ${e}`);
+      lines.push(`    what to do: ${a.advice}`);
+      if (a.suggestion) {
+        lines.push(`    suggestion (${RISK_LABEL[a.suggestion.risk]}):`);
+        for (const c of a.suggestion.commands) lines.push(paint("cyan", `      ${c}`));
+        lines.push(dim(`    way back: ${a.suggestion.rollback}`));
+      }
+      if (n < advisories.length - 1) lines.push("");
+    });
+  }
+
   const resolved = resolvedLines(result);
   if (resolved.length > 0) lines.push("", "Resolved since the last scan:", ...resolved.map((r) => `  - ${r}`));
 
   const skipped = skippedLine(result);
   if (skipped) lines.push("", skipped);
 
-  if (result.warnings.length > 0) {
-    lines.push("", paint("yellow", `${result.warnings.length} check(s) could not run:`));
-    for (const w of result.warnings) lines.push(paint("yellow", `  - ${w}`));
+  const warnings = allWarnings(result);
+  if (warnings.length > 0) {
+    lines.push("", paint("yellow", `${warnings.length} check(s) could not run:`));
+    for (const w of warnings) lines.push(paint("yellow", `  - ${w}`));
   }
   return lines.join("\n");
 }
@@ -237,10 +278,27 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
     });
     lines.push("CloudPilot is read-only: it prints these commands and never runs them.", "");
   }
+  const advisories = shownAdvisories(result);
+  if (advisories.length > 0) {
+    lines.push(`## ${ADVISORY_HEADING}`, "", advisoryIntro(result), "");
+    advisories.forEach((a, n) => {
+      lines.push(`### ${n + 1}. ${a.title}`, "");
+      lines.push(`- **Object:** ${a.kind} \`${a.resource}\`${a.namespace === "(cluster)" ? "" : ` in ${a.namespace}`}${a.container ? `, container \`${a.container}\`` : ""}`);
+      lines.push(`- **Rule:** ${a.rule}`);
+      lines.push("- **Evidence:**", ...a.evidence.map((e) => `  - ${e}`));
+      lines.push(`- **What to do:** ${a.advice}`);
+      if (a.suggestion) {
+        lines.push(`- **Suggestion** (${RISK_LABEL[a.suggestion.risk]}):`, "", "```sh", ...a.suggestion.commands, "```", "");
+        lines.push(`- **Way back:** ${a.suggestion.rollback}`);
+      }
+      lines.push("");
+    });
+  }
   const skipped = skippedLine(result);
   if (skipped) lines.push(skipped, "");
-  if (result.warnings.length > 0) {
-    lines.push("## Checks that could not run", "", ...result.warnings.map((w) => `- ${w}`), "");
+  const warnings = allWarnings(result);
+  if (warnings.length > 0) {
+    lines.push("## Checks that could not run", "", ...warnings.map((w) => `- ${w}`), "");
   }
   return lines.join("\n");
 }
