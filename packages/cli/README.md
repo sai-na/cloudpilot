@@ -138,7 +138,7 @@ directory compares with it without being asked:
 
 ```
 10 findings, $151.53 per month of estimated waste
-Since the last scan (2026-10-02T09:00:00Z): 2 new ($59.74 a month), 1 resolved ($3.65 a month), 7 unchanged.
+Since the last scan (2026-10-02T09:00:00Z): 2 new ($59.74 a month), 1 resolved ($3.65 a month), 8 unchanged.
 ```
 
 New findings are marked, and what was resolved is listed. `--only-new` lists

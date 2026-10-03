@@ -44,6 +44,9 @@ resource ID that is not in the scan.
 
 ## Also in the box
 
+- **What changed since last time.** A repeat scan compares with the last one
+  made from the same directory and says what is new, what was resolved and
+  what is unchanged, so nobody re-reads every finding.
 - **MCP server.** `cloudpilot mcp` lets Claude Code, Cursor and other MCP
   clients scan the account and query the findings through read-only tools.
 - **Record and replay.** A scan can be recorded and replayed later with no
