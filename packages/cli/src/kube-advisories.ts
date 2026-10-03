@@ -110,7 +110,7 @@ function outOfMemory(inventory: ClusterInventory): Advisory[] {
         "The over-requested rule already leaves this container's memory request alone while the kill is on the pod's record, so no finding asks for it to be lowered",
       ],
       advice:
-        raised !== undefined
+        suggestion
           ? `Raise the memory limit and watch whether the kills stop. The figure suggested is the limit plus 25%, rounded up to the next 16Mi: the right one depends on the workload, and only its owner knows what it needs.`
           : limit > 0
             ? "Raise the memory limit and watch whether the kills stop. This pod is not part of a Deployment, StatefulSet or DaemonSet, so the change belongs wherever it is created. The right figure depends on the workload."

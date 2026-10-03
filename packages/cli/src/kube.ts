@@ -383,7 +383,7 @@ function nodesFrom(nodes: any[], pods: any[], skipped: string[]): NodeInfo[] {
     const tainted = (node.spec?.taints ?? []).some((t: any) => t.effect === "NoSchedule" || t.effect === "NoExecute");
     const leftOut: NodeLeftOut | undefined = CONTROL_PLANE_ROLES.some((role) => role in labels) ? "control-plane" : tainted ? "tainted" : node.spec?.unschedulable ? "cordoned" : undefined;
     const used = load.get(name);
-    out.push({ name, allocatableCpuCores: cpu, allocatableMemoryBytes: memory, ...(leftOut ? { leftOut } : {}), requestedCpuCores: used?.cpu ?? 0, requestedMemoryBytes: used?.memory ?? 0, pods: used?.pods ?? 0 });
+    out.push({ name, allocatableCpuCores: cpu, allocatableMemoryBytes: memory, ...(leftOut ? { leftOut } : {}), requestedCpuCores: Math.round((used?.cpu ?? 0) * 1000) / 1000, requestedMemoryBytes: used?.memory ?? 0, pods: used?.pods ?? 0 });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
