@@ -63,7 +63,7 @@ const gib = (bytes: number) => Number((bytes / GI).toFixed(2));
 const usd = (n: number) => `$${n}`;
 
 /** A week of history is worth trusting; an hour is a hint. */
-const confidenceFor = (historyHours: number) => (historyHours >= 168 ? 0.9 : historyHours >= 24 ? 0.8 : historyHours >= 1 ? 0.6 : 0.4);
+export const confidenceFor = (historyHours: number) => (historyHours >= 168 ? 0.9 : historyHours >= 24 ? 0.8 : historyHours >= 1 ? 0.6 : 0.4);
 
 interface Resize {
   container: WorkloadContainer;

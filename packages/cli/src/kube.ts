@@ -16,16 +16,23 @@ export interface KubeReader {
   identity(): Promise<{ context: string; server?: string }>;
 }
 
-/** Reads through the kubectl on the PATH. It has no way to write. */
-export function kubectlReader(context?: string): KubeReader {
+/** kubectl is not installed, or not on the PATH. */
+export class KubectlNotFoundError extends Error {
+  constructor() {
+    super("kubectl was not found on your PATH. CloudPilot reads a cluster through kubectl, with the access you already have.");
+    this.name = "KubectlNotFoundError";
+  }
+}
+
+/** Reads through the kubectl on the PATH. It has no way to write. With a timeout, a call that has not answered by then is stopped. */
+export function kubectlReader(context?: string, timeoutMs?: number): KubeReader {
   const scoped = context ? ["--context", context] : [];
   const run = (args: string[]) =>
     new Promise<string>((resolve, reject) => {
-      execFile("kubectl", [...scoped, ...args], { maxBuffer: 512 * 1024 * 1024 }, (error, stdout, stderr) => {
+      execFile("kubectl", [...scoped, ...args], { maxBuffer: 512 * 1024 * 1024, ...(timeoutMs ? { timeout: timeoutMs } : {}) }, (error, stdout, stderr) => {
         if (!error) return resolve(stdout);
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return reject(new Error("kubectl was not found on your PATH. CloudPilot reads a cluster through kubectl, with the access you already have."));
-        }
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return reject(new KubectlNotFoundError());
+        if (error.killed && timeoutMs) return reject(new Error(`kubectl did not answer within ${timeoutMs / 1000} seconds.`));
         reject(new Error((stderr || error.message).trim()));
       });
     });
@@ -140,7 +147,7 @@ export const parseBytes = (value: unknown) => quantity(value, BYTE_SUFFIX);
 const isIgnored = (meta: any) => meta?.labels?.["cloudpilot/ignore"] === "true" || meta?.annotations?.["cloudpilot/ignore"] === "true";
 
 /** Every item of a list endpoint, following the continue token page by page. */
-async function list(reader: KubeReader, path: string): Promise<any[]> {
+export async function list(reader: KubeReader, path: string): Promise<any[]> {
   const items: any[] = [];
   let next = "";
   do {
@@ -177,7 +184,7 @@ export function parsePrometheusRef(text: string): PrometheusRef {
 }
 
 /** Services that look like a Prometheus server, likeliest first. */
-function prometheusCandidates(services: any[]): PrometheusRef[] {
+export function prometheusCandidates(services: any[]): PrometheusRef[] {
   const others = /alertmanager|exporter|operator|pushgateway|kube-state-metrics|adapter|blackbox/;
   return services
     .filter((s) => /prometheus/.test(s.metadata?.name ?? "") && !others.test(s.metadata?.name ?? ""))
@@ -191,7 +198,7 @@ function prometheusCandidates(services: any[]): PrometheusRef[] {
 
 type Series = Array<{ namespace: string; pod: string; container: string; value: number }>;
 
-async function query(reader: KubeReader, prometheus: PrometheusRef, promql: string): Promise<Series> {
+export async function query(reader: KubeReader, prometheus: PrometheusRef, promql: string): Promise<Series> {
   const path = `/api/v1/namespaces/${prometheus.namespace}/services/${prometheus.service}:${prometheus.port}/proxy/api/v1/query?query=${encodeURIComponent(promql)}`;
   const answer = await reader.get(path);
   if (answer?.status !== "success") throw new Error(answer?.error ?? "Prometheus did not answer the query");

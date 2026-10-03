@@ -6,7 +6,7 @@ import { labelClient } from "./recording.js";
 import type { Inventory, PriceBook } from "./types.js";
 
 /** The Price List Query API is only served from a few regions. */
-const PRICING_ENDPOINT_REGION = "us-east-1";
+export const PRICING_ENDPOINT_REGION = "us-east-1";
 
 interface Product {
   usagetype: string;
