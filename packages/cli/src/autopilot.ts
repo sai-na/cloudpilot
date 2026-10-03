@@ -191,6 +191,10 @@ export interface AutopilotLine {
   reason?: string;
   /** A fix of several commands failed after the first: the resource may be half changed. */
   halfDone?: boolean;
+  /** A failed fix that never started (the program was not found, say): nothing was changed, so there is no way back to take. */
+  notStarted?: boolean;
+  /** The exit code of the command that failed, for a fix that started and failed. */
+  exitCode?: number;
 }
 
 /** What one round came to. `notice` is set when there is something to tell: a fix run, held back, refused or failed. */
@@ -229,6 +233,7 @@ const SKEW_MS = 5 * 60_000;
 /** The line a recorded entry tells. */
 export function lineOf(e: AuditEntry): AutopilotLine {
   const firstFailure = e.commands.findIndex((c) => c.exitCode !== undefined && c.exitCode !== 0);
+  const notStarted = e.outcome === "failed" && e.commands.every((c) => c.exitCode === undefined);
   return {
     outcome: e.outcome === "applied" || e.outcome === "failed" || e.outcome === "held-back" ? e.outcome : "refused",
     title: e.finding.title,
@@ -239,6 +244,8 @@ export function lineOf(e: AuditEntry): AutopilotLine {
     wayBack: e.wayBack,
     ...(e.reason ? { reason: e.reason } : {}),
     ...(e.outcome === "failed" && firstFailure > 0 ? { halfDone: true } : {}),
+    ...(notStarted ? { notStarted: true } : {}),
+    ...(e.outcome === "failed" && firstFailure >= 0 ? { exitCode: e.commands[firstFailure]!.exitCode } : {}),
   };
 }
 

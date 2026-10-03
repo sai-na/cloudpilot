@@ -111,7 +111,7 @@ test("a run fixes what passes the gates through the program's own arguments, rec
       const sent = messages.find((m) => m.event === "autopilot");
       assert.equal(sent.dryRun, false);
       assert.match(sent.text, /^CloudPilot autopilot: 2 fixes run, AWS account 123456789012\n/);
-      assert.match(sent.text, /Each fix marked RAN or FAILED was run against the account, with the way back given for it\./);
+      assert.match(sent.text, /Each fix marked RAN was run against the account, with the way back given for it\./);
       assert.match(sent.text, /1\. RAN {2}\$2\.28\/mo {2}100 GB gp2 volume can move to gp3 \(vol-0a1b2c3d4e5f60001\), region ap-south-1\. Way back: Online and reversible: the volume can be changed back to gp2 after AWS's 6-hour modification cooldown\./);
       assert.match(sent.text, /2\. RAN .*Bucket neglected has no lifecycle rule .*Way back: Remove the rule again with: aws s3api delete-bucket-lifecycle --bucket neglected --region ap-south-1\. Objects already moved to Standard-IA stay there\./);
       const findings = messages.find((m) => m.event === "first-report");

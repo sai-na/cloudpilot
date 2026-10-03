@@ -398,8 +398,8 @@ export function renderAudit(entries: AuditEntry[]): string {
       if (e.reason) lines.push(`    ${e.reason}`);
       if (e.autopilot) lines.push(`    Autopilot gates passed: ${e.autopilot.gates.length > 0 ? e.autopilot.gates.join("; ") : "none"}`);
       for (const c of e.commands) lines.push(`    ${c.exitCode === undefined ? "not run" : `exit ${c.exitCode}`.padEnd(7)}  ${c.command}`);
-      // A failed fix may be half done, and the way back is where to start.
-      if (e.outcome === "applied" || e.outcome === "failed") lines.push(`    Way back: ${e.wayBack}`);
+      // A failed fix may be half done, and the way back is where to start. One that never started changed nothing.
+      if (e.outcome === "applied" || (e.outcome === "failed" && e.commands.some((c) => c.exitCode !== undefined))) lines.push(`    Way back: ${e.wayBack}`);
       return lines.join("\n");
     })
     .join("\n\n");

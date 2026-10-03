@@ -945,7 +945,10 @@ to the audit log: what it would have run, held back or refused is printed in
 the watch's own output each round, and sent with `--notify`. With `--notify`, each
 round that did any of that sends one message of its own: what was changed, with
 the way back for each, what was held back or not run and why, and, for a dry
-run, what would have run. The message about new findings says that autopilot's
+run, what would have run. A fix that failed after it started is given its exit
+code and the way back, and may be half done; one that never started (`aws` is
+not on the PATH, say) is said to have changed nothing, with the reason, and has
+no way back to take. The message about new findings says that autopilot's
 changes are in a message of their own, so nothing in it is untrue. A round with
 nothing to do sends nothing, and findings that are not yet eligible (below the
 confidence bar, or not yet in enough rounds) are only listed in that round's

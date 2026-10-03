@@ -117,7 +117,10 @@ const OUTCOME_WORD: Record<AutopilotLine["outcome"], string> = { applied: "RAN",
 function autopilotDraft(notice: Extract<Notice, { kind: "autopilot" }>, code: (s: string) => string): Draft {
   const { lines, dryRun } = notice;
   const count = (outcome: AutopilotLine["outcome"]) => lines.filter((l) => l.outcome === outcome).length;
-  const changed = count("applied") + count("failed") > 0;
+  // A fix that failed before it started changed nothing, and has no way back to give.
+  const neverStarted = lines.filter((l) => l.outcome === "failed" && l.notStarted).length;
+  const startedAndFailed = count("failed") - neverStarted;
+  const changed = count("applied") + startedAndFailed > 0;
   const parts = [
     ...(dryRun ? [`${plural(count("would-run"), "fix")} would run`] : [`${plural(count("applied"), "fix")} run`]),
     ...(count("failed") ? [`${count("failed")} failed`] : []),
@@ -130,12 +133,21 @@ function autopilotDraft(notice: Extract<Notice, { kind: "autopilot" }>, code: (s
     intro: [
       `Autopilot is on for ${notice.rules.join(", ")}. It runs only fixes that can be undone, and never a permanent one. Round at ${notice.at}.`,
       ...(notice.problem ? [`Nothing was run: ${notice.problem}.`] : []),
-      ...(dryRun ? ["This is a dry run: nothing was run, and the lines below are what a real run would have run."] : changed ? ["Each fix marked RAN or FAILED was run against the account, with the way back given for it."] : notice.problem ? [] : ["Nothing was changed."]),
+      ...(dryRun
+        ? ["This is a dry run: nothing was run, and the lines below are what a real run would have run."]
+        : [
+            ...(count("applied") > 0 ? ["Each fix marked RAN was run against the account, with the way back given for it."] : []),
+            ...(startedAndFailed > 0 ? ["Each fix marked FAILED that has a way back was started and then failed, so it may be half done: check the resource."] : []),
+            ...(!changed && !notice.problem ? ["Nothing was changed."] : []),
+            ...(neverStarted > 0 ? ["A fix marked FAILED that was not started changed nothing: the reason is given for it, and there is no way back to take."] : []),
+          ]),
     ],
     items: lines.map((l, n) => {
       const what = `${n + 1}. ${OUTCOME_WORD[l.outcome]}  ${money(l.monthlyCostUsd)}/mo  ${l.title} (${code(l.resourceIds.map(shortId).join(", "))}), region ${l.region}`;
       if (l.outcome === "held-back" || l.outcome === "refused") return `${what}. ${l.reason ?? ""}`;
-      return `${what}. ${l.halfDone ? "It may be half done: check the resource. " : ""}Way back: ${l.wayBack}`;
+      if (l.outcome === "failed" && l.notStarted) return `${what}. Not started, so nothing was changed: ${(l.reason ?? "no reason was recorded").replace(/^Not run: /, "")}`;
+      const failure = l.outcome === "failed" ? `It was started and failed${l.exitCode === undefined ? "" : ` with exit code ${l.exitCode}`}${l.reason ? `: ${l.reason}` : ""}. ` : "";
+      return `${what}. ${failure}${l.halfDone ? "It may be half done: check the resource. " : ""}Way back: ${l.wayBack}`;
     }),
     outro: dryRun
       ? ["A dry run writes nothing to the audit log. What it would have run is in this message and in the watch's own output, on the machine that runs the watch."]

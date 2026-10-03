@@ -533,7 +533,7 @@ test("a fix of several commands that failed after the first says it may be half 
   assert.equal(lineOf(entry).halfDone, true);
   assert.equal(lineOf({ ...entry, commands: [{ command: "x", exitCode: 254 }] }).halfDone, undefined, "a failure of the first command has nothing before it");
   const text = plainText({ kind: "autopilot", subject: "AWS account 1", at: entry.at, dryRun: false, rules: ["gp2-volume"], lines: [lineOf(entry)] });
-  assert.match(text, /1\. FAILED {2}\$1\.00\/mo {2}Two commands \(.*\), region ap-south-1\. It may be half done: check the resource\. Way back: run them again with the old size/);
+  assert.match(text, /1\. FAILED {2}\$1\.00\/mo {2}Two commands \(.*\), region ap-south-1\. It was started and failed with exit code 254\. It may be half done: check the resource\. Way back: run them again with the old size/);
 });
 
 test("a fix whose program is not on the PATH is recorded as failed, not run, and stops the round", async () => {
@@ -542,6 +542,29 @@ test("a fix whose program is not on the PATH is recorded as failed, not run, and
   assert.deepEqual(p.log.map((e) => e.outcome), ["failed", "held-back"]);
   assert.match(p.log[0]!.reason!, /Not run: aws was not found on your PATH/);
   assert.equal(result.failed, true);
+
+  // The message does not say a change was made, gives no way back for it, and gives the reason.
+  const notice = result.notice as Extract<Notice, { kind: "autopilot" }>;
+  const text = plainText(notice);
+  assert.equal(notice.lines[0]!.notStarted, true);
+  assert.doesNotMatch(text, /was run against the account/);
+  assert.doesNotMatch(text, /FAILED[^\n]*Way back/);
+  assert.match(text, /1\. FAILED {2}.*region ap-south-1\. Not started, so nothing was changed: aws was not found on your PATH\./);
+  assert.match(text, /A fix marked FAILED that was not started changed nothing/);
+  assert.match(text, /Nothing was changed\./);
+  assert.equal(renderAudit(p.log).includes("Way back"), false, "the audit list gives no way back for a fix that never started");
+});
+
+test("a fix that started and failed says so, with the exit code, and gives the way back", async () => {
+  const p = pilot({}, { failOn: "modify-volume" });
+  const result = await p.round(account([gp2(1)]));
+  const notice = result.notice as Extract<Notice, { kind: "autopilot" }>;
+  assert.equal(notice.lines[0]!.notStarted, undefined);
+  const text = plainText(notice);
+  assert.match(text, /Each fix marked FAILED that has a way back was started and then failed, so it may be half done/);
+  assert.match(text, /1\. FAILED {2}.*region ap-south-1\. It was started and failed with exit code 254\. Way back: Online and reversible/);
+  assert.doesNotMatch(text, /Nothing was changed\./);
+  assert.match(renderAudit(p.log), /Way back: Online and reversible/);
 });
 
 // The audit log
