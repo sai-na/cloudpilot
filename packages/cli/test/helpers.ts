@@ -13,11 +13,12 @@ const BLOCK_NETWORK = resolve(here, "block-network.cjs");
 export const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 
 /**
- * Run the CLI in an empty directory with no credentials of any kind: no model
- * keys, no AWS profile, no .env. Optionally with every socket blocked.
+ * Run the CLI in an empty directory (or the one given) with no credentials of
+ * any kind: no model keys, no AWS profile, no .env. Optionally with every
+ * socket blocked.
  */
-export function cli(args: string[], options: { blockNetwork?: boolean; env?: Record<string, string> } = {}) {
-  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+export function cli(args: string[], options: { blockNetwork?: boolean; env?: Record<string, string>; cwd?: string } = {}) {
+  const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
   const run = spawnSync(
     process.execPath,
     [...(options.blockNetwork ? ["--require", BLOCK_NETWORK] : []), "--import", TSX, CLI, ...args],

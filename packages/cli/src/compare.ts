@@ -57,6 +57,7 @@ export function compareScans(previous: ScanResult, current: ScanResult): ScanRes
     previousScannedAt: previous.scannedAt,
     newCount: added.length,
     newMonthlyUsd: sum(added),
+    newInRegionsNotScannedBefore: added.filter((f) => !previous.regions.includes(f.region)).length,
     resolved,
     resolvedMonthlyUsd: sum(resolved),
     unchangedCount: findings.length - added.length,

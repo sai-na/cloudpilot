@@ -182,7 +182,7 @@ export function renderHtml(result: ScanResult, options: { summary?: string; bann
   const since = comparisonLine(result);
   const resolved = result.comparison?.resolved ?? [];
   const shown = shownFindings(result, options.onlyNew);
-  const note = [since, onlyNewLine(result, shown)].filter(Boolean).join(" ");
+  const note = [since, onlyNewLine(result, shown, options.onlyNew)].filter(Boolean).join(" ");
   const findings = shown
     .map(
       (f) => `<article class="finding">

@@ -162,6 +162,11 @@ export interface Comparison {
   previousScannedAt: string;
   newCount: number;
   newMonthlyUsd: number;
+  /**
+   * How many of the new findings are in regions the earlier scan did not
+   * cover. They are new to the reader, but nothing says they appeared since.
+   */
+  newInRegionsNotScannedBefore: number;
   /** Findings the earlier scan had, in regions scanned again, that are now gone. */
   resolved: Array<{ title: string; region: string; resourceIds: string[]; monthlyCostUsd: number }>;
   resolvedMonthlyUsd: number;

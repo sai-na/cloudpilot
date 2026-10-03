@@ -40,8 +40,13 @@ export function header(result: ScanResult): string[] {
 export function comparisonLine(result: ScanResult): string | undefined {
   const c = result.comparison;
   if (!c) return undefined;
-  if (c.newCount === 0 && c.resolved.length === 0) return `Nothing has changed since the last scan (${c.previousScannedAt}).`;
-  return `Since the last scan (${c.previousScannedAt}): ${c.newCount} new (${money(c.newMonthlyUsd)} a month), ${c.resolved.length} resolved (${money(c.resolvedMonthlyUsd)} a month), ${c.unchangedCount} unchanged.`;
+  // Says only what was compared: the same findings can still cost a little more or less than before.
+  if (c.newCount === 0 && c.resolved.length === 0) return `No new or resolved findings since the last scan (${c.previousScannedAt}).`;
+  const line = `Since the last scan (${c.previousScannedAt}): ${c.newCount} new (${money(c.newMonthlyUsd)} a month), ${c.resolved.length} resolved (${money(c.resolvedMonthlyUsd)} a month), ${c.unchangedCount} unchanged.`;
+  const widened = c.newInRegionsNotScannedBefore;
+  if (!widened) return line;
+  // A wider scan than last time: those findings are new to the reader, not necessarily new in the account.
+  return `${line} ${widened} of the new ${widened === 1 ? "one is" : "ones are"} in regions the last scan did not cover.`;
 }
 
 /** The findings a report lists: all of them, or with onlyNew just those the earlier scan did not have. */
@@ -50,7 +55,9 @@ export function shownFindings(result: ScanResult, onlyNew = false): Finding[] {
 }
 
 /** Note saying the list was cut down to the new findings, when it was. */
-export function onlyNewLine(result: ScanResult, shown: Finding[]): string | undefined {
+export function onlyNewLine(result: ScanResult, shown: Finding[], onlyNew = false): string | undefined {
+  // Asked for only the new findings with nothing to compare against: every finding is shown, and says why.
+  if (onlyNew && !result.comparison) return "No earlier scan to compare with; showing every finding.";
   if (shown.length >= result.findings.length) return undefined;
   return `Showing only the ${shown.length} new finding${shown.length === 1 ? "" : "s"}.`;
 }
@@ -79,7 +86,7 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
 
   if (result.findings.length > 0) {
     const shown = shownFindings(result, options.onlyNew);
-    const filtered = onlyNewLine(result, shown);
+    const filtered = onlyNewLine(result, shown, options.onlyNew);
     if (filtered) lines.push(dim(filtered));
     lines.push("");
     shown.forEach((f, n) => {
@@ -120,7 +127,7 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
   const since = comparisonLine(result);
   if (since) lines.push(since, "");
   const shown = shownFindings(result, options.onlyNew);
-  const filtered = onlyNewLine(result, shown);
+  const filtered = onlyNewLine(result, shown, options.onlyNew);
   if (filtered) lines.push(filtered, "");
   if (summary) lines.push("## Summary", "", summary, "");
   const resolved = resolvedLines(result);

@@ -146,7 +146,13 @@ just the new findings, `--compare <file>` compares with a scan saved earlier
 by `--json`, and `--no-compare` turns it off. With `--json` every finding is
 kept and carries `isNew`, with the counts under `comparison`. A finding in a
 region that was not scanned again is never reported as resolved, and scans of
-different accounts are not compared.
+different accounts are not compared. When a scan covers a region the last one
+did not, its findings there count as new, and the line says how many of the
+new ones that explains. With no earlier scan, `--only-new` lists every finding
+and says so.
+
+The saved scan is the account as it was last seen, so a `--replay` run and a
+`--redact-account` run both leave it untouched.
 
 ### Score it against the waste lab
 
@@ -295,7 +301,8 @@ AWS_ENDPOINT_URL=http://localhost:5050 node dist/index.js scan --region ap-south
 | `--live-llm` | With `--replay`: AWS from the recording, model called live |
 | `--redact-account` | Show the account ID as `123456789012` |
 
-The last scan is saved to `.cloudpilot/last-scan.json`.
+The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
+and `--redact-account` runs.
 
 ## Limits
 

@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -87,10 +87,11 @@ test("with no --profile the standard credential chain is used, as in CloudShell"
   assert.match(result.summary, /^Estimated waste: \$/);
 });
 
-test("a second scan from the same directory says by itself that nothing has changed", () => {
+test("a second scan from the same directory says by itself that nothing is new or resolved", () => {
   const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
-  const run = () =>
-    spawnSync(process.execPath, ["--import", TSX, CLI, "scan", "--profile", PROFILE, "--region", REGION], {
+  const saved = join(cwd, ".cloudpilot/last-scan.json");
+  const run = (...extra: string[]) =>
+    spawnSync(process.execPath, ["--import", TSX, CLI, "scan", "--profile", PROFILE, "--region", REGION, ...extra], {
       encoding: "utf8",
       cwd,
       env: { ...process.env, NO_COLOR: "1" },
@@ -100,7 +101,14 @@ test("a second scan from the same directory says by itself that nothing has chan
   assert.doesNotMatch(first.stdout, /since the last scan/i);
   const second = run();
   assert.equal(second.status, 0, second.stderr);
-  assert.match(second.stdout, /Nothing has changed since the last scan \(\S+\)\./);
+  assert.match(second.stdout, /No new or resolved findings since the last scan \(\S+\)\./);
+
+  // A run that hides the account ID still compares, but must not replace the baseline.
+  const baseline = readFileSync(saved, "utf8");
+  const redacted = run("--redact-account");
+  assert.equal(redacted.status, 0, redacted.stderr);
+  assert.match(redacted.stdout, /No new or resolved findings since the last scan/);
+  assert.equal(readFileSync(saved, "utf8"), baseline, "the saved last scan is untouched");
 });
 
 function roleArn(): string {

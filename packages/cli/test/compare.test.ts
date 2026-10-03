@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { forModel, summaryRequest } from "../src/advisor.js";
 import { compareScans, isScanResult } from "../src/compare.js";
 import { renderHtml } from "../src/html.js";
 import { allowedValues, unsupportedValues } from "../src/output-check.js";
-import { renderMarkdown, renderText, templatedSummary } from "../src/report.js";
+import { comparisonLine, renderMarkdown, renderText, templatedSummary } from "../src/report.js";
 import type { Finding, ScanResult } from "../src/types.js";
 import { cli, FIXTURE } from "./helpers.js";
 
@@ -45,6 +46,7 @@ test("a repeat scan marks what is new and lists what was resolved", () => {
     previousScannedAt: "2026-10-02T00:00:00Z",
     newCount: 1,
     newMonthlyUsd: 9.12,
+    newInRegionsNotScannedBefore: 0,
     resolved: [{ title: "Unattached volume vol-0bbbbbbbbbbbbbbbb", region: "ap-south-1", resourceIds: ["vol-0bbbbbbbbbbbbbbbb"], monthlyCostUsd: 18.24 }],
     resolvedMonthlyUsd: 18.24,
     unchangedCount: 1,
@@ -67,10 +69,43 @@ test("a repeat scan marks what is new and lists what was resolved", () => {
   assert.deepEqual(unsupportedValues(summary, allowedValues(result)), []);
 });
 
-test("an identical scan says nothing has changed", () => {
+test("an identical scan says there is nothing new or resolved, and claims no more than that", () => {
   const result = compareScans(yesterday, scan(yesterday.findings))!;
   assert.equal(result.comparison!.newCount, 0);
-  assert.match(renderText(result), /Nothing has changed since the last scan \(2026-10-02T00:00:00Z\)\./);
+  assert.match(renderText(result), /No new or resolved findings since the last scan \(2026-10-02T00:00:00Z\)\./);
+
+  // The same finding at a different cost is neither new nor resolved, so the line must not say nothing changed.
+  const dearer = compareScans(yesterday, scan([finding("vol-0aaaaaaaaaaaaaaaa", 60), finding("vol-0bbbbbbbbbbbbbbbb", 18.24)]))!;
+  assert.match(renderText(dearer), /No new or resolved findings since the last scan/);
+  assert.doesNotMatch(renderText(dearer), /nothing has changed/i);
+});
+
+test("findings in a region the last scan did not cover are new, and the report says why", () => {
+  const today = scan([finding("vol-0aaaaaaaaaaaaaaaa", 57), finding("vol-0bbbbbbbbbbbbbbbb", 18.24), finding("vol-0cccccccccccccccc", 9.12), finding("vol-0dddddddddddddddd", 5, "us-east-1")], {
+    regions: ["ap-south-1", "us-east-1"],
+  });
+  const result = compareScans(yesterday, today)!;
+  assert.equal(result.comparison!.newCount, 2);
+  assert.equal(result.comparison!.newInRegionsNotScannedBefore, 1);
+  const expected = /2 new \(\$14\.12 a month\), 0 resolved \(\$0\.00 a month\), 2 unchanged\. 1 of the new one is in regions the last scan did not cover\./;
+  for (const report of [renderText(result), renderMarkdown(result), renderHtml(result), templatedSummary(result)]) assert.match(report, expected);
+  assert.deepEqual(unsupportedValues(comparisonLine(result)!, allowedValues(result)), [], "the line quotes only amounts the scan holds");
+  assert.equal(forModel(result).comparison!.newInRegionsNotScannedBefore, 1);
+
+  // The same regions as last time: nothing to explain.
+  const same = compareScans(yesterday, scan([finding("vol-0cccccccccccccccc", 9.12)]))!;
+  assert.equal(same.comparison!.newInRegionsNotScannedBefore, 0);
+  assert.doesNotMatch(renderText(same), /did not cover/);
+});
+
+test("asking for only the new findings with no earlier scan shows everything and says so", () => {
+  const first = scan([finding("vol-0aaaaaaaaaaaaaaaa", 57)]);
+  const note = /No earlier scan to compare with; showing every finding\./;
+  for (const report of [renderText(first, { onlyNew: true }), renderMarkdown(first, undefined, undefined, { onlyNew: true }), renderHtml(first, { onlyNew: true })]) {
+    assert.match(report, note);
+    assert.ok(report.includes("vol-0aaaaaaaaaaaaaaaa"));
+  }
+  for (const report of [renderText(first), renderMarkdown(first), renderHtml(first)]) assert.doesNotMatch(report, note);
 });
 
 test("a finding in a region that was not scanned again is not called resolved", () => {
@@ -153,13 +188,20 @@ test("the command compares with an earlier scan file and can list only what is n
   assert.equal(json.findings.filter((f: Finding) => f.isNew).length, 2);
 });
 
-test("every scan leaves .cloudpilot/last-scan.json as the plain result, the baseline the next scan reads", () => {
-  // The automatic comparison itself needs two live scans: test/lab/record-replay.test.ts covers it.
-  const run = cli(["scan", "--replay", FIXTURE, "--json"], { blockNetwork: true });
-  const saved = JSON.parse(readFileSync(join(run.cwd, ".cloudpilot/last-scan.json"), "utf8"));
-  assert.equal(saved.findings.length, 10);
-  assert.equal(saved.comparison, undefined, "the saved scan carries no comparison data");
-  assert.ok(isScanResult(saved), "and the next run can compare with it");
+test("a replay leaves the saved last scan alone: a recording is not the account as it is now", () => {
+  // What a live scan saves, and the automatic comparison with it, are covered in test/lab/record-replay.test.ts.
+  const fresh = cli(["scan", "--replay", FIXTURE, "--json"], { blockNetwork: true });
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.equal(existsSync(join(fresh.cwd, ".cloudpilot/last-scan.json")), false, "a replay does not create a baseline");
+
+  // And one that is already there survives a replay byte for byte.
+  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+  const baseline = JSON.stringify(yesterday);
+  mkdirSync(join(cwd, ".cloudpilot"));
+  writeFileSync(join(cwd, ".cloudpilot/last-scan.json"), baseline);
+  const again = cli(["scan", "--replay", FIXTURE], { blockNetwork: true, cwd });
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(readFileSync(join(cwd, ".cloudpilot/last-scan.json"), "utf8"), baseline);
 });
 
 test("a file that is not a scan result is refused by name", () => {

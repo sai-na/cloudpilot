@@ -209,10 +209,15 @@ async function runScan(options: CommonOptions, command: "scan" | "ask", question
   });
 
   const result = mergeScans(accountId, scans);
-  // A convenience copy; skipped quietly where the working directory cannot be written to.
-  await mkdir(dirname(LAST_SCAN), { recursive: true })
-    .then(() => writeFile(LAST_SCAN, redact(JSON.stringify(result, null, 2))))
-    .catch(() => {});
+  // The baseline the next scan compares with. A replay is a recording, not the
+  // account as it is now, and a redacted run hides the account ID the
+  // comparison needs, so neither may replace it. Skipped quietly where the
+  // working directory cannot be written to.
+  if (mode() !== "replay" && !options.redactAccount) {
+    await mkdir(dirname(LAST_SCAN), { recursive: true })
+      .then(() => writeFile(LAST_SCAN, JSON.stringify(result, null, 2)))
+      .catch(() => {});
+  }
   return { profile, scope, scans, result, banner };
 }
 
