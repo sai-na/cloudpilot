@@ -1,0 +1,6 @@
+# One node is enough: the lab is about what the workloads ask for, not about scheduling.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cloudpilot-lab
+nodes:
+  - role: control-plane

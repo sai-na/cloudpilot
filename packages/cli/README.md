@@ -320,6 +320,80 @@ AWS_ENDPOINT_URL=http://localhost:5050 node dist/index.js scan --region ap-south
 The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
 and `--redact-account` runs.
 
+## Kubernetes
+
+Kubernetes gives a workload whatever its manifest asks for and never checks
+whether it needed it. `cloudpilot kube` checks:
+
+```sh
+npx @meruapps/cloudpilot kube
+```
+
+It reads the cluster your `kubectl` points at (or `--context <name>`), with
+the access you already have, and reports:
+
+| Finding | Evidence | Fix it prints |
+|---|---|---|
+| A workload requests more CPU or memory than it uses | The request, and the busiest five minutes (CPU) or the highest working set (memory) Prometheus holds for any of its pods, including pods already replaced | One `kubectl set resources` per container, with the old values as the way back. Reversible |
+| A volume claim no pod mounts | Bound, with no running or pending pod using it | `kubectl delete persistentvolumeclaim`. Permanent |
+| A volume left Released | Its claim was deleted and the volume was kept | `kubectl delete persistentvolume`. Permanent |
+
+The suggested request is the peak plus 15%, never below 10m CPU or 32Mi of
+memory. A request is only reported when it is at least twice the suggestion
+and the difference is worth a restart (50m CPU, 64Mi memory). A container
+that has been killed for running out of memory never has its memory lowered:
+a usage graph can miss the moment it ran out, the kill on the pod's record
+cannot. Deployments, StatefulSets and DaemonSets are judged; jobs and bare
+pods are not, and neither is anything in `kube-system`.
+
+### What it needs
+
+- **`kubectl`**, which also brings whatever sign-in your cluster uses. Every
+  read is `kubectl get --raw`, which can only GET. A test fails if the code
+  asks kubectl for anything else.
+- **Prometheus with the kubelet's container metrics**
+  (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`),
+  which kube-prometheus-stack and most setups collect. It is found among the
+  cluster's services and queried through the API server, so nothing needs
+  port-forwarding. Name it with `--prometheus namespace/service:port` if it is
+  not found. Without one, volumes are still reported and the report says
+  requests were not judged.
+- For a dedicated identity with the least access, apply
+  [`docs/cloudpilot-kube-readonly.yaml`](../../docs/cloudpilot-kube-readonly.yaml):
+  it may list workloads, pods, services and volumes and query one Prometheus
+  service. It cannot read Secrets or ConfigMaps, or change anything.
+
+### How much history
+
+Requests are judged over `--lookback-hours` (default 168, a week). If
+Prometheus holds less, the finding says how much it had, and rule confidence
+drops: 90% with a week, 80% with a day, 60% with an hour, 40% with less. A
+workload with under five minutes of history is not judged at all.
+
+### What a vCPU costs
+
+Costs use the OpenCost project's default prices ($0.031611 per vCPU-hour,
+$0.004237 per GiB-hour of memory, $0.04 per GiB-month of storage) unless you
+give your own with `--cpu-hour-usd`, `--memory-gib-hour-usd` and
+`--storage-gib-month-usd`. The report says which were used. Lowering a
+request frees capacity; the money is saved once that lets the cluster run
+fewer or smaller nodes, which a node autoscaler does for you.
+
+### The rest works the same
+
+`--json`, `--out`, `--html`, `--compare`, `--no-compare` and `--only-new`
+behave as they do for `scan`. The last scan is kept per cluster
+(`.cloudpilot/last-kube-scan-<context>.json`), so a repeat scan says what is
+new without touching the AWS baseline. Label or annotate a workload or volume
+`cloudpilot/ignore=true` to leave it out. `--namespace <name>` reads one
+namespace.
+
+Not yet for clusters: `ask`, the MCP server, `--explain`, record and replay,
+and the daily report.
+
+The rules are checked against a seeded cluster: see
+[`k8s-lab/`](../../k8s-lab).
+
 ## Limits
 
 - `--offline` prices come from one region's price file, so an offline scan
@@ -332,12 +406,21 @@ and `--redact-account` runs.
   Without it the upload is still found, with its cost reported as unknown.
 - Idle detection is CPU only. A box that is busy on network or disk with a
   quiet CPU would be flagged.
+- Kubernetes: peak use is taken from the history Prometheus holds. A workload
+  whose busy season falls outside that window (month-end, a yearly sale) will
+  look over-requested; widen `--lookback-hours` or label it
+  `cloudpilot/ignore=true`.
+- Kubernetes: a past pod is matched to its workload by name, so two workloads
+  named alike in one namespace (`api` and `api-v2`) can, rarely, share history.
+- Kubernetes: limits are not changed, and a workload kept in sync by Helm,
+  Argo CD or Flux must be changed at its source. The finding says so.
 
 ## Development
 
 ```sh
 npm test            # unit tests and replay tests, no AWS or network needed
 npm run test:lab    # records and replays a scan of the live waste lab
+npm run test:kube-lab   # scans the Kubernetes lab (a kind cluster on this machine)
 npm run typecheck
 ```
 

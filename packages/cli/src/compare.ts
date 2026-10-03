@@ -50,7 +50,8 @@ export function compareScans(previous: ScanResult, current: ScanResult): ScanRes
   // A finding is only "resolved" if its region was read again in full and it is
   // gone. Where a check could not run, the resource may well still be there and
   // only the reading of it is missing, which is never a fix.
-  const incomplete = regionsNotFullyScanned(current.warnings);
+  // A cluster is read as a whole, so a failed read there leaves every namespace in doubt.
+  const incomplete = current.cluster && current.warnings.length > 0 ? new Set(current.regions) : regionsNotFullyScanned(current.warnings);
   const readAgain = (region: string) => current.regions.includes(region) && !incomplete.has(region);
   const resolved = previous.findings
     .filter((f) => readAgain(f.region) && !now.has(keyOf(f)))

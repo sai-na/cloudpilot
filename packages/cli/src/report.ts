@@ -22,14 +22,29 @@ function styleText(style: keyof typeof ANSI, text: string): string {
  */
 export const shortId = (id: string) => (id.length > 64 ? `${id.slice(0, 16)}...${id.slice(-6)}` : id);
 
+/** The words for what was scanned and where findings live: an account and its regions, or a cluster and its namespaces. */
+export const words = (result: ScanResult) =>
+  result.cluster ? { scope: "cluster", place: "namespace", places: "namespaces" } : { scope: "account", place: "region", places: "regions" };
+
 /** "ap-south-1" for one region, "17 regions" for several. */
-export const regionLabel = (regions: string[]) => (regions.length === 1 ? regions[0]! : `${regions.length} regions`);
+export const regionLabel = (result: ScanResult) => (result.regions.length === 1 ? result.regions[0]! : `${result.regions.length} ${words(result).places}`);
 
 /** Regions that have at least one finding, in name order. */
 export const regionsWithFindings = (result: ScanResult) => [...new Set(result.findings.map((f) => f.region))].sort();
 
 export function header(result: ScanResult): string[] {
-  const where = result.regions.length === 1 ? `region ${result.regions[0]}` : `${result.regions.length} regions scanned`;
+  const { place, places } = words(result);
+  const where = result.regions.length === 1 ? `${place} ${result.regions[0]}` : `${result.regions.length} ${places} scanned`;
+  const cluster = result.cluster;
+  if (cluster) {
+    const p = cluster.prices;
+    const from = p.source === "opencost-defaults" ? "OpenCost defaults; set your own with --cpu-hour-usd, --memory-gib-hour-usd, --storage-gib-month-usd" : "set on the command line";
+    return [
+      `Cluster ${cluster.context}, ${where}, scanned ${result.scannedAt}`,
+      `Prices: $${p.cpuHourUsd} per vCPU-hour, $${p.memoryGibHourUsd} per GiB-hour of memory, $${p.storageGibMonthUsd} per GiB-month of storage (${from})`,
+      cluster.prometheus ? `Usage: Prometheus at ${cluster.prometheus}, the last ${cluster.lookbackHours} ${cluster.lookbackHours === 1 ? "hour" : "hours"}` : "Usage: no Prometheus was read, so requests were not compared with real use",
+    ];
+  }
   return [
     `Account ${result.accountId}, ${where}, scanned ${result.scannedAt}`,
     `Prices: ${result.prices.source}, fetched ${result.prices.fetchedAt}`,
@@ -48,7 +63,8 @@ export function comparisonLine(result: ScanResult): string | undefined {
   // A wider scan than last time: those findings are new to the reader, not necessarily new in the account.
   // "one" or "ones" follows how many are new; "is" or "are" follows how many of them this explains.
   const ones = c.newCount === 1 ? "one" : "ones";
-  const where = widened === 1 ? "is in a region" : "are in regions";
+  const { place, places } = words(result);
+  const where = widened === 1 ? `is in a ${place}` : `are in ${places}`;
   return `${line} ${widened} of the new ${ones} ${where} the last scan did not cover.`;
 }
 
@@ -77,7 +93,7 @@ export function onlyNewLine(result: ScanResult, shown: Finding[], options: Repor
   // Asked for only the new findings with no comparison to go by: every finding is shown, and says why that is.
   if (options.onlyNew && !result.comparison) {
     if (options.noComparison === "off") return "This scan was not compared with an earlier one; showing every finding.";
-    if (options.noComparison === "not-comparable") return "The scan to compare with is of a different account; showing every finding.";
+    if (options.noComparison === "not-comparable") return `The scan to compare with is of a different ${words(result).scope}; showing every finding.`;
     return "No earlier scan to compare with; showing every finding.";
   }
   if (shown.length >= result.findings.length) return undefined;
@@ -204,7 +220,8 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
 export function skippedLine(result: ScanResult): string | undefined {
   const n = result.skippedByTag.length;
   if (n === 0) return undefined;
-  return `${n} resource${n === 1 ? " was" : "s were"} skipped because of the tag cloudpilot:ignore=true: ${result.skippedByTag.join(", ")}`;
+  const marker = result.cluster ? "label cloudpilot/ignore=true" : "tag cloudpilot:ignore=true";
+  return `${n} resource${n === 1 ? " was" : "s were"} skipped because of the ${marker}: ${result.skippedByTag.join(", ")}`;
 }
 
 export const KIND: Record<Pattern, string> = {
@@ -217,6 +234,9 @@ export const KIND: Record<Pattern, string> = {
   "unused-ami": "Unused AMIs",
   "bucket-without-lifecycle": "Buckets with no lifecycle rule",
   "incomplete-multipart-upload": "Incomplete multipart uploads",
+  "over-requested-workload": "Workloads requesting more than they use",
+  "unused-volume-claim": "Volume claims no pod mounts",
+  "released-volume": "Volumes left Released",
 };
 
 /**
@@ -229,12 +249,12 @@ export function templatedSummary(result: ScanResult, options: { shortenIds?: boo
   const label = (ids: string[]) => (options.shortenIds ? ids.map(shortId) : ids).join(", ");
   if (result.findings.length === 0) {
     const since = comparisonLine(result);
-    return [`No waste found in ${regionLabel(result.regions)}.`, ...(since ? [since] : []), ...(skippedLine(result) ? [skippedLine(result)!] : [])].join("\n");
+    return [`No waste found in ${regionLabel(result)}.`, ...(since ? [since] : []), ...(skippedLine(result) ? [skippedLine(result)!] : [])].join("\n");
   }
   const where =
     result.regions.length === 1
       ? result.regions[0]!
-      : `${regionsWithFindings(result).length} of the ${result.regions.length} regions scanned`;
+      : `${regionsWithFindings(result).length} of the ${result.regions.length} ${words(result).places} scanned`;
   const since = comparisonLine(result);
   const lines = [
     `Estimated waste: ${money(result.totalMonthlyWasteUsd)} per month across ${result.findings.length} finding${result.findings.length === 1 ? "" : "s"} in ${where}.`,
@@ -252,13 +272,13 @@ export function templatedSummary(result: ScanResult, options: { shortenIds?: boo
 
   if (result.regions.length > 1) {
     const withFindings = regionsWithFindings(result);
-    lines.push("", "By region:");
+    lines.push("", `By ${words(result).place}:`);
     for (const region of withFindings) {
       const fs = result.findings.filter((f) => f.region === region);
       lines.push(`- ${region}: ${fs.length} finding${fs.length === 1 ? "" : "s"}, ${money(total(fs))} per month.`);
     }
     const clean = result.regions.length - withFindings.length;
-    if (clean > 0) lines.push(`- ${clean} other region${clean === 1 ? "" : "s"}: nothing found.`);
+    if (clean > 0) lines.push(`- ${clean} other ${clean === 1 ? words(result).place : words(result).places}: nothing found.`);
   }
 
   const top = result.findings[0]!;
@@ -271,6 +291,9 @@ export function templatedSummary(result: ScanResult, options: { shortenIds?: boo
   }
   if (groups.has("orphaned-snapshot") || groups.has("unused-ami")) {
     lines.push("Snapshot and AMI costs are upper bounds based on provisioned size.");
+  }
+  if (groups.has("over-requested-workload")) {
+    lines.push("Lower requests save money once the freed capacity lets the cluster run fewer or smaller nodes.");
   }
   const skipped = skippedLine(result);
   if (skipped) lines.push(skipped);

@@ -14,11 +14,20 @@ command, and what about that fix cannot be undone.
 
 ## What it finds
 
+In an AWS account:
+
 Unattached EBS volumes, gp2 volumes that would be cheaper as gp3, idle
 Elastic IPs, stopped instances still paying for storage, idle running
 instances, snapshots of deleted volumes, unused AMIs, buckets with no
 lifecycle rule, and incomplete multipart uploads. The rules, their
 confidence and their limits are in [`packages/cli/README.md`](packages/cli/README.md).
+
+In a Kubernetes cluster, with `npx @meruapps/cloudpilot kube`:
+
+Workloads that request more CPU or memory than they use, volume
+claims no pod mounts, and volumes left Released. It reads through your own
+`kubectl` and the cluster's Prometheus, and prints the `kubectl` command for
+each fix with the old values as the way back.
 
 ## How it works
 
@@ -71,6 +80,7 @@ says what is new, what was resolved and what is unchanged.
 | [`packages/cli`](packages/cli) | The CloudPilot command, published as `@meruapps/cloudpilot` |
 | [`docs/waste-lab.md`](docs/waste-lab.md) | The waste lab: a test AWS account seeded with nine kinds of waste, and the answer key CloudPilot is scored against |
 | `terraform/`, `scripts/`, `emulator/`, `lab-spec.json`, `pricing/` | The lab itself |
+| [`k8s-lab/`](k8s-lab) | The Kubernetes waste lab: a local cluster with seeded waste and its answer key |
 | [`deploy/`](deploy) | The daily report: a CloudFormation template that runs the scan on a schedule in your own account and emails what is new |
 | [`demo/`](demo) | Demo runbook and the record and replay scripts |
 | [`site/`](site) | The landing page |

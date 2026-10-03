@@ -39,6 +39,7 @@
     "dev": "tsx src/index.ts",
     "test": "tsx --test test/*.test.ts",
     "test:lab": "tsx --test test/lab/*.test.ts",
+    "test:kube-lab": "tsx --test test/kube-lab/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build"
   },

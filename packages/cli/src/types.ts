@@ -122,7 +122,11 @@ export type Pattern =
   | "orphaned-snapshot"
   | "unused-ami"
   | "bucket-without-lifecycle"
-  | "incomplete-multipart-upload";
+  | "incomplete-multipart-upload"
+  // Kubernetes
+  | "over-requested-workload"
+  | "unused-volume-claim"
+  | "released-volume";
 
 /**
  * How much care a fix needs before anyone runs it.
@@ -138,7 +142,7 @@ export interface Fix {
 }
 
 export interface Finding {
-  /** Region the resource lives in. */
+  /** Where the resource lives: an AWS region, or for a cluster scan the namespace. */
   region: string;
   pattern: Pattern;
   title: string;
@@ -180,12 +184,36 @@ export interface RegionScan {
   findings: Finding[];
 }
 
+/** Unit prices a cluster's findings are costed with. */
+export interface ClusterPrices {
+  /** Where they come from: the OpenCost project's defaults, or the command line. */
+  source: "opencost-defaults" | "command-line";
+  cpuHourUsd: number;
+  memoryGibHourUsd: number;
+  storageGibMonthUsd: number;
+}
+
+/** What a cluster scan read, beyond its findings. */
+export interface ClusterInfo {
+  /** The kubectl context that was read. */
+  context: string;
+  server?: string;
+  /** The Prometheus the usage figures came from, as namespace/service:port. */
+  prometheus?: string;
+  /** Hours of usage history requests were judged by. */
+  lookbackHours: number;
+  prices: ClusterPrices;
+}
+
 export interface ScanResult {
+  /** The AWS account ID. For a cluster scan, the kubectl context: what tells one scanned thing from another. */
   accountId: string;
-  /** Every region that was scanned, including those with nothing in them. */
+  /** Every region that was scanned, including those with nothing in them. For a cluster scan, the namespaces. */
   regions: string[];
+  /** Present when this is the scan of a Kubernetes cluster rather than an AWS account. */
+  cluster?: ClusterInfo;
   scannedAt: string;
-  prices: { source: PriceBook["source"]; fetchedAt: string };
+  prices: { source: PriceBook["source"] | ClusterPrices["source"]; fetchedAt: string };
   findings: Finding[];
   totalMonthlyWasteUsd: number;
   /** Resources left out because they are tagged cloudpilot:ignore=true. */

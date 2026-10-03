@@ -6,7 +6,7 @@
  * they want, the saving and the script follow at once, and they copy one
  * script. Fixes that can be undone start ticked; permanent ones never do.
  */
-import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine } from "./report.js";
+import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine, words } from "./report.js";
 import type { Finding, Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
@@ -298,7 +298,9 @@ export function renderHtml(result: ScanResult, options: ReportOptions & { summar
     count === 0
       ? "No waste found."
       : `${money(result.totalMonthlyWasteUsd)} a month of estimated waste, in ${count} finding${count === 1 ? "" : "s"}.`;
-  const [, pricesLine] = header(result);
+  const [, pricesLine, usageLine] = header(result);
+  const { scope, places } = words(result);
+  const capital = (word: string) => word[0]!.toUpperCase() + word.slice(1);
   const regions =
     result.regions.length === 1
       ? result.regions[0]!
@@ -311,7 +313,7 @@ export function renderHtml(result: ScanResult, options: ReportOptions & { summar
   const choices = shown.map(choicesFor);
   const chosen = choices.flat().filter((c) => c.chosen);
   const head = [
-    `# CloudPilot fix script for AWS account ${result.accountId}`,
+    `# CloudPilot fix script for ${result.cluster ? "cluster" : "AWS account"} ${result.accountId}`,
     `# From the scan of ${result.scannedAt}. CloudPilot has run none of this.`,
     "# Read every line before you run it.",
   ].join("\n");
@@ -348,7 +350,7 @@ ${choices[n]!.map(fixBlock).join("\n")}
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CloudPilot scan of account ${escape(result.accountId)}</title>
+<title>CloudPilot scan of ${scope} ${escape(result.accountId)}</title>
 <style>${STYLE}</style>
 </head>
 <body>
@@ -356,10 +358,11 @@ ${options.banner ? `<p class="replay" role="note">${escape(options.banner)}</p>`
 <main>
 <h1>${escape(headline)}</h1>
 <dl class="facts">
-<div><dt>Account</dt><dd>${escape(result.accountId)}</dd></div>
-<div><dt>Regions</dt><dd>${escape(regions)}</dd></div>
+<div><dt>${capital(scope)}</dt><dd>${escape(result.accountId)}</dd></div>
+<div><dt>${capital(places)}</dt><dd>${escape(regions)}</dd></div>
 <div><dt>Scanned</dt><dd>${escape(result.scannedAt)}</dd></div>
 <div><dt>Prices</dt><dd>${escape((pricesLine ?? "").replace(/^Prices: /, ""))}</dd></div>
+${usageLine ? `<div><dt>Usage</dt><dd>${escape(usageLine.replace(/^Usage: /, ""))}</dd></div>` : ""}
 </dl>
 ${note ? `<p class="since">${escape(note)}</p>` : ""}
 ${resolved.length > 0 ? `<section class="resolved">\n<h2>Resolved since the last scan</h2>\n<ul>\n${resolved.map((r) => `<li>${escape(r.title)} (${escape(r.resourceIds.map(shortId).join(", "))}), ${money(r.monthlyCostUsd)} a month</li>`).join("\n")}\n</ul>\n</section>` : ""}

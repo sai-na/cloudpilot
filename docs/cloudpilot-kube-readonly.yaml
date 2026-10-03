@@ -1,0 +1,75 @@
+# The least access `cloudpilot kube` needs in a cluster.
+#
+# It may list workloads, pods, services and volumes, and send GET requests to
+# one Prometheus service. It cannot read Secrets or ConfigMaps, and it has no
+# verb that creates, changes or deletes anything.
+#
+# You do not need this to try CloudPilot: it reads with whatever access your
+# own kubectl already has. Apply it when you want a dedicated identity whose
+# access you can point to, for example for a scheduled scan:
+#
+#   kubectl apply -f cloudpilot-kube-readonly.yaml
+#
+# Before applying, set the namespace and name of your Prometheus service in
+# the last two objects (marked EDIT).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudpilot
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudpilot
+  namespace: cloudpilot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudpilot-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "persistentvolumeclaims", "persistentvolumes"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cloudpilot-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cloudpilot-readonly
+subjects:
+  - kind: ServiceAccount
+    name: cloudpilot
+    namespace: cloudpilot
+---
+# Usage history: GET requests to one Prometheus service, through the API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudpilot-prometheus
+  namespace: monitoring # EDIT: the namespace your Prometheus service is in
+rules:
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: ["prometheus:9090"] # EDIT: <service name>:<port>
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudpilot-prometheus
+  namespace: monitoring # EDIT: the same namespace as above
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudpilot-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: cloudpilot
+    namespace: cloudpilot

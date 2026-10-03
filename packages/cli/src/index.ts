@@ -11,6 +11,8 @@ import { detect, mergeScans } from "./detect.js";
 import { loadEnvFile } from "./env.js";
 import { evaluate, renderEvaluation } from "./evaluate.js";
 import { renderHtml } from "./html.js";
+import { collectCluster, kubectlReader, parsePrometheusRef } from "./kube.js";
+import { detectCluster, OPENCOST_DEFAULTS } from "./kube-detect.js";
 import { serveMcp } from "./mcp.js";
 import { allowedValues, unsupportedValues, type Allowed } from "./output-check.js";
 import { fetchPrices, isEmpty, loadPriceFile, noPrices } from "./pricing.js";
@@ -29,7 +31,7 @@ import {
   startReplay,
 } from "./recording.js";
 import { money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
-import type { Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
+import type { ClusterPrices, Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
 
 const LAST_SCAN = ".cloudpilot/last-scan.json";
 
@@ -135,14 +137,14 @@ interface CompareOptions {
  * The earlier scan to compare with. By default that is the last scan made
  * from this directory, so a repeat scan says what changed without being asked.
  */
-async function previousScan(options: CompareOptions): Promise<ScanResult | undefined> {
+async function previousScan(options: CompareOptions, saved = LAST_SCAN): Promise<ScanResult | undefined> {
   if (options.compare === false) return undefined;
   const explicit = typeof options.compare === "string";
   // A replay repeats a recording exactly, and a recording has to replay as it
   // ran: the saved last scan is local state no recording can carry, so neither
   // mode picks one up by itself. Both still compare when told what to compare with.
   if (!explicit && (options.replay || options.record)) return undefined;
-  const path = explicit ? (options.compare as string) : LAST_SCAN;
+  const path = explicit ? (options.compare as string) : saved;
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(path, "utf8"));
@@ -289,6 +291,63 @@ function withCommonOptions(command: Command): Command {
 
 const VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
+interface OutputOptions {
+  json?: boolean;
+  out?: string;
+  html?: string;
+}
+
+/** Print the report, and write the files that were asked for. */
+async function present(result: ScanResult, summary: string, view: ReportOptions, options: OutputOptions, banner?: string): Promise<void> {
+  if (options.json) {
+    console.log(JSON.stringify({ ...result, summary, ...(banner ? { replay: banner } : {}) }, null, 2));
+  } else {
+    console.log(renderText(result, view));
+    console.log(`\nSummary\n\n${summary}`);
+  }
+  if (options.out) {
+    // Markdown by default; a .txt name gets the terminal report as plain text, ready to email.
+    const plain = options.out.toLowerCase().endsWith(".txt");
+    await writeFile(options.out, redact(plain ? renderPlainText(result, summary, banner, view) : renderMarkdown(result, summary, banner, view)));
+    note(`Report written to ${options.out}`);
+  }
+  if (options.html) {
+    await writeFile(options.html, redact(renderHtml(result, { summary, banner, ...view })));
+    note(`HTML report written to ${options.html}`);
+  }
+}
+
+interface KubeOptions extends OutputOptions {
+  context?: string;
+  namespace?: string;
+  prometheus?: string;
+  lookbackHours: string;
+  cpuHourUsd?: string;
+  memoryGibHourUsd?: string;
+  storageGibMonthUsd?: string;
+  compare?: string | false;
+  onlyNew?: boolean;
+  answerKey?: string;
+}
+
+function amount(text: string, flag: string): number {
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${flag} takes a number that is zero or more. Got "${text}".`);
+  return value;
+}
+
+/** OpenCost's defaults, with whichever prices were given on the command line in their place. */
+function clusterPrices(options: KubeOptions): ClusterPrices {
+  const given = [options.cpuHourUsd, options.memoryGibHourUsd, options.storageGibMonthUsd].some((v) => v !== undefined);
+  if (!given) return OPENCOST_DEFAULTS;
+  return {
+    source: "command-line",
+    cpuHourUsd: options.cpuHourUsd !== undefined ? amount(options.cpuHourUsd, "--cpu-hour-usd") : OPENCOST_DEFAULTS.cpuHourUsd,
+    memoryGibHourUsd: options.memoryGibHourUsd !== undefined ? amount(options.memoryGibHourUsd, "--memory-gib-hour-usd") : OPENCOST_DEFAULTS.memoryGibHourUsd,
+    storageGibMonthUsd: options.storageGibMonthUsd !== undefined ? amount(options.storageGibMonthUsd, "--storage-gib-month-usd") : OPENCOST_DEFAULTS.storageGibMonthUsd,
+  };
+}
+
 const program = new Command()
   .name("cloudpilot")
   .description("Read-only agent that finds wasted AWS spend and proposes the fix commands.")
@@ -316,23 +375,61 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
       ? await modelText(() => summarize(result, llmOptions(options, scope.homeRegion)), allowedValues(result), result)
       : templatedSummary(result, { shortenIds: true });
 
-    if (options.json) {
-      console.log(JSON.stringify({ ...result, summary, ...(banner ? { replay: banner } : {}) }, null, 2));
-    } else {
-      console.log(renderText(result, view));
-      console.log(`\nSummary\n\n${summary}`);
-    }
-    if (options.out) {
-      // Markdown by default; a .txt name gets the terminal report as plain text, ready to email.
-      const plain = options.out.toLowerCase().endsWith(".txt");
-      await writeFile(options.out, redact(plain ? renderPlainText(result, summary, banner, view) : renderMarkdown(result, summary, banner, view)));
-      note(`Report written to ${options.out}`);
-    }
-    if (options.html) {
-      await writeFile(options.html, redact(renderHtml(result, { summary, banner, ...view })));
-      note(`HTML report written to ${options.html}`);
-    }
+    await present(result, summary, view, options, banner);
     finish(result);
+  });
+
+program
+  .command("kube")
+  .description("Scan a Kubernetes cluster for workloads that request more than they use and for unused volumes (read-only, through kubectl)")
+  .option("--context <name>", "kubectl context to read (default: the current one)")
+  .option("--namespace <name>", "read only this namespace (default: every namespace except the cluster's own)")
+  .option("--prometheus <namespace/service:port>", "the Prometheus holding usage history (default: found among the cluster's services)")
+  .option("--lookback-hours <n>", "hours of usage history to judge requests by", "168")
+  .option("--cpu-hour-usd <n>", "what one vCPU costs per hour on your nodes (default: OpenCost's 0.031611)")
+  .option("--memory-gib-hour-usd <n>", "what one GiB of memory costs per hour (default: OpenCost's 0.004237)")
+  .option("--storage-gib-month-usd <n>", "what one GiB of storage costs per month (default: OpenCost's 0.04)")
+  .option("--json", "print the result as JSON instead of a report")
+  .option("--out <file>", "also write the report to a file: Markdown, or plain text when the name ends in .txt")
+  .option("--html <file>", "also write the report as one self-contained HTML file")
+  .option("--compare <file>", "say what changed since this earlier scan (default: the last scan of this cluster made from this directory)")
+  .option("--no-compare", "do not compare with an earlier scan")
+  .option("--only-new", "list only the findings that are new since the earlier scan")
+  .option("--answer-key <path>", "score the findings against a lab's answer key instead of printing the report")
+  .action(async (options: KubeOptions) => {
+    startLive({ redact: false });
+    const lookbackHours = amount(options.lookbackHours, "--lookback-hours");
+    if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
+    const prices = clusterPrices(options);
+    const reader = kubectlReader(options.context);
+    const { context } = await reader.identity();
+    // One saved scan per cluster, so scanning a second cluster never replaces the first one's baseline.
+    const saved = `.cloudpilot/last-kube-scan-${context.replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
+    const previous = await previousScan(options, saved);
+
+    note(`Reading cluster ${context} through kubectl (read-only)...`);
+    const inventory = await collectCluster(reader, {
+      namespace: options.namespace,
+      prometheus: options.prometheus ? parsePrometheusRef(options.prometheus) : undefined,
+      lookbackHours,
+    });
+    const scanned = detectCluster(inventory, prices);
+
+    if (options.answerKey) {
+      const evaluation = await evaluate(scanned, options.answerKey);
+      console.log(renderEvaluation(evaluation));
+      if (!evaluation.passed) process.exitCode = 1;
+      return;
+    }
+
+    await mkdir(dirname(saved), { recursive: true })
+      .then(() => writeFile(saved, JSON.stringify(scanned, null, 2)))
+      .catch(() => {});
+    const compared = previous ? compareScans(previous, scanned) : undefined;
+    if (previous && !compared && typeof options.compare === "string") note("The scan to compare with is of a different cluster; comparison skipped.");
+    const result = compared ?? scanned;
+    const view: ReportOptions = { onlyNew: Boolean(options.onlyNew), noComparison: noComparisonReason(options, previous, compared) };
+    await present(result, templatedSummary(result, { shortenIds: true }), view, options);
   });
 
 withCommonOptions(program.command("eval").description("Scan, then score the findings against a waste-lab answer key"))
