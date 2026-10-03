@@ -120,6 +120,21 @@ test("for OpenAI the summary takes the first family that has a mini model, ask t
   assert.equal(pickOpenAIModel([], "summary"), undefined);
 });
 
+test("for OpenAI a -nano model is small too: ask never takes one over a full-size model, and the summary prefers mini to nano", () => {
+  // No undated alias listed: the dated full-size model still beats mini and nano.
+  assert.equal(pickOpenAIModel(["gpt-5-2025-08-07", "gpt-5-mini-2025-08-07", "gpt-5-nano"], "ask"), "gpt-5-2025-08-07");
+  // A nano in a newer family does not beat the full-size model of an older one.
+  assert.equal(pickOpenAIModel(["gpt-6-nano", "gpt-5", "gpt-5-mini"], "ask"), "gpt-5");
+  assert.equal(pickOpenAIModel(["gpt-5-nano", "gpt-5-mini-2025-08-07", "gpt-5-2025-08-07"], "ask"), "gpt-5-2025-08-07");
+  // The summary takes mini before nano, then nano when there is no mini.
+  assert.equal(pickOpenAIModel(["gpt-5", "gpt-5-nano", "gpt-5-mini-2025-08-07"], "summary"), "gpt-5-mini-2025-08-07");
+  assert.equal(pickOpenAIModel(["gpt-6-nano", "gpt-5", "gpt-5-mini"], "summary"), "gpt-5-mini");
+  assert.equal(pickOpenAIModel(["gpt-5", "gpt-5-nano"], "summary"), "gpt-5-nano");
+  // A key that lists only small models gets what there is.
+  assert.equal(pickOpenAIModel(["gpt-5-nano"], "ask"), "gpt-5-nano");
+  assert.equal(pickOpenAIModel(["gpt-5-nano", "gpt-5-mini"], "ask"), "gpt-5-mini");
+});
+
 // ---- The two jobs pick different defaults, end to end ----
 
 test("Anthropic: the summary asks the small model and ask the stronger one, and the small one is sent no effort or fallback settings", async () => {
