@@ -1,0 +1,28 @@
+# no-mistakes gate configuration.
+# Read from the default branch only: a change to this file takes effect once
+# it is merged to main.
+
+commands:
+  # The offline suite: unit tests, replay tests and the MCP server driven by
+  # the official client. No AWS account or network is needed. A gate worktree
+  # is a fresh checkout, so dependencies are installed first (from the local
+  # npm cache where possible).
+  test: "cd packages/cli && npm ci --prefer-offline --no-audit --no-fund && npm test"
+  lint: "cd packages/cli && { [ -d node_modules ] || npm ci --prefer-offline --no-audit --no-fund; } && npm run typecheck"
+
+# No GitHub Actions checks run on this repository yet; the gate's own test
+# and lint steps are the checks. Remove this once a CI workflow exists.
+no_ci: true
+
+# Recorded AWS responses, the lockfile and generated sample output are data,
+# not code to review.
+ignore_patterns:
+  - "packages/cli/test/fixtures/**"
+  - "packages/cli/package-lock.json"
+  - "site/sample-report.html"
+  - "site/sample-report.png"
+
+# Keep test evidence out of the repository.
+test:
+  evidence:
+    store_in_repo: false
