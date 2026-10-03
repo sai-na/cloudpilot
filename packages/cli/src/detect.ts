@@ -1,13 +1,105 @@
-import { HOURS_PER_MONTH, type Finding, type Inventory, type PriceBook, type RegionScan, type ScanResult } from "./types.js";
+import {
+  HOURS_PER_MONTH,
+  RDS_PRICED_ENGINES,
+  RDS_PRICED_STORAGE,
+  rdsHourKey,
+  rdsStorageKey,
+  type Finding,
+  type InstanceInfo,
+  type Inventory,
+  type PriceBook,
+  type RdsInstanceInfo,
+  type RegionScan,
+  type ScanResult,
+} from "./types.js";
 
 export interface DetectOptions {
   /** A running instance is idle when its CPU never went above this. */
   idleCpuMaxPct: number;
   /** Minimum CPU history before an instance may be called idle. */
   idleMinHours: number;
+  /**
+   * A running instance is a size too big when its CPU never went above this.
+   * Half the vCPUs doubles the load on each, so a peak of 40% becomes about
+   * 80%, which still leaves headroom. Above this there is no safe margin.
+   */
+  oversizedCpuMaxPct: number;
+  /**
+   * The share of the requested history CloudWatch must hold before an
+   * instance is judged oversized or an RDS instance idle. A short history
+   * is a new resource, or a gap in the data, not evidence.
+   */
+  minCoverage: number;
 }
 
-export const DEFAULT_DETECT_OPTIONS: DetectOptions = { idleCpuMaxPct: 5, idleMinHours: 1 };
+export const DEFAULT_DETECT_OPTIONS: DetectOptions = { idleCpuMaxPct: 5, idleMinHours: 1, oversizedCpuMaxPct: 40, minCoverage: 0.9 };
+
+/**
+ * The size one step down in the same family: half the vCPUs and half the
+ * memory. Only the steps AWS makes by halving are listed; sizes such as
+ * 3xlarge or 9xlarge, and the smallest sizes, have no step down. Whether the
+ * smaller type exists is settled by the Price List, not guessed here.
+ */
+const STEP_DOWN: Record<string, string> = {
+  large: "medium",
+  xlarge: "large",
+  "2xlarge": "xlarge",
+  "4xlarge": "2xlarge",
+  "8xlarge": "4xlarge",
+  "12xlarge": "6xlarge",
+  "16xlarge": "8xlarge",
+  "18xlarge": "9xlarge",
+  "24xlarge": "12xlarge",
+  "32xlarge": "16xlarge",
+  "48xlarge": "24xlarge",
+};
+
+/** The t families (t2, t3, t3a, t4g) earn CPU credits, so a low CPU peak says little about what they need. */
+const BURSTABLE = /^t\d/;
+
+const smallerType = (type: string): string | undefined => {
+  const [family, size, ...rest] = type.split(".");
+  if (!family || !size || rest.length > 0 || BURSTABLE.test(family)) return undefined;
+  const down = STEP_DOWN[size];
+  return down ? `${family}.${down}` : undefined;
+};
+
+const isIdle = (i: InstanceInfo, options: DetectOptions) =>
+  i.state === "running" && i.cpu !== undefined && i.cpu.hoursObserved >= options.idleMinHours && i.cpu.maxPct < options.idleCpuMaxPct;
+
+/**
+ * Running instances that are not idle but whose CPU never rose high, each
+ * with the size one step down. Which of them are reported also depends on
+ * prices: this is the list a price lookup has to cover.
+ */
+export function oversizedCandidates(inventory: Inventory, options: DetectOptions = DEFAULT_DETECT_OPTIONS): Array<{ instance: InstanceInfo; smaller: string }> {
+  const out: Array<{ instance: InstanceInfo; smaller: string }> = [];
+  for (const i of inventory.instances) {
+    const cpu = i.cpu;
+    if (i.ignored || i.state !== "running" || !cpu || isIdle(i, options)) continue;
+    // Prices are On-Demand Linux on shared hardware, and a spot or instance-store instance cannot be stopped and resized.
+    if (i.platform !== "Linux/UNIX" || i.lifecycle || (i.tenancy && i.tenancy !== "default") || i.rootDeviceType === "instance-store") continue;
+    if (cpu.hoursObserved < options.minCoverage * cpu.windowHours || cpu.maxPct >= options.oversizedCpuMaxPct) continue;
+    const smaller = smallerType(i.type);
+    if (smaller) out.push({ instance: i, smaller });
+  }
+  return out;
+}
+
+/**
+ * RDS instances that nobody connected to for the whole window. An instance
+ * that is part of a cluster, that is a read replica or has replicas, or whose
+ * engine or storage is not one CloudPilot can price, is never judged.
+ */
+export function idleRdsInstances(inventory: Inventory, options: DetectOptions = DEFAULT_DETECT_OPTIONS): RdsInstanceInfo[] {
+  return inventory.rdsInstances.filter((d) => {
+    const c = d.connections;
+    if (d.ignored || d.status !== "available" || !c) return false;
+    if (d.clusterId || d.replicaOf || d.replicaIds.length > 0) return false;
+    if (!RDS_PRICED_ENGINES[d.engine] || !RDS_PRICED_STORAGE[d.storageType]) return false;
+    return c.maxConnections === 0 && c.hoursObserved >= options.minCoverage * c.windowHours;
+  });
+}
 
 const GIB = 1024 ** 3;
 
@@ -139,7 +231,7 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
       });
     }
 
-    if (i.state === "running" && i.cpu && i.cpu.hoursObserved >= options.idleMinHours && i.cpu.maxPct < options.idleCpuMaxPct) {
+    if (isIdle(i, options) && i.cpu) {
       const hourly = prices.instanceHour[i.type] ?? 0;
       findings.push({
         pattern: "idle-instance",
@@ -158,6 +250,90 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
         confidence: i.cpu.hoursObserved >= 24 ? 0.9 : i.cpu.hoursObserved >= 6 ? 0.8 : 0.6,
       });
     }
+  }
+
+  // Running instances one size too big. CPU is the only signal: memory is invisible without the CloudWatch agent.
+  for (const { instance: i, smaller } of oversizedCandidates(inventory, options)) {
+    const cpu = i.cpu!;
+    const hourly = prices.instanceHour[i.type];
+    const smallerHourly = prices.instanceHour[smaller];
+    const spec = prices.instanceSpecs[i.type];
+    const smallerSpec = prices.instanceSpecs[smaller];
+    // Without both prices there is no saving to state; without both specs, "one step down" is unconfirmed.
+    if (!hourly || !smallerHourly || hourly <= smallerHourly || !spec || !smallerSpec) continue;
+    if (spec.vcpu !== smallerSpec.vcpu * 2 || spec.memoryGib !== smallerSpec.memoryGib * 2) continue;
+    const instanceTypeArg = (type: string) => `"{\\"Value\\": \\"${type}\\"}"`;
+    const resize = (type: string) => [
+      cli(`ec2 stop-instances --instance-ids ${i.id}`),
+      cli(`ec2 wait instance-stopped --instance-ids ${i.id}`),
+      cli(`ec2 modify-instance-attribute --instance-id ${i.id} --instance-type ${instanceTypeArg(type)}`),
+      cli(`ec2 start-instances --instance-ids ${i.id}`),
+    ];
+    findings.push({
+      pattern: "oversized-instance",
+      title: `${i.type} could be ${smaller}: CPU peaked at ${cpu.maxPct.toFixed(1)}%`,
+      resourceType: "AWS::EC2::Instance",
+      resourceIds: [i.id],
+      evidence: [
+        `CloudWatch CPUUtilization over the last ${cpu.hoursObserved.toFixed(1)} h of the ${cpu.windowHours} h asked for: average ${cpu.averagePct.toFixed(2)}%, maximum ${cpu.maxPct.toFixed(2)}% (${cpu.datapoints} datapoints)`,
+        `On half the vCPUs the same load would peak at about ${(cpu.maxPct * 2).toFixed(0)}%`,
+        `${i.type} has ${spec.vcpu} vCPU and ${spec.memoryGib} GiB; ${smaller} has ${smallerSpec.vcpu} vCPU and ${smallerSpec.memoryGib} GiB (AWS Price List)`,
+        "Memory, disk and network use were not checked: CloudPilot reads CPU only, and memory is not visible without the CloudWatch agent",
+        ...(i.name ? [`Name tag: ${i.name}`] : []),
+      ],
+      monthlyCostUsd: (hourly - smallerHourly) * HOURS_PER_MONTH,
+      costBasis: `(${usd(hourly)} - ${usd(smallerHourly)})/hour x ${HOURS_PER_MONTH} hours (${i.type} to ${smaller})`,
+      fix: {
+        commands: resize(smaller),
+        risk: "caution",
+        rollback: `Needs downtime: the instance is stopped while it is resized, an instance store is erased when it stops, and a public IP that is not Elastic changes. To go back, run the same four commands with ${instanceTypeArg(i.type)} as the instance type. If an Auto Scaling group or a stack manages the instance, change its launch template or template instead: a replacement would launch at the old size.`,
+      },
+      // CPU alone cannot show that the memory fits. A short window is weaker still.
+      confidence: cpu.hoursObserved >= 24 ? 0.5 : 0.4,
+    });
+  }
+
+  // RDS instances nobody connected to for the whole window.
+  for (const d of idleRdsInstances(inventory, options)) {
+    const c = d.connections!;
+    const engine = RDS_PRICED_ENGINES[d.engine]!;
+    const hourly = prices.rdsInstanceHour[rdsHourKey(d.instanceClass, engine, d.multiAz)];
+    const gbMonth = prices.rdsStorageGbMonth[rdsStorageKey(d.storageType, engine, d.multiAz)];
+    // An instance that cannot be priced is left out rather than reported at a cost that omits part of its bill.
+    if (hourly === undefined || gbMonth === undefined) continue;
+    const compute = hourly * HOURS_PER_MONTH;
+    const storage = d.allocatedGb * gbMonth;
+    const deployment = d.multiAz ? "Multi-AZ" : "Single-AZ";
+    const snapshot = `${d.id}-final-${inventory.collectedAt.slice(0, 10)}`;
+    findings.push({
+      pattern: "idle-rds-instance",
+      title: `Idle RDS ${d.instanceClass} (${d.engine}): no connections`,
+      resourceType: "AWS::RDS::DBInstance",
+      resourceIds: [d.id],
+      evidence: [
+        `CloudWatch DatabaseConnections over the last ${c.hoursObserved.toFixed(1)} h of the ${c.windowHours} h asked for: maximum ${c.maxConnections} (${c.datapoints} datapoints)`,
+        "Zero connections means nobody connected in that window; it does not show that nothing depends on the database, such as a job that runs weekly or monthly",
+        `${d.instanceClass} ${d.engine}, ${deployment}, ${d.allocatedGb} GB ${d.storageType}, status available`,
+        ...(d.createdAt ? [`Created ${d.createdAt}`] : []),
+        ...(d.deletionProtection ? ["Deletion protection is on: RDS refuses the delete until it is turned off"] : []),
+      ],
+      monthlyCostUsd: compute + storage,
+      costBasis: `${usd(hourly)}/hour x ${HOURS_PER_MONTH} hours + ${d.allocatedGb} GB x ${usd(gbMonth)}/GB-month (${deployment} ${d.storageType}). Backup storage beyond the free allocation and provisioned IOPS above the baseline are not included.`,
+      fix: {
+        commands: [cli(`rds delete-db-instance --db-instance-identifier ${d.id} --final-db-snapshot-identifier ${snapshot}`)],
+        risk: "dangerous",
+        rollback: `Deleting a DB instance is permanent, and its automated backups are deleted with it. The final snapshot is the way back: ${cli(`rds restore-db-instance-from-db-snapshot --db-instance-identifier ${d.id} --db-snapshot-identifier ${snapshot}`)}, adding the subnet group, security groups and parameter group again. The snapshot is billed per GB-month until it is deleted.`,
+      },
+      alternative: {
+        commands: [cli(`rds stop-db-instance --db-instance-identifier ${d.id}`)],
+        risk: "caution",
+        rollback: `Start it again with: ${cli(`rds start-db-instance --db-instance-identifier ${d.id}`)}. AWS starts a stopped instance again by itself after 7 days, so this only pauses the compute charge.`,
+        description: "Stop it instead: compute is not billed while it is stopped, but its storage keeps costing and AWS restarts it after 7 days",
+        monthlySavingUsd: compute,
+      },
+      // A day without connections can be a quiet day; a week is a much stronger signal. Deleting is permanent, so none is higher than 0.85.
+      confidence: c.hoursObserved >= 168 ? 0.85 : c.hoursObserved >= 24 ? 0.7 : 0.5,
+    });
   }
 
   // Snapshots whose source volume is gone and that no AMI is built on.
@@ -280,6 +456,7 @@ export function skippedByTag(inventory: Inventory): string[] {
     ...inventory.snapshots.filter((r) => r.ignored).map((r) => r.id),
     ...inventory.images.filter((r) => r.ignored).map((r) => r.id),
     ...inventory.instances.filter((r) => r.ignored).map((r) => r.id),
+    ...inventory.rdsInstances.filter((r) => r.ignored).map((r) => r.id),
     ...inventory.addresses.filter((r) => r.ignored).map((r) => r.allocationId),
     ...inventory.buckets.filter((r) => r.ignored).map((r) => r.name),
   ];

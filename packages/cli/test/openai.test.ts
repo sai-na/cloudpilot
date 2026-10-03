@@ -25,7 +25,7 @@ async function fakeOpenAI(outputs: object[][]) {
 
 const ctx = (used: string[]): AskContext => ({
   result: { accountId: "1", regions: ["ap-south-1"], scannedAt: "", prices: { source: "price-file", fetchedAt: "" }, findings: [], totalMonthlyWasteUsd: 42, skippedByTag: [], warnings: [] },
-  inventories: [{ accountId: "1", region: "ap-south-1", collectedAt: "", volumes: [], snapshots: [], images: [], instances: [], addresses: [], launchTemplateImageIds: [], buckets: [], warnings: [] }],
+  inventories: [{ accountId: "1", region: "ap-south-1", collectedAt: "", volumes: [], snapshots: [], images: [], instances: [], rdsInstances: [], addresses: [], launchTemplateImageIds: [], buckets: [], warnings: [] }],
   prices: [{ region: "ap-south-1", source: "price-file", fetchedAt: "", ebsGbMonth: {}, snapshotGbMonth: 0, idleIpv4Hour: 0, instanceHour: {}, s3StandardGbMonth: 0 }],
   cpuHistory: async () => undefined,
   llm: { model: "test-model" },

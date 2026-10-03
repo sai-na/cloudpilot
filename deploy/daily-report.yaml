@@ -81,6 +81,11 @@ Resources:
                 Action:
                   - ec2:Describe*
                 Resource: "*"
+              - Sid: RdsDescribeInstances
+                Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                Resource: "*"
               - Sid: S3BucketMetadata
                 Effect: Allow
                 Action:

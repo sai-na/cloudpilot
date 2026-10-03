@@ -230,6 +230,8 @@ export const KIND: Record<Pattern, string> = {
   "idle-elastic-ip": "Idle Elastic IPs",
   "stopped-instance": "Stopped instances still paying for storage",
   "idle-instance": "Idle running instances",
+  "oversized-instance": "Running instances one size too big",
+  "idle-rds-instance": "Idle RDS instances",
   "orphaned-snapshot": "Snapshots of deleted volumes",
   "unused-ami": "Unused AMIs",
   "bucket-without-lifecycle": "Buckets with no lifecycle rule",

@@ -23,6 +23,10 @@ names your AWS account and its resources.
 | W8 | S3 bucket with three small objects | No lifecycle rule | Terraform |
 | W9 | Incomplete multipart upload in the W8 bucket | Abandoned multipart upload | `scripts/seed.sh` |
 
+The lab plants no RDS instance and no oversized instance, so the idle RDS
+and oversized instance rules are not scored by it. Their tests use
+hand-built inventories.
+
 Plus a $15 monthly budget with alerts at 50% and 100% of actual spend, and
 the `cloudpilot-readonly` IAM role. Every resource is tagged
 `Project=cloudpilot-waste-lab` and `WastePattern=<W id>` (`none` for the
@@ -60,7 +64,11 @@ before the instance looks idle, so launch the lab the evening before a demo.
 
 ## Read-only role for CloudPilot
 
-The policy is in `docs/cloudpilot-readonly-policy.json`. Add this to
+The policy is in `docs/cloudpilot-readonly-policy.json`, and Terraform attaches
+that file as it stands, so a lab built before the policy changed needs
+`scripts/tf.sh apply` again to pick the change up: the idle RDS rule added
+`rds:DescribeDBInstances` to it. Until then a scan with the role reports that
+one call as a skipped check and still finds everything else. Add this to
 `~/.aws/config`; the role has no long-lived keys of its own:
 
 ```ini

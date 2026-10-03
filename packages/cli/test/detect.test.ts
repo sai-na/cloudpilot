@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { detect, mergeScans } from "../src/detect.js";
+import { detect, idleRdsInstances, mergeScans, oversizedCandidates } from "../src/detect.js";
 import type { Inventory, PriceBook } from "../src/types.js";
 
 const prices: PriceBook = {
@@ -11,6 +11,9 @@ const prices: PriceBook = {
   snapshotGbMonth: 0.05,
   idleIpv4Hour: 0.005,
   instanceHour: { "t3.micro": 0.0112 },
+  rdsInstanceHour: {},
+  rdsStorageGbMonth: {},
+  instanceSpecs: {},
   s3StandardGbMonth: 0.025,
 };
 
@@ -22,6 +25,7 @@ const empty: Inventory = {
   snapshots: [],
   images: [],
   instances: [],
+  rdsInstances: [],
   addresses: [],
   launchTemplateImageIds: [],
   buckets: [],
@@ -30,7 +34,7 @@ const empty: Inventory = {
 
 const inventory = (part: Partial<Inventory>): Inventory => ({ ...empty, ...part });
 const close = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`);
-const cpu = (hoursObserved: number, maxPct: number) => ({ hoursObserved, datapoints: hoursObserved * 12, averagePct: maxPct / 2, maxPct });
+const cpu = (hoursObserved: number, maxPct: number, windowHours = hoursObserved) => ({ windowHours, hoursObserved, datapoints: hoursObserved * 12, averagePct: maxPct / 2, maxPct });
 
 test("unattached gp2 volume: delete, with gp3 conversion as the alternative", () => {
   const [f, ...rest] = detect(
@@ -239,4 +243,231 @@ test("scans of several regions merge into one result, most expensive first, each
   assert.match(result.findings[0]!.fix.commands[0]!, /--region us-east-1$/);
   close(result.totalMonthlyWasteUsd, 910 * 0.0912);
   assert.deepEqual(result.warnings, ["[us-east-1] ec2:DescribeImages: AccessDenied"]);
+});
+
+// ---- Oversized instances and idle RDS instances ----
+
+const sized: PriceBook = {
+  ...prices,
+  instanceHour: { "t3.micro": 0.0112, "m5.xlarge": 0.202, "m5.large": 0.101, "m5.2xlarge": 0.404, "m5.3xlarge": 0.606, "t3.xlarge": 0.1664, "t3.large": 0.0832 },
+  instanceSpecs: {
+    "m5.xlarge": { vcpu: 4, memoryGib: 16 },
+    "m5.large": { vcpu: 2, memoryGib: 8 },
+    "m5.2xlarge": { vcpu: 8, memoryGib: 32 },
+    "m5.3xlarge": { vcpu: 12, memoryGib: 48 },
+    "t3.xlarge": { vcpu: 4, memoryGib: 16 },
+    "t3.large": { vcpu: 2, memoryGib: 8 },
+  },
+  rdsInstanceHour: { "db.t3.micro|MySQL|Single-AZ": 0.034, "db.t3.micro|MySQL|Multi-AZ": 0.068, "db.m5.large|PostgreSQL|Single-AZ": 0.253 },
+  rdsStorageGbMonth: { "gp3|MySQL|Single-AZ": 0.131, "gp3|MySQL|Multi-AZ": 0.262, "gp2|PostgreSQL|Single-AZ": 0.131, "standard|MySQL|Single-AZ": 0.11 },
+};
+
+const running = (id: string, type: string, stats: ReturnType<typeof cpu> | undefined, extra: object = {}) => ({
+  id,
+  type,
+  state: "running",
+  platform: "Linux/UNIX",
+  volumeIds: [],
+  rootDeviceType: "ebs",
+  cpu: stats,
+  ...extra,
+});
+const patternsOf = (instances: ReturnType<typeof running>[]) => detect(inventory({ instances }), sized).map((f) => [f.pattern, f.resourceIds[0]]);
+
+test("oversized instance: the saving is the price difference to the size one step down, with the resize as the fix", () => {
+  const [f, ...rest] = detect(inventory({ instances: [running("i-big", "m5.xlarge", cpu(24, 25, 24), { name: "api" })] }), sized);
+  assert.equal(rest.length, 0);
+  assert.equal(f!.pattern, "oversized-instance");
+  assert.equal(f!.title, "m5.xlarge could be m5.large: CPU peaked at 25.0%");
+  close(f!.monthlyCostUsd, (0.202 - 0.101) * 730);
+  assert.deepEqual(f!.fix.commands, [
+    "aws ec2 stop-instances --instance-ids i-big --region ap-south-1",
+    "aws ec2 wait instance-stopped --instance-ids i-big --region ap-south-1",
+    'aws ec2 modify-instance-attribute --instance-id i-big --instance-type "{\\"Value\\": \\"m5.large\\"}" --region ap-south-1',
+    "aws ec2 start-instances --instance-ids i-big --region ap-south-1",
+  ]);
+  assert.equal(f!.fix.risk, "caution");
+  assert.match(f!.fix.rollback, /Needs downtime/);
+  assert.match(f!.fix.rollback, /with "\{\\"Value\\": \\"m5\.xlarge\\"\}" as the instance type/);
+  assert.equal(f!.alternative, undefined);
+  // CPU alone cannot show the memory fits, so the rule is never confident.
+  assert.equal(f!.confidence, 0.5);
+  assert.ok(f!.evidence.some((e) => /Memory, disk and network use were not checked/.test(e)));
+  assert.ok(f!.evidence.some((e) => /m5\.xlarge has 4 vCPU and 16 GiB; m5\.large has 2 vCPU and 8 GiB/.test(e)));
+  assert.ok(f!.evidence.some((e) => /would peak at about 50%/.test(e)));
+});
+
+test("oversized instance: a short window lowers the rule confidence", () => {
+  const [f] = detect(inventory({ instances: [running("i-big", "m5.xlarge", cpu(6, 25, 6))] }), sized);
+  assert.equal(f!.confidence, 0.4);
+});
+
+test("oversized instance: the CPU limit is 40%, exclusive", () => {
+  assert.deepEqual(patternsOf([running("i-39", "m5.xlarge", cpu(24, 39.9, 24)), running("i-40", "m5.xlarge", cpu(24, 40, 24)), running("i-70", "m5.xlarge", cpu(24, 70, 24))]), [["oversized-instance", "i-39"]]);
+});
+
+test("oversized instance: at least 90% of the asked-for window must have data", () => {
+  // 21.6 of 24 hours is exactly 90%; 21.5 is not.
+  assert.deepEqual(patternsOf([running("i-enough", "m5.xlarge", cpu(21.6, 25, 24)), running("i-short", "m5.xlarge", cpu(21.5, 25, 24)), running("i-nodata", "m5.xlarge", undefined)]), [["oversized-instance", "i-enough"]]);
+});
+
+test("oversized instance: an idle instance is reported as idle only, never also as oversized", () => {
+  assert.deepEqual(patternsOf([running("i-idle", "m5.xlarge", cpu(24, 2, 24))]), [["idle-instance", "i-idle"]]);
+});
+
+test("oversized instance: burstable families, the smallest size, odd sizes and unpriced sizes are never reported", () => {
+  const low = cpu(24, 20, 24);
+  assert.deepEqual(
+    patternsOf([
+      running("i-burst", "t3.xlarge", low),
+      // m5.medium is not in the price list for this region, so m5.large has no size below it.
+      running("i-smallest", "m5.large", low),
+      // There is no half-size step below 3xlarge.
+      running("i-odd", "m5.3xlarge", low),
+      // medium is the bottom of the ladder: nothing is below it.
+      running("i-medium", "m6g.medium", low),
+    ]),
+    [],
+  );
+  assert.deepEqual(detect(inventory({ instances: [running("i-burst", "t3.xlarge", low)] }), { ...sized, instanceHour: { "t3.xlarge": 1, "t3.large": 0.1 } }), []);
+});
+
+test("oversized instance: no saving is stated without both prices and both specs, or when the smaller size is not cheaper", () => {
+  const instances = [running("i-big", "m5.xlarge", cpu(24, 20, 24))];
+  assert.deepEqual(detect(inventory({ instances }), { ...sized, instanceHour: { "m5.xlarge": 0.202 } }), []);
+  assert.deepEqual(detect(inventory({ instances }), { ...sized, instanceSpecs: { "m5.xlarge": { vcpu: 4, memoryGib: 16 } } }), []);
+  assert.deepEqual(detect(inventory({ instances }), { ...sized, instanceSpecs: { ...sized.instanceSpecs, "m5.large": { vcpu: 2, memoryGib: 4 } } }), []);
+  assert.deepEqual(detect(inventory({ instances }), { ...sized, instanceHour: { "m5.xlarge": 0.1, "m5.large": 0.1 } }), []);
+});
+
+test("oversized instance: only On-Demand Linux on shared hardware with an EBS root that is running and not ignored", () => {
+  const low = cpu(24, 20, 24);
+  assert.deepEqual(
+    patternsOf([
+      running("i-windows", "m5.xlarge", low, { platform: "Windows" }),
+      running("i-spot", "m5.xlarge", low, { lifecycle: "spot" }),
+      running("i-dedicated", "m5.xlarge", low, { tenancy: "dedicated" }),
+      running("i-store", "m5.xlarge", low, { rootDeviceType: "instance-store" }),
+      running("i-ignored", "m5.xlarge", low, { ignored: true }),
+      running("i-stopped", "m5.xlarge", low, { state: "stopped" }),
+      running("i-shared", "m5.xlarge", low, { tenancy: "default" }),
+    ]),
+    // The stopped instance is a stopped-instance finding, not an oversized one.
+    [["oversized-instance", "i-shared"], ["stopped-instance", "i-stopped"]],
+  );
+  const scan = { inventory: inventory({ instances: [running("i-ignored", "m5.xlarge", low, { ignored: true })] }), prices: sized, findings: [] };
+  assert.deepEqual(mergeScans("123456789012", [scan]).skippedByTag, ["i-ignored"]);
+});
+
+const connections = (hoursObserved: number, maxConnections: number, windowHours = 24) => ({ windowHours, hoursObserved, datapoints: hoursObserved * 12, maxConnections });
+const db = (id: string, extra: object = {}) => ({
+  id,
+  instanceClass: "db.t3.micro",
+  engine: "mysql",
+  status: "available",
+  allocatedGb: 100,
+  storageType: "gp3",
+  multiAz: false,
+  createdAt: "2026-01-01T00:00:00Z",
+  replicaIds: [],
+  deletionProtection: false,
+  connections: connections(24, 0),
+  ...extra,
+});
+const dbPatterns = (rdsInstances: ReturnType<typeof db>[]) => detect(inventory({ rdsInstances }), sized).map((f) => [f.pattern, f.resourceIds[0]]);
+
+test("idle RDS instance: priced at its instance hours plus its storage, deleted with a final snapshot, stopped as the alternative", () => {
+  const [f, ...rest] = detect(inventory({ rdsInstances: [db("orders-db")] }), sized);
+  assert.equal(rest.length, 0);
+  assert.equal(f!.pattern, "idle-rds-instance");
+  assert.equal(f!.resourceType, "AWS::RDS::DBInstance");
+  close(f!.monthlyCostUsd, 0.034 * 730 + 100 * 0.131);
+  assert.deepEqual(f!.fix.commands, [
+    "aws rds delete-db-instance --db-instance-identifier orders-db --final-db-snapshot-identifier orders-db-final-2026-10-03 --region ap-south-1",
+  ]);
+  assert.equal(f!.fix.risk, "dangerous");
+  assert.match(f!.fix.rollback, /permanent/);
+  assert.match(f!.fix.rollback, /aws rds restore-db-instance-from-db-snapshot --db-instance-identifier orders-db --db-snapshot-identifier orders-db-final-2026-10-03 --region ap-south-1/);
+  assert.match(f!.fix.rollback, /snapshot is billed/);
+  assert.deepEqual(f!.alternative!.commands, ["aws rds stop-db-instance --db-instance-identifier orders-db --region ap-south-1"]);
+  assert.equal(f!.alternative!.risk, "caution");
+  // Stopping saves the compute only: the storage keeps costing.
+  close(f!.alternative!.monthlySavingUsd, 0.034 * 730);
+  assert.match(f!.alternative!.description, /storage keeps costing/);
+  assert.match(f!.alternative!.description, /7 days/);
+  assert.match(f!.alternative!.rollback, /7 days/);
+  assert.ok(f!.evidence.some((e) => /DatabaseConnections over the last 24\.0 h of the 24 h asked for: maximum 0/.test(e)));
+  assert.ok(f!.evidence.some((e) => /does not show that nothing depends on the database/.test(e)));
+});
+
+test("idle RDS instance: Multi-AZ is priced from the Multi-AZ rates, and protection against deletion is stated", () => {
+  const [f] = detect(inventory({ rdsInstances: [db("ha-db", { multiAz: true, deletionProtection: true })] }), sized);
+  close(f!.monthlyCostUsd, 0.068 * 730 + 100 * 0.262);
+  assert.ok(f!.evidence.some((e) => /Deletion protection is on/.test(e)));
+  assert.ok(f!.evidence.some((e) => /Multi-AZ/.test(e)));
+});
+
+test("idle RDS instance: confidence grows with how long nobody connected", () => {
+  const confidence = (hours: number, window = hours) => detect(inventory({ rdsInstances: [db("d", { connections: connections(hours, 0, window) })] }), sized)[0]!.confidence;
+  assert.equal(confidence(6), 0.5);
+  assert.equal(confidence(24), 0.7);
+  assert.equal(confidence(168), 0.85);
+});
+
+test("idle RDS instance: any connection, too little history, or no data is not idle", () => {
+  assert.deepEqual(
+    dbPatterns([
+      db("busy", { connections: connections(24, 1) }),
+      // 21.5 of 24 hours is under 90% of the window.
+      db("short", { connections: connections(21.5, 0) }),
+      db("nodata", { connections: undefined }),
+      db("enough", { connections: connections(21.6, 0) }),
+    ]),
+    [["idle-rds-instance", "enough"]],
+  );
+});
+
+test("idle RDS instance: cluster members, replicas, instances with replicas, and other statuses are never judged", () => {
+  assert.deepEqual(
+    dbPatterns([
+      db("aurora-member", { engine: "aurora-mysql", clusterId: "cluster-1" }),
+      db("cluster-member-mysql", { clusterId: "cluster-1" }),
+      db("replica", { replicaOf: "orders-db" }),
+      db("primary-with-replica", { replicaIds: ["replica"] }),
+      db("stopped", { status: "stopped" }),
+      db("creating", { status: "creating" }),
+      db("backing-up", { status: "backing-up" }),
+    ]),
+    [],
+  );
+});
+
+test("idle RDS instance: engines and storage that are not priced, and unpriced instances, are left out", () => {
+  assert.deepEqual(
+    dbPatterns([
+      db("oracle", { engine: "oracle-ee" }),
+      db("sqlserver", { engine: "sqlserver-se" }),
+      db("io1", { storageType: "io1" }),
+      db("unknown-class", { instanceClass: "db.x2g.16xlarge" }),
+      db("no-storage-price", { storageType: "gp2" }),
+    ]),
+    [],
+  );
+  // PostgreSQL on gp2 is priced in this table, so it is reported.
+  assert.deepEqual(dbPatterns([db("pg", { engine: "postgres", instanceClass: "db.m5.large", storageType: "gp2" })]), [["idle-rds-instance", "pg"]]);
+});
+
+test("idle RDS instance: the ignore tag leaves it out and it is counted as skipped", () => {
+  const inv = inventory({ rdsInstances: [db("kept"), db("ignored-db", { ignored: true })] });
+  assert.deepEqual(detect(inv, sized).map((f) => f.resourceIds[0]), ["kept"]);
+  assert.deepEqual(mergeScans("123456789012", [{ inventory: inv, prices: sized, findings: detect(inv, sized) }]).skippedByTag, ["ignored-db"]);
+});
+
+test("the instances a price lookup must cover are exactly the ones the rules could report", () => {
+  const inv = inventory({
+    instances: [running("i-big", "m5.xlarge", cpu(24, 20, 24)), running("i-busy", "m5.2xlarge", cpu(24, 80, 24)), running("i-burst", "t3.xlarge", cpu(24, 20, 24))],
+    rdsInstances: [db("idle"), db("busy", { connections: connections(24, 3) }), db("replica", { replicaOf: "idle" })],
+  });
+  assert.deepEqual(oversizedCandidates(inv).map((c) => [c.instance.id, c.smaller]), [["i-big", "m5.large"]]);
+  assert.deepEqual(idleRdsInstances(inv).map((d) => d.id), ["idle"]);
 });

@@ -94,7 +94,7 @@ export interface ToolSpec {
   run: (args: Record<string, unknown>) => Promise<string>;
 }
 
-const INVENTORY_KINDS = ["volumes", "snapshots", "images", "instances", "addresses", "buckets"] as const;
+const INVENTORY_KINDS = ["volumes", "snapshots", "images", "instances", "rdsInstances", "addresses", "buckets"] as const;
 type InventoryKind = (typeof INVENTORY_KINDS)[number];
 
 export function buildTools(ctx: AskContext): ToolSpec[] {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { allowedValues, unsupportedValues } from "../src/output-check.js";
 import { templatedSummary } from "../src/report.js";
-import type { Finding, ScanResult } from "../src/types.js";
+import type { Finding, PriceBook, ScanResult } from "../src/types.js";
 
 const finding = (id: string, cost: number, extra: Partial<Finding> = {}): Finding => ({
   region: "ap-south-1",
@@ -67,4 +67,29 @@ test("across several regions the templated summary says where the waste is", () 
   assert.match(summary, /across 2 findings in 2 of the 3 regions scanned\./);
   assert.match(summary, /By region:\n- ap-south-1: 1 finding, \$57\.00 per month\.\n- us-east-1: 1 finding, \$18\.24 per month\.\n- 1 other region: nothing found\./);
   assert.deepEqual(unsupportedValues(summary, allowedValues(multi)), []);
+});
+
+const priceBook: PriceBook = {
+  region: "ap-south-1",
+  source: "aws-price-list-api",
+  fetchedAt: "2026-10-03T00:00:00Z",
+  ebsGbMonth: { gp2: 0.114, gp3: 0.0912 },
+  snapshotGbMonth: 0.05,
+  idleIpv4Hour: 0.005,
+  instanceHour: { "m5.xlarge": 0.214 },
+  rdsInstanceHour: { "db.t3.micro|MySQL|Single-AZ": 0.034 },
+  rdsStorageGbMonth: { "gp3|MySQL|Single-AZ": 0.1265 },
+  instanceSpecs: { "m5.large": { vcpu: 2, memoryGib: 8 } },
+  s3StandardGbMonth: 0.025,
+};
+
+test("every price in a book the model was given may be quoted back, including database prices", () => {
+  const withPrices = allowedValues(result, { prices: [priceBook] });
+  const text = "The database costs $0.034 per hour and its storage $0.1265 per GB-month; an m5.xlarge is $0.214 per hour and a snapshot $0.05 per GB.";
+  assert.deepEqual(unsupportedValues(text, withPrices), []);
+});
+
+test("an amount no price book contains is still rejected", () => {
+  const withPrices = allowedValues(result, { prices: [priceBook] });
+  assert.deepEqual(unsupportedValues("The database costs $0.099 per hour.", withPrices), ["$0.099"]);
 });

@@ -308,7 +308,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
     </div>
   </div>
   <details id="api-calls">
-    <summary>The full list of AWS API calls it makes: 18 kinds, none of which can change anything</summary>
+    <summary>The full list of AWS API calls it makes: 19 kinds, none of which can change anything</summary>
     <table>
       <thead><tr><th>Service</th><th>Call</th><th>Used for</th></tr></thead>
       <tbody>
@@ -317,10 +317,11 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
         <tr><td>EC2</td><td>DescribeVolumes</td><td>Unattached and gp2 volumes</td></tr>
         <tr><td>EC2</td><td>DescribeSnapshots</td><td>Snapshots of deleted volumes</td></tr>
         <tr><td>EC2</td><td>DescribeImages</td><td>Unused machine images</td></tr>
-        <tr><td>EC2</td><td>DescribeInstances</td><td>Stopped and idle instances</td></tr>
+        <tr><td>EC2</td><td>DescribeInstances</td><td>Stopped, idle and oversized instances</td></tr>
         <tr><td>EC2</td><td>DescribeAddresses</td><td>Idle Elastic IPs</td></tr>
         <tr><td>EC2</td><td>DescribeLaunchTemplates</td><td>Whether an image is still referenced</td></tr>
         <tr><td>EC2</td><td>DescribeLaunchTemplateVersions</td><td>Whether an image is still referenced</td></tr>
+        <tr><td>RDS</td><td>DescribeDBInstances</td><td>Idle database instances</td></tr>
         <tr><td>S3</td><td>ListBuckets</td><td>The buckets in each region</td></tr>
         <tr><td>S3</td><td>GetBucketLocation</td><td>A bucket's region, when the listing omits it</td></tr>
         <tr><td>S3</td><td>GetBucketLifecycleConfiguration</td><td>Buckets with no lifecycle rule</td></tr>
@@ -328,7 +329,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
         <tr><td>S3</td><td>ListObjectsV2</td><td>Object count and size; contents are never read</td></tr>
         <tr><td>S3</td><td>ListMultipartUploads</td><td>Incomplete uploads</td></tr>
         <tr><td>S3</td><td>ListParts</td><td>The size of an incomplete upload</td></tr>
-        <tr><td>CloudWatch</td><td>GetMetricData</td><td>CPU history of running instances</td></tr>
+        <tr><td>CloudWatch</td><td>GetMetricData</td><td>CPU history of running instances, connection history of database instances</td></tr>
         <tr><td>Pricing</td><td>GetProducts</td><td>Unit prices for what was found</td></tr>
       </tbody>
     </table>
@@ -337,7 +338,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
 
 <section id="finds">
   <h2>What it finds in an AWS account</h2>
-  <p class="lead">Nine kinds of waste. Below is the statement for our test account: an AWS account we filled with waste on purpose. It is not a customer's.</p>
+  <p class="lead">Eleven kinds of waste. Below is the statement for our test account: an AWS account we filled with waste on purpose. It is not a customer's. It holds nine of the eleven: it has no idle RDS database and no instance one size too big for its CPU.</p>
   <div class="statement-head">
     <p>Account 123456789012, ap-south-1<br>One scan, amounts per month</p>
     <span class="stamp">Test account</span>

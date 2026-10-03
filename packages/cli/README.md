@@ -37,10 +37,11 @@ is not a `Describe`, `List` or `Get`.
 | EC2 | `DescribeVolumes` | `ec2:DescribeVolumes` | Unattached and gp2 volumes |
 | EC2 | `DescribeSnapshots` | `ec2:DescribeSnapshots` | Snapshots of deleted volumes |
 | EC2 | `DescribeImages` | `ec2:DescribeImages` | Unused AMIs |
-| EC2 | `DescribeInstances` | `ec2:DescribeInstances` | Stopped and idle instances |
+| EC2 | `DescribeInstances` | `ec2:DescribeInstances` | Stopped, idle and oversized instances |
 | EC2 | `DescribeAddresses` | `ec2:DescribeAddresses` | Idle Elastic IPs |
 | EC2 | `DescribeLaunchTemplates` | `ec2:DescribeLaunchTemplates` | Whether an AMI is still referenced |
 | EC2 | `DescribeLaunchTemplateVersions` | `ec2:DescribeLaunchTemplateVersions` | Whether an AMI is still referenced |
+| RDS | `DescribeDBInstances` | `rds:DescribeDBInstances` | Idle database instances |
 | S3 | `ListBuckets` | `s3:ListAllMyBuckets` | The buckets in each region |
 | S3 | `GetBucketLocation` | `s3:GetBucketLocation` | A bucket's region, when the listing omits it |
 | S3 | `GetBucketLifecycleConfiguration` | `s3:GetLifecycleConfiguration` | Buckets with no lifecycle rule |
@@ -48,7 +49,7 @@ is not a `Describe`, `List` or `Get`.
 | S3 | `ListObjectsV2` | `s3:ListBucket` | Object count and size; object contents are never read |
 | S3 | `ListMultipartUploads` | `s3:ListBucketMultipartUploads` | Incomplete uploads |
 | S3 | `ListParts` | `s3:ListMultipartUploadParts` | The size of an incomplete upload |
-| CloudWatch | `GetMetricData` | `cloudwatch:GetMetricData` | CPU history of running instances |
+| CloudWatch | `GetMetricData` | `cloudwatch:GetMetricData` | CPU history of running instances, connection history of database instances |
 | Pricing | `GetProducts` | `pricing:GetProducts` | Unit prices for what was found |
 
 CloudShell's credentials are your console permissions, which usually allow
@@ -69,6 +70,8 @@ whose API key you set. Without those, nothing leaves AWS and your terminal.
 | Idle Elastic IP | No association | Release it |
 | Stopped instance | State `stopped`, still has EBS volumes | Terminate it |
 | Idle instance | CloudWatch CPU never above 5% over at least 1 hour | Terminate it |
+| Oversized instance | Not idle, CPU never above 40% over at least 90% of `--lookback-hours`, and the size one step down in the same family exists | Stop it, change the instance type, start it |
+| Idle RDS instance | Status `available` and zero database connections over at least 90% of `--lookback-hours` | Delete it with a final snapshot (or stop it) |
 | Orphaned snapshot | Source volume no longer exists and no AMI uses it | Delete it |
 | Unused AMI | No instance and no launch template references it | Deregister it and delete its snapshots |
 | Bucket without lifecycle rule | No lifecycle configuration | Add one |
@@ -91,6 +94,8 @@ produced by a model.
 | Idle Elastic IP | 95% | An unassociated address is billed and serves nothing |
 | Stopped instance | 80% | Storage is billed, but instances are often stopped on purpose |
 | Idle instance | 60%, 80% or 90% | CPU only. 60% under 6 hours of data, 80% from 6 hours, 90% from 24 hours |
+| Oversized instance | 40% or 50% | CPU only: memory is invisible without the CloudWatch agent, so it is never checked. 40% under 24 hours of data, 50% from 24 hours |
+| Idle RDS instance | 50%, 70% or 85% | Connections only. 50% under 24 hours of data, 70% from 24 hours, 85% from 7 days. A job that connects once a month is not in the window |
 | Orphaned snapshot | 80% | The source volume is gone, but the snapshot may be a deliberate backup |
 | Unused AMI | 70% | Auto Scaling launch configurations and other accounts are not visible to the scan |
 | Bucket without lifecycle rule | 90% | The configuration is simply absent |
@@ -100,8 +105,8 @@ produced by a model.
 
 Tag a resource `cloudpilot:ignore` = `true` and no finding is raised for it.
 Skipping is never silent: the report and the summary state how many resources
-were skipped and list them. Volumes, snapshots, AMIs, instances, Elastic IPs
-and buckets can be tagged; an ignored bucket takes its incomplete uploads
+were skipped and list them. Volumes, snapshots, AMIs, instances, DB instances,
+Elastic IPs and buckets can be tagged; an ignored bucket takes its incomplete uploads
 with it.
 
 ## Run it from source
@@ -439,7 +444,7 @@ reads `--lookback-hours` with its own meaning and default: see
 | `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |
 | `--no-compare` | `scan` only: do not compare |
 | `--only-new` | `scan` only: list only the findings that are new since the earlier scan |
-| `--lookback-hours <n>` | Hours of CPU history used to judge idleness. Default 24 |
+| `--lookback-hours <n>` | Hours of CPU and database connection history used to judge idle and oversized instances. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
 | `--offline` | Use only `--price-file` for prices |
 | `--provider <name>` | `anthropic`, `openai` or `bedrock`. Default: whichever key is set |
@@ -542,6 +547,47 @@ The rules are checked against a seeded cluster: see
   Without it the upload is still found, with its cost reported as unknown.
 - Idle detection is CPU only. A box that is busy on network or disk with a
   quiet CPU would be flagged.
+- Oversized instances are judged on CPU only, because memory is not visible
+  without the CloudWatch agent. The finding says memory was not checked, and
+  its rule confidence is 50% at most. The 40% limit is on the highest reading
+  CloudWatch holds, a five-minute average unless detailed monitoring is on, so
+  a shorter burst is not seen. It leaves room because half the vCPUs doubles
+  the load on each, so a 40% peak becomes about 80%. A busy season outside
+  `--lookback-hours` is not seen either.
+- Oversized instances are reported only for On-Demand Linux instances on shared
+  hardware with an EBS root volume, and never for the burstable families
+  (t1, t2, t3, t3a, t4g), where CPU credits make a low peak mean little. The
+  step down is the size AWS names by halving (for example xlarge to large),
+  and it is reported only when the Price List has it in the region with exactly
+  half the vCPUs and half the memory. Odd sizes such as 3xlarge, the smallest
+  size of a family, and anything the Price List does not hold are not reported.
+  With `--offline` the price file carries no instance sizes, so no instance is
+  reported oversized.
+- Resizing needs the instance stopped, so it means downtime, and an instance
+  store is erased when it stops. The saving is the compute price difference;
+  an instance behind an Auto Scaling group or a stack must be changed at its
+  launch template or template.
+- Idle RDS instances are judged only for MySQL, PostgreSQL and MariaDB on
+  gp2, gp3 or magnetic storage, the cases whose price is a plain hourly rate
+  and a plain per-GB rate. Oracle, SQL Server, Db2, and instances on
+  provisioned IOPS storage are not judged. Aurora and other cluster members,
+  read replicas, instances that have read replicas, and instances in any status
+  but `available` are never judged either. So is an instance with less than 90% of
+  the window in CloudWatch, such as one created after the window began. An
+  instance whose price the Price List does not return is left out rather than
+  reported with part of its bill missing. With `--offline` no database is
+  priced, so none is reported.
+- An idle RDS instance's cost is its hourly price over 730 hours plus its
+  allocated storage. Backup storage beyond the free allocation, a final
+  snapshot, and IOPS or throughput above the gp3 baseline are not included.
+  The stop alternative saves the compute part only, and AWS starts a stopped
+  instance again after 7 days.
+- Zero connections is zero over the window, not proof that nothing needs the
+  database. Deletion protection, if on, is stated in the evidence, and RDS will
+  refuse the delete until it is turned off.
+- The idle RDS and oversized instance rules are tested on hand-built
+  inventories. They have not been scored against a live seeded lab: the waste
+  lab holds no RDS instance and no oversized instance.
 - Kubernetes: peak use is taken from the history Prometheus holds. A workload
   whose busy season falls outside that window (month-end, a yearly sale) will
   look over-requested; widen `--lookback-hours` or label it
