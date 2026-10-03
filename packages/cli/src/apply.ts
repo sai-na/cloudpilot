@@ -130,10 +130,10 @@ export function plan(scans: ScanResult[], names: string[], options: PlanOptions)
     const { scan, finding } = matches[0]!;
 
     const ageHours = (options.now.getTime() - Date.parse(scan.scannedAt)) / 3_600_000;
-    if (!Number.isFinite(ageHours) || Math.abs(ageHours) > options.maxAgeHours) {
-      const when = ageHours < 0 ? `more than ${options.maxAgeHours} hours in the future, so a clock is wrong` : `more than ${options.maxAgeHours} hours ago`;
-      throw new ApplyError(`The scan that found ${named} is from ${scan.scannedAt}, ${when}. Things may have changed since: scan again, then apply.`);
-    }
+    const tooOld = (why: string) => new ApplyError(`The scan that found ${named} ${why}. Things may have changed since: scan again, then apply.`);
+    if (!Number.isFinite(ageHours)) throw tooOld(`says it was taken at ${JSON.stringify(scan.scannedAt)}, which cannot be read as a time, so how old it is cannot be told`);
+    if (ageHours > options.maxAgeHours) throw tooOld(`is from ${scan.scannedAt}, more than ${options.maxAgeHours} hours ago`);
+    if (ageHours < -options.maxAgeHours) throw tooOld(`is from ${scan.scannedAt}, more than ${options.maxAgeHours} hours in the future, so a clock is wrong`);
 
     // The fix that can be undone, unless the permanent one was asked for.
     const alt = finding.alternative;

@@ -114,7 +114,8 @@ test("naming a resource has to be exact, unambiguous and recent", () => {
 
   // A scan dated in the future says a clock is wrong, so its age proves nothing.
   assert.throws(() => plan([{ ...account, scannedAt: "2026-10-05T11:00:00Z" }], [VOLUME], options), /is from 2026-10-05T11:00:00Z, more than 24 hours in the future, so a clock is wrong\./);
-  assert.throws(() => plan([{ ...account, scannedAt: "not a date" }], [VOLUME], options), /is from not a date/);
+  // A time that cannot be read is refused as such, without claiming an age nobody worked out.
+  assert.throws(() => plan([{ ...account, scannedAt: "not a date" }], [VOLUME], options), /says it was taken at "not a date", which cannot be read as a time, so how old it is cannot be told\./);
   // Small skew either way is still fresh.
   assert.equal(plan([{ ...account, scannedAt: "2026-10-03T12:05:00Z" }], [VOLUME], options).length, 1);
 });
