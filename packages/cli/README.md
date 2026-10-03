@@ -119,7 +119,8 @@ node dist/index.js scan --profile cloudpilot-readonly --html report.html --out r
 `scan` is the default command. Every scan ends with a summary: built from
 the findings by default, written by a model with `--explain`. `--html` writes
 the report as one self-contained file (no fonts, scripts or images are
-fetched) with a print layout.
+fetched) with a print layout. Its two typefaces, Archivo and Courier Prime,
+are carried inside the file.
 
 The HTML report asks for one decision instead of one per command. Each fix
 has a tick box; the saving of everything ticked and the script that would do
@@ -442,3 +443,6 @@ kubectl and Prometheus, `src/kube-detect.ts` the rules over it.
 
 Copyright (C) 2026 Meru Apps. CloudPilot is free software under the GNU
 Affero General Public License, version 3 (`AGPL-3.0-only`). See `LICENSE`.
+
+The HTML report embeds two typefaces, Archivo and Courier Prime, both under
+the SIL Open Font License. Their licence texts are in `licenses/`.

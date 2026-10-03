@@ -116,7 +116,9 @@ test("the HTML report is one self-contained file carrying the replay banner and 
   assert.match(html, /<h2>Summary<\/h2>/);
   // The only 12-digit number anywhere in the file is the stand-in account ID.
   assert.deepEqual([...new Set(html.match(/\b\d{12}\b/g))], ["123456789012"]);
-  // Nothing is fetched: no sources, imports or CSS urls, and the only link points within the page.
-  assert.doesNotMatch(html, /\bsrc=|\bhref="(?!#)|@import|url\(|https?:\/\//);
+  // Nothing is fetched: no sources or imports, the only link points within the page,
+  // and the only CSS urls are the three typefaces carried inside the file itself.
+  assert.doesNotMatch(html, /\bsrc=|\bhref="(?!#)|@import|https?:\/\//);
+  assert.deepEqual(html.match(/url\(.{0,23}/g), Array(3).fill("url(data:font/woff2;base64,"));
   assert.deepEqual(html.match(/\bhref="[^"]*"/g), ['href="#script"']);
 });
