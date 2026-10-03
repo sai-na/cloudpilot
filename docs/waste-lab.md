@@ -64,7 +64,11 @@ before the instance looks idle, so launch the lab the evening before a demo.
 
 ## Read-only role for CloudPilot
 
-The policy is in `docs/cloudpilot-readonly-policy.json`. Add this to
+The policy is in `docs/cloudpilot-readonly-policy.json`, and Terraform attaches
+that file as it stands, so a lab built before the policy changed needs
+`scripts/tf.sh apply` again to pick the change up: the idle RDS rule added
+`rds:DescribeDBInstances` to it. Until then a scan with the role reports that
+one call as a skipped check and still finds everything else. Add this to
 `~/.aws/config`; the role has no long-lived keys of its own:
 
 ```ini

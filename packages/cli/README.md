@@ -431,6 +431,8 @@ The rules are checked against a seeded cluster: see
   and it is reported only when the Price List has it in the region with exactly
   half the vCPUs and half the memory. Odd sizes such as 3xlarge, the smallest
   size of a family, and anything the Price List does not hold are not reported.
+  With `--offline` the price file carries no instance sizes, so no instance is
+  reported oversized.
 - Resizing needs the instance stopped, so it means downtime, and an instance
   store is erased when it stops. The saving is the compute price difference;
   an instance behind an Auto Scaling group or a stack must be changed at its
