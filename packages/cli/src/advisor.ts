@@ -33,6 +33,16 @@ export function forModel(result: ScanResult) {
   return {
     ...result,
     totalMonthlyWasteUsd: dollars(result.totalMonthlyWasteUsd),
+    ...(result.comparison
+      ? {
+          comparison: {
+            ...result.comparison,
+            newMonthlyUsd: dollars(result.comparison.newMonthlyUsd),
+            resolvedMonthlyUsd: dollars(result.comparison.resolvedMonthlyUsd),
+            resolved: result.comparison.resolved.map((r) => ({ ...r, monthlyCostUsd: dollars(r.monthlyCostUsd) })),
+          },
+        }
+      : {}),
     findings: result.findings.map((f) => ({
       ...f,
       monthlyCostUsd: dollars(f.monthlyCostUsd),

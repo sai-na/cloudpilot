@@ -43,7 +43,7 @@ export function isScanResult(value: unknown): value is ScanResult {
 export function compareScans(previous: ScanResult, current: ScanResult): ScanResult | undefined {
   if (previous.accountId !== current.accountId) return undefined;
 
-  const before = new Map(previous.findings.map((f) => [keyOf(f), f]));
+  const before = new Set(previous.findings.map(keyOf));
   const now = new Set(current.findings.map(keyOf));
   const findings = current.findings.map((f) => ({ ...f, isNew: !before.has(keyOf(f)) }));
   // A finding is only "resolved" if its region was looked at again and it is gone.

@@ -196,9 +196,10 @@ export function templatedSummary(result: ScanResult, options: { shortenIds?: boo
     result.regions.length === 1
       ? result.regions[0]!
       : `${regionsWithFindings(result).length} of the ${result.regions.length} regions scanned`;
+  const since = comparisonLine(result);
   const lines = [
     `Estimated waste: ${money(result.totalMonthlyWasteUsd)} per month across ${result.findings.length} finding${result.findings.length === 1 ? "" : "s"} in ${where}.`,
-    ...(comparisonLine(result) ? [comparisonLine(result)!] : []),
+    ...(since ? [since] : []),
     "",
     "By kind, most expensive first:",
   ];

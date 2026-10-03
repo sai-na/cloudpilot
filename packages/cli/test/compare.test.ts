@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { forModel, summaryRequest } from "../src/advisor.js";
 import { compareScans, isScanResult } from "../src/compare.js";
 import { renderHtml } from "../src/html.js";
 import { allowedValues, unsupportedValues } from "../src/output-check.js";
@@ -107,6 +108,19 @@ test("a scan result with a finding missing its cost is not comparable", () => {
   for (const broken of [{}, { pattern: "gp2-volume", region: "ap-south-1", title: "x", resourceIds: ["vol-1"] }, { ...complete.findings[0], monthlyCostUsd: null }]) {
     assert.equal(isScanResult({ ...complete, findings: [broken] }), false, JSON.stringify(broken));
   }
+});
+
+test("the comparison reaches a model as fixed dollar strings, like every other amount", () => {
+  const before = scan([finding("vol-0aaaaaaaaaaaaaaaa", 0.1), finding("vol-0bbbbbbbbbbbbbbbb", 0.2)], { scannedAt: "2026-10-02T00:00:00Z" });
+  const result = compareScans(before, scan([finding("vol-0cccccccccccccccc", 0.1), finding("vol-0dddddddddddddddd", 0.2)]))!;
+  assert.equal(result.comparison!.resolvedMonthlyUsd, 0.30000000000000004, "the sum really does carry float error");
+
+  const payload = forModel(result).comparison!;
+  assert.equal(payload.newMonthlyUsd, "$0.30");
+  assert.equal(payload.resolvedMonthlyUsd, "$0.30");
+  assert.deepEqual(payload.resolved.map((r) => r.monthlyCostUsd), ["$0.10", "$0.20"]);
+  // The prompt is what the model quotes from, and it may hold no amount the report would not print.
+  assert.ok(!summaryRequest(result).includes("0.30000000000000004"));
 });
 
 test("scans of different accounts are not compared", () => {
