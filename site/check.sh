@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run before deploying the landing page. Fails while anything on it is still
-# a placeholder or a claim the repository does not back up.
+# a placeholder or a claim the repository does not back up, and while a file
+# the page asks for is not sitting beside it.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 page=site/index.html
