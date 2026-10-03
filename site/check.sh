@@ -20,8 +20,19 @@ if grep -q "AGPL" "$page" && [[ "$licence" != AGPL* ]]; then fail "the page says
 
 # The page itself must load nothing from another site: scripts, styles, fonts
 # and images all come from this folder.
-if grep -Eq '<script[^>]+src=|<link[^>]+href=|@import|url\(["'"'"']?(https?:)?//|<img[^>]+src="https?:' "$page"; then fail "the page loads something from another site"; fi
-for file in sample-report.png sample-report.html fonts/archivo-latin-variable.woff2 fonts/courier-prime-latin-400.woff2 fonts/courier-prime-latin-700.woff2 fonts/OFL-Archivo.txt fonts/OFL-CourierPrime.txt; do
+if grep -Eq '<script[^>]+src=|<link[^>]+href=|@import|url\([[:space:]]*["'"'"']?(https?:)?//|<img[^>]+src=["'"'"']?(https?:)?//' "$page"; then fail "the page loads something from another site"; fi
+
+# ...and every local file it points at has to be here, so a renamed font or
+# screenshot cannot ship as a silent 404. The list comes from the page itself.
+while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
+  [[ -f "site/$file" ]] || fail "site/$file is missing, but the page asks for it"
+done < <(grep -oE 'url\([[:space:]]*["'"'"']?[^"'"'"')]+|(src|href)="[^"]+"' "$page" \
+  | sed -E 's/^url\([[:space:]]*["'"'"']?//; s/^(src|href)="//; s/"$//' \
+  | grep -vE '^(#|(https?:)?//|data:|mailto:)' | sort -u)
+
+# The fonts the page serves ship with their licences.
+for file in fonts/OFL-Archivo.txt fonts/OFL-CourierPrime.txt; do
   [[ -f "site/$file" ]] || fail "site/$file is missing"
 done
 
