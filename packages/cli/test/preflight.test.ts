@@ -450,6 +450,17 @@ test("the exit code is 0 when either side can be scanned and the next commands n
   assert.deepEqual([neither.ready, neither.next], [false, []]);
 });
 
+test("inside a cluster, the next command carries the name that let the check run at all", async () => {
+  const noAws = aws({ identity: async () => Promise.reject(new AwsError("CredentialsProviderError")) }).probes;
+  // In a pod there is no context: the name given is what the cluster is known by, which is what the reader answers with.
+  const inPod = await preflight({ ...options, clusterName: "prod" }, { aws: noAws, kube: kubeReader() });
+  assert.deepEqual(inPod.next, ["cloudpilot kube --cluster-name prod"], "the only thing that made the check work must be in the command it prints");
+
+  // kubectl had a context of its own, so the name was ignored: a command carrying it would say the cluster was named when it was not.
+  const onALaptop = await preflight({ ...options, clusterName: "prod-eu" }, { aws: noAws, kube: kubeReader() });
+  assert.deepEqual(onALaptop.next, ["cloudpilot kube"]);
+});
+
 // The command
 
 /** kubectl, as far as init uses it. Logs every call and refuses anything that is not a GET through get --raw or a read of the local config. */

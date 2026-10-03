@@ -156,7 +156,7 @@ others.
 
 | Object | What it is for |
 |---|---|
-| Namespace `cloudpilot`, held to the `restricted` Pod Security Standard | Where it runs. The pod below meets that standard, so the cluster can enforce it |
+| Namespace `cloudpilot`, held to the `restricted` Pod Security Standard as v1.37 defines it | Where it runs. The pod below meets that standard, so the cluster can enforce it. Pinning the version keeps a cluster upgrade from changing what is admitted here |
 | ServiceAccount, ClusterRole and ClusterRoleBinding `cloudpilot` | Its identity, and the access in the next section |
 | Role and RoleBinding in your Prometheus's namespace | GET on that one service, through the API server |
 | Deployment `cloudpilot-watch` | One pod running `cloudpilot watch --kube --every 6h` |

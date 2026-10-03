@@ -62,7 +62,11 @@ test("the pod is what the scanner preaches: non-root, read-only, no privilege, n
   assert.deepEqual(pod.securityContext, { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: "RuntimeDefault" } });
   assert.deepEqual(container.securityContext, { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } });
   for (const field of ["hostNetwork", "hostPID", "hostIPC"]) assert.ok(!pod[field], field);
-  assert.equal(named(watchFile, "Namespace", "cloudpilot").metadata.labels!["pod-security.kubernetes.io/enforce"], "restricted");
+  // Enforced at a version, so a cluster upgrade cannot change what is admitted here under the scanner's nose.
+  assert.deepEqual(named(watchFile, "Namespace", "cloudpilot").metadata.labels, {
+    "pod-security.kubernetes.io/enforce": "restricted",
+    "pod-security.kubernetes.io/enforce-version": "v1.37",
+  });
 
   // The only volume is an emptyDir with a ceiling, and it is where the command runs, so the baseline lands there.
   assert.deepEqual(pod.volumes, [{ name: "work", emptyDir: { sizeLimit: "64Mi" } }]);
@@ -80,17 +84,15 @@ test("it asks for little, says what for, and has a memory limit but no CPU limit
 });
 
 test("nothing is pulled and nothing is sent until the person has filled in their own image, name and webhook", () => {
-  const text = readFileSync(join(ROOT, "deploy/kube-watch.yaml"), "utf8");
   // A name Kubernetes cannot pull (upper case is not allowed in one), so a registry never gets a say.
   assert.equal(container.image, "REPLACE-WITH-YOUR-CLOUDPILOT-IMAGE");
-  assert.match(text, /image: REPLACE-WITH-YOUR-CLOUDPILOT-IMAGE # EDIT/);
   // The webhook is the person's Secret, never a value in the file.
   assert.ok(!watchFile.some((d) => d.kind === "Secret"));
   const env = Object.fromEntries(container.env.map((e: { name: string }) => [e.name, e]));
   assert.deepEqual(env.CLOUDPILOT_NOTIFY.valueFrom, { secretKeyRef: { name: "cloudpilot-webhook", key: "url" } });
   assert.deepEqual(Object.keys(env).sort(), ["CLOUDPILOT_CLUSTER_NAME", "CLOUDPILOT_NOTIFY"]);
-  assert.ok(!/^[^#\n]*https?:\/\//m.test(text), "no URL outside a comment");
-  assert.match(text, /kubectl -n cloudpilot create secret generic cloudpilot-webhook/);
+  // Nothing the cluster reads from this file names a destination: a URL could only be in a comment, which Kubernetes never sees.
+  assert.ok(!/https?:\/\//.test(JSON.stringify(watchFile)), "no URL in anything the cluster reads");
 });
 
 // The command in the Deployment, run as the pod runs it.

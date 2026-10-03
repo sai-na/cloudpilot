@@ -318,6 +318,8 @@ export interface PreflightOptions {
   regionGiven: boolean;
   profile?: string;
   context?: string;
+  /** --cluster-name: what to call the cluster this is running inside, where there is no context. */
+  clusterName?: string;
   prometheus?: PrometheusRef;
   now?: Date;
 }
@@ -523,7 +525,9 @@ function nextCommands(aws: AwsReport, kubernetes: KubeReport, options: Preflight
   }
   if (kubernetes.status === "ready" || kubernetes.status === "limited") {
     const given = options.prometheus ? ` --prometheus ${prometheusLabel(options.prometheus)}` : "";
-    next.push(`cloudpilot kube${options.context ? ` --context ${options.context}` : ""}${given}`);
+    // Inside a cluster there is no context to name, and the check worked only because the cluster was named: the command must carry that name too.
+    const named = options.clusterName && kubernetes.context === options.clusterName ? ` --cluster-name ${options.clusterName}` : "";
+    next.push(`cloudpilot kube${options.context ? ` --context ${options.context}` : named}${given}`);
   }
   return next;
 }

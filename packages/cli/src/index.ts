@@ -154,8 +154,13 @@ async function notifying<T>(targets: Target[], subject: () => string, run: () =>
   }
 }
 
-/** What a cluster check is about before its context is known: whatever was asked for. */
-const contextSubject = (context: string | undefined) => `cluster ${context ?? "(the current context)"}`;
+/**
+ * What a cluster check is about before its context is known: whatever was
+ * asked for. Inside a cluster there is no context to name, so the name given
+ * for the cluster stands in for one: a failure before the first read still
+ * says which cluster could not be read.
+ */
+const contextSubject = (options: { context?: string; clusterName?: string }) => `cluster ${options.context || clusterNameGiven(options) || "(the current context)"}`;
 
 /** What a replay of this kind of run is called when the recording has none. */
 const RECORDED_AS: Record<SessionMeta["command"], string> = { scan: "scan", ask: "ask", kube: "cluster scan", "kube-ask": "cluster question" };
@@ -483,10 +488,13 @@ function clusterPrices(options: KubeOptions): ClusterPrices {
 const CLUSTER_NAME_HELP =
   "when run inside the cluster with no kubeconfig: what to call it (or CLOUDPILOT_CLUSTER_NAME). Use the kubectl context name your team uses for it on their own machines, because the fix commands carry --context <name> so that a pasted command cannot reach a different cluster. Ignored when kubectl has a context";
 
+/** The name given for a cluster with no context, as it was written: --cluster-name, else CLOUDPILOT_CLUSTER_NAME. */
+const clusterNameGiven = (options: { clusterName?: string }) => options.clusterName ?? (process.env.CLOUDPILOT_CLUSTER_NAME?.trim() || undefined);
+
 /** The name a cluster with no context is known by: --cluster-name, else CLOUDPILOT_CLUSTER_NAME. Unused when kubectl has a context. */
 function clusterNameOf(options: { context?: string; clusterName?: string }): string | undefined {
   if (options.clusterName !== undefined && options.context) throw new Error("--cluster-name names a cluster read through the pod's own service account, so it cannot be used with --context.");
-  const given = options.clusterName ?? process.env.CLOUDPILOT_CLUSTER_NAME?.trim();
+  const given = clusterNameGiven(options);
   return given ? parseClusterName(given) : undefined;
 }
 
@@ -679,7 +687,7 @@ withRecordingOptions(
     let known: string | undefined;
     const { banner, inventory, result: scanned, previous, saved } = await notifying(
       targets,
-      () => (known ? `cluster ${known}` : contextSubject(options.context)),
+      () => (known ? `cluster ${known}` : contextSubject(options)),
       () => runKube(options, "kube", undefined, lookbackGiven, Boolean(options.json), targets.length === 0, (context) => (known = context)),
     );
 
@@ -761,7 +769,7 @@ program
       const clusterName = clusterNameOf(options);
       // The context in force now, kept for every round: a later `kubectl config use-context` must not move the watch to another cluster.
       // A watch that cannot even start must say so: it is not going to keep trying.
-      const { context, inCluster } = await notifying(targets, () => contextSubject(options.context), () => kubectlReader(options.context, undefined, clusterName).identity());
+      const { context, inCluster } = await notifying(targets, () => contextSubject(options), () => kubectlReader(options.context, undefined, clusterName).identity());
       // Inside a cluster there is no context to pin: kubectl uses the pod's service account every round.
       const reader = kubectlReader(inCluster ? undefined : context, undefined, clusterName);
       subject = `cluster ${context}`;
@@ -830,6 +838,7 @@ program
       regionGiven: Boolean(options.region),
       profile: options.profile,
       context: options.context,
+      clusterName: options.clusterName,
       prometheus: options.prometheus ? parsePrometheusRef(options.prometheus) : undefined,
     };
     const result = await preflight(checking, { aws: awsProbes(checking), kube: kubectlReader(options.context, KUBECTL_TIMEOUT_MS, clusterNameOf(options)) });

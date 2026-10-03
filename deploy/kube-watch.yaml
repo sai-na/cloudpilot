@@ -26,6 +26,10 @@ metadata:
   labels:
     # The pod below meets the strictest Pod Security Standard, so the cluster can hold the namespace to it.
     pod-security.kubernetes.io/enforce: restricted
+    # Held to that standard as Kubernetes v1.37 defines it, the version it was run on: without this, a
+    # cluster upgrade that adds a control to the standard could stop the pod being admitted, and a watch
+    # that cannot start is indistinguishable from one with nothing new to say.
+    pod-security.kubernetes.io/enforce-version: v1.37
 ---
 apiVersion: v1
 kind: ServiceAccount

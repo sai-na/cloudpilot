@@ -346,6 +346,21 @@ test("watch --kube inside a cluster with no name: the webhook is told why, befor
   });
 });
 
+test("watch --kube inside a cluster: a failure before the cluster can be read still says which cluster it was", async () => {
+  const k = lab();
+  await withHook(async (server) => {
+    // A pod whose image has no kubectl: the watch cannot even find out what it is reading, which is a failed check like any other.
+    const noKubectl = { ...POD, PATH: dirname(process.execPath) };
+    const run = await k.run(["watch", "--kube", "--cluster-name", "prod-eu", "--every", "1h", "--max-runs", "1", "--lookback-hours", "1", "--notify", server.url], noKubectl);
+    assert.equal(run.status, 1);
+    assert.deepEqual(events(server), ["check-failed"]);
+    // In a pod there is no current context to name, so the one message that breaks the silence has to carry the name the cluster was given.
+    assert.equal(bodies(server)[0].subject, "cluster prod-eu");
+    assert.doesNotMatch(bodies(server)[0].text, /the current context/);
+    assert.match(bodies(server)[0].error, /kubectl was not found on your PATH/);
+  });
+});
+
 test("watch: --cluster-name is for a cluster, so it is refused without --kube", async () => {
   const run = await lab().run(["watch", "--cluster-name", "prod-eu", "--max-runs", "1"]);
   assert.equal(run.status, 1);
