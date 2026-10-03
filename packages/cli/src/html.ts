@@ -2,7 +2,7 @@
  * The scan as one self-contained HTML file: no fonts, images, scripts or
  * styles are fetched from anywhere, so it opens offline and prints cleanly.
  */
-import { header, money, regionsWithFindings, skippedLine } from "./report.js";
+import { header, money, regionsWithFindings, shortId, skippedLine } from "./report.js";
 import type { Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
@@ -180,7 +180,7 @@ export function renderHtml(result: ScanResult, options: { summary?: string; bann
 <p class="amount"><mark>${money(f.monthlyCostUsd)}</mark><small>a month</small></p>
 <div>
 <h2>${escape(f.title)}</h2>
-<p class="where"><span class="id">${escape(f.resourceIds.join(", "))}</span> in ${escape(f.region)}, ${escape(f.resourceType)}, rule confidence ${Math.round(f.confidence * 100)}%</p>
+<p class="where"><span class="id" title="${escape(f.resourceIds.join(", "))}">${escape(f.resourceIds.map(shortId).join(", "))}</span> in ${escape(f.region)}, ${escape(f.resourceType)}, rule confidence ${Math.round(f.confidence * 100)}%</p>
 <ul>
 ${f.evidence.map((e) => `<li>${escape(e)}</li>`).join("\n")}
 </ul>

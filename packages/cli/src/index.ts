@@ -205,7 +205,7 @@ function finish(result: ScanResult): void {
 async function modelText(run: () => Promise<string>, allowed: Allowed, result: ScanResult): Promise<string> {
   const fallback = (why: string) => {
     note(`${why} Showing the templated summary instead.`);
-    return templatedSummary(result);
+    return templatedSummary(result, { shortenIds: true });
   };
   let text: string;
   try {
@@ -258,7 +258,7 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
     // Every scan ends with a summary: written by a model on request, built from the findings otherwise.
     const summary = options.explain
       ? await modelText(() => summarize(result, llmOptions(options, scope.homeRegion)), allowedValues(result), result)
-      : templatedSummary(result);
+      : templatedSummary(result, { shortenIds: true });
 
     if (options.json) {
       console.log(JSON.stringify({ ...result, summary, ...(banner ? { replay: banner } : {}) }, null, 2));

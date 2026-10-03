@@ -121,6 +121,15 @@ the findings by default, written by a model with `--explain`. `--html` writes
 the report as one self-contained file (no fonts, scripts or images are
 fetched), with a copy button on each command and a print layout.
 
+A resource ID is shortened where it is only a label: the finding line in the
+terminal, the `Resource` column of the Markdown table, the heading in HTML
+(which keeps the whole ID as the hover title) and the summary `scan`
+produces. The cut is at 64 characters, above the longest possible bucket
+name, so only an opaque ID such as an S3 upload ID is ever shortened. Fix
+commands and the finding data itself always carry the complete ID, so a
+command can be copied and run as it stands, and text handed to a model,
+including the MCP tool results, keeps whole IDs throughout.
+
 ### Score it against the waste lab
 
 ```sh
