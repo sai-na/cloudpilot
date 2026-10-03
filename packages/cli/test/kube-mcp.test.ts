@@ -73,7 +73,8 @@ test("get_cluster_workloads shows what was not flagged, and why", async () => {
   // Sized right: it uses the CPU and memory it requests.
   const web = named("web").containers[0];
   assert.deepEqual([web.cpuRequest, web.memoryRequest, web.memoryPeak, web.killedForMemory], ["100m", "64Mi", "49Mi", false]);
-  assert.ok(Number.parseInt(web.cpuPeak, 10) >= 90, web.cpuPeak);
+  // It peaked at 100.019m against a 100m request: rounded up, never down, so the peak never reads as less than it was.
+  assert.equal(web.cpuPeak, "101m");
   // Killed for memory once: the reason its memory request is left alone.
   assert.equal(named("importer").containers[0].killedForMemory, true);
   assert.equal(named("prometheus").skippedByLabel, true);

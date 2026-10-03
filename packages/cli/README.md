@@ -255,12 +255,13 @@ From a source checkout, the command is `node` with
 
 Every tool is marked read-only. The account tools make the same AWS calls
 as the list above and nothing else, and the cluster tools only run
-`kubectl get --raw`. Cluster costs use the OpenCost default prices here. The server tells the client's model the same
-ground rules `ask` uses: quote figures exactly, and present fix commands as
-proposals for a person. Two things differ from `ask`. The tool results (the
-findings and inventory of your account) go to whichever model your client
-uses. And CloudPilot cannot check what that model then writes, so the
-output check does not apply.
+`kubectl get --raw`. Cluster costs use the OpenCost default prices here.
+The server tells the client's model the same ground rules `ask` uses:
+quote figures exactly, and present fix commands as proposals for a person.
+Two things differ from `ask`. The tool results (the findings and inventory
+of your account) go to whichever model your client uses. And CloudPilot
+cannot check what that model then writes, so the output check does not
+apply.
 
 `--region`, `--profile`, `--redact-account` and `--replay <dir>` work here
 too. With `--replay` every result starts with the `REPLAY MODE` banner, and
