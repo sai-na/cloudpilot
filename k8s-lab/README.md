@@ -20,6 +20,12 @@ machine in [kind](https://kind.sigs.k8s.io) and costs nothing.
 The lab's own Prometheus carries the label `cloudpilot/ignore=true`, so it is
 left out and the report says so.
 
+A scan also lists two advisories, which are not waste and are not in the answer
+key or the $50.64: `importer`'s kill for memory (with a suggested limit of 320Mi),
+and `local-path-provisioner`, which sets no CPU or memory request. The lab has
+one node, its control plane, so there is nothing to say about spare nodes. The
+score is of the findings only and is the same with or without them.
+
 [`answer-key.json`](answer-key.json) holds the expected findings with their
 exact fix commands and costs. The costs follow from
 [`workloads.yaml`](workloads.yaml) and the default prices; each entry shows
@@ -61,7 +67,7 @@ touch another cluster your kubectl points at.
 
 `packages/cli/test/fixtures/kube-lab.json` is a recording of what this lab's
 API server and Prometheus answered, so the ordinary test suite checks the
-same answer key with no cluster running. Re-record it when the reads change:
+same answer key with no cluster running. It includes the node. Re-record it when the reads change:
 
 ```sh
 cd packages/cli && npx tsx test/kube-lab/record-fixture.ts > test/fixtures/kube-lab.json

@@ -1066,6 +1066,7 @@ say so: see [Watch it](#watch-it).
 | `--explain` | `scan` and `kube` only: have a model write the summary |
 | `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |
 | `--no-compare` | `scan` only: do not compare |
+| `--no-advisories` | `kube` and `watch --kube` only: leave out the advisories (things to look at that are not waste) and do not read the cluster's nodes. See [Also worth a look](#also-worth-a-look-advisories-which-are-not-waste) |
 | `--only-new` | `scan` only: list only the findings that are new since the earlier scan |
 | `--notify <url>` | `scan`, `kube`, `anomalies` and `watch`: send what is new (for `anomalies`, the services that cost more than usual) to this Slack, Discord or other https webhook. Repeatable; or `CLOUDPILOT_NOTIFY`, comma-separated. See [Tell your team what is new](#tell-your-team-what-is-new) |
 | `--upload <url>` | `scan`, `kube` and `watch`: send each scan's full result as JSON to this https address, the hosted service's upload endpoint. The token is read only from `CLOUDPILOT_UPLOAD_TOKEN`, never from a flag. Not with `--replay`, `--redact-account` or `kube --answer-key`. See [Keep the history](#keep-the-history) |
@@ -1119,6 +1120,133 @@ cannot. Deployments, StatefulSets and DaemonSets are judged; jobs and bare
 pods are not, and neither is anything in the namespaces the cluster runs for
 itself (`kube-system`, `kube-public`, `kube-node-lease`).
 
+### Also worth a look: advisories, which are not waste
+
+`kube` also reports a second kind of result, apart from the findings. An
+**advisory** is something a person should look at. It is found by a fixed rule
+from what the scan already read, and it is **not waste**: it is never counted in
+"N findings, $X per month", never compared with the last scan, never scored
+against a lab's answer key and never announced to a webhook. It is listed in its
+own section, "Also worth a look (not counted as waste)", after the findings.
+Advisories are a type of their own and sit in their own array,
+`advisories`, on the scan result. They are not findings with a cost of zero, so
+nothing that adds up, compares, scores or announces findings can pick one up.
+
+| Rule | Raised when | Says | Command |
+|---|---|---|---|
+| `out-of-memory` | A container's last stop (`lastState`, or `state` for one that has stopped for good) was `OOMKilled`, in a pod that has not finished. One advisory per container of one workload | Which container, when, its memory limit, its restart count, and that the over-requested rule already leaves its memory request alone | Only where the limit is known and the pod belongs to a Deployment, StatefulSet or DaemonSet: `kubectl set resources ... --limits=memory=<limit plus 25%, rounded up to the next 16Mi>`, as a suggestion, with the old limit as the way back. The right figure depends on the workload, and the advisory says so |
+| `restarting` | A container is waiting in `CrashLoopBackOff`, **or** has restarted 5 or more times and, where the pod records when it last stopped, that was within 24 hours of the scan (where it does not, the count alone decides, and the evidence says so) | The restart count of the worst pod, its last state (reason, exit code, time) | None. It points at `kubectl logs <pod> -c <container> --previous` |
+| `no-requests` | A container of a Deployment, StatefulSet or DaemonSet sets no CPU request or no memory request (a request of zero counts as none) | Which containers lack which request, and that the scheduler cannot place the pods sensibly and CloudPilot cannot judge whether they ask for too much | None. No dollar figure |
+| `unschedulable` | A pod is `Pending` and its `PodScheduled` condition is `False` | The scheduler's own message, with control characters removed and cut to 240 characters, and how long it has waited | None |
+| `spare-node-capacity` | The requests of the pods on the nodes that run workloads would fit on fewer nodes of the same size, now or once the over-requested findings' suggested requests are applied | The arithmetic below | None: how a node is removed depends on the provider, so CloudPilot prints no command for it |
+
+Pods of one workload that show the same thing are one advisory, with the count.
+Objects labelled `cloudpilot/ignore=true`, and pods of such a workload, raise
+none. The advisories come in a fixed order: by rule in the order above, then by
+namespace, object and container.
+
+**Spare node capacity, as arithmetic.** Nodes are read with
+`kubectl get --raw /api/v1/nodes` (see [What it needs](#what-it-needs)). A node
+that runs the control plane (a `node-role.kubernetes.io/control-plane` or
+`.../master` label), carries a `NoSchedule` or `NoExecute` taint, or is cordoned
+is named and left out. For the others:
+
+1. Sum the CPU and memory **requests** of every pod bound to them that has not
+   finished, in every namespace, the cluster's own included. Compare with the
+   nodes' **allocatable**.
+2. Take the average node. With no node above 80% of its allocatable CPU or
+   memory, the nodes needed are the larger of `ceil(CPU requested / (0.8 x CPU per
+   node))` and `ceil(memory requested / (0.8 x memory per node))`, and at least
+   one. The nodes that could go are the nodes counted less that.
+3. Do it again after taking off what the over-requested findings free: for each
+   workload that has a finding, the difference between each container's request
+   and the suggested one, for each of its pods on the nodes counted. This is what
+   turns those findings' dollars into a real saving, because lower requests only
+   free a node once the nodes are fewer.
+4. Say what the nodes that could go are worth: nodes x (CPU per node x the CPU
+   price + GiB per node x the memory price) x 730 hours, at the prices of this scan.
+
+The advisory is raised only when some node could go. Its dollar figure,
+`estimatedMonthlyUsd`, is never added to the total or to a finding: the
+over-requested findings already count the CPU and memory they free, so adding
+the two would count it twice, and the advisory says so. It is also an
+**estimate by totals**. It ignores affinity and anti-affinity rules, taints and
+tolerations on the pods, the DaemonSet pod every node must run, pod disruption
+budgets, local volumes, init containers, pod overhead and the headroom a spike
+needs, and it does not look at node health. With mixed node sizes it uses the
+average node.
+
+Worked example. The lab has one node, its control plane, so it raises nothing
+about nodes; the offline tests put its recorded pods on three nodes of 2 CPU and
+4 GiB to show the arithmetic. The pods request 3.08 CPU and 3554Mi. One node
+holds 1.6 CPU and 3276.8Mi within 80%, so today's requests need 2 of the 3
+nodes (3.08 / 1.6 rounds up to 2), and 1 could go. The three findings that lower
+requests would free 1.85 CPU (checkout 980m, reports 870m) and 2432Mi (search
+992Mi, reports 1440Mi), leaving 1.23 CPU and 1122Mi, which fit on 1 node, so 2
+could go: worth 2 x (2 x $0.031611 + 4 x $0.004237) x 730 = $117.05 a month at
+OpenCost's prices. The $50.64 total does not move.
+
+**`--json`.** Every advisory has this shape. `countedInTotal` is always `false`.
+
+```json
+{
+  "advisories": [
+    {
+      "rule": "out-of-memory",
+      "title": "Container job of deployment/importer was killed for running out of memory",
+      "kind": "Deployment",
+      "resource": "deployment/importer",
+      "namespace": "shop",
+      "container": "job",
+      "evidence": ["Container job was last killed for running out of memory (reason OOMKilled, exit code 137) at 2026-10-03T14:22:40Z.", "..."],
+      "advice": "Raise the memory limit and watch whether the kills stop. ...",
+      "suggestion": { "commands": ["kubectl set resources deployment/importer -n shop --context kind-cloudpilot-lab -c job --limits=memory=320Mi"], "risk": "caution", "rollback": "..." },
+      "countedInTotal": false
+    }
+  ],
+  "advisoryWarnings": []
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `rule` | `out-of-memory`, `restarting`, `no-requests`, `unschedulable` or `spare-node-capacity` |
+| `title`, `evidence[]`, `advice` | Words for a person. `advice` is always there |
+| `kind`, `resource`, `namespace` | What it is about: `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `Pod`, or `Cluster` with `resource` `cluster/<context>` and `namespace` `(cluster)` |
+| `container` | For the rules that are about one container |
+| `suggestion` | Only where a command can be worked out: `commands`, `risk` and `rollback`, as in a finding's `fix` |
+| `countedInTotal` | Always `false` |
+| `estimatedMonthlyUsd`, `estimateBasis` | Only for `spare-node-capacity`: what the nodes that could go are worth, and the arithmetic. Not counted anywhere |
+| `capacity` | Only for `spare-node-capacity`: the figures behind it (`headroomPct`, `nodes`, `excludedNodes`, `perNode`, `allocatable`, and `now` and `afterSuggestions`, each with `requestedCpuCores`, `requestedMemoryBytes`, `nodesNeeded` and `removable`) |
+
+`advisoryWarnings` lists reads the advisories needed that could not be made.
+With `--no-advisories`, neither key is in the result. An account scan has
+neither. The hosted service ignores keys it does not know, so `--upload` sends
+them with everything else `--json` prints; nothing in the uploaded findings or
+total changes.
+
+**What they do not touch.** The comparison with the last scan, `--only-new`,
+`--notify`, `watch`, `--answer-key` and `eval` work on findings exactly as
+before. Advisories are not compared (so `--only-new` cuts the findings and
+still lists every advisory), are not scored and do not trigger or fill a
+notification, in this version. In the HTML report they have no tick box and are
+not part of the one script.
+
+**`--no-advisories`** (on `kube` and `watch --kube`) leaves them out and does
+not read the nodes. A cluster that refuses the nodes read gets one warning that
+the spare node capacity check could not run, in its own list (`advisoryWarnings`),
+so it never makes a comparison doubt the findings; every other result is
+unaffected. `--namespace` also skips that check, and says why: a node is loaded
+by the pods of every namespace, and only one was read.
+
+**The model.** `--explain`, `ask --kube` and the MCP server's `scan_cluster` give
+the model the advisories as facts it may mention, apart from the findings. Its
+rules say they are not waste, that their figure is never to be called waste or a
+saving or added to the total, and what an `advisoryWarnings` entry means. The
+output check accepts the resource names, quantities and amounts in the
+advisories as known values, and still discards text that names an unknown
+workload, quantity, amount, namespace or context.
+
 ### What it needs
 
 - **`kubectl`**, which also brings whatever sign-in your cluster uses. Every
@@ -1134,10 +1262,14 @@ itself (`kube-system`, `kube-public`, `kube-node-lease`).
   port-forwarding. Name it with `--prometheus namespace/service:port` if it is
   not found. Without one, volumes are still reported and the report says
   requests were not judged.
+- **`list` on nodes** (`/api/v1/nodes`), for the spare node capacity advisory
+  only. Without it that one check says it could not run and every other result
+  is unaffected; `--no-advisories` skips the read, and `cloudpilot init` lists
+  `nodes` with the other reads.
 - For a dedicated identity with the least access, apply
   [`docs/cloudpilot-kube-readonly.yaml`](../../docs/cloudpilot-kube-readonly.yaml):
-  it may list workloads, pods, services and volumes and query one Prometheus
-  service. It cannot read Secrets or ConfigMaps, or change anything.
+  it may list workloads, pods, services, volumes and nodes and query one
+  Prometheus service. It cannot read Secrets or ConfigMaps, or change anything.
 
 ### Read a cluster from inside it
 
@@ -1188,7 +1320,9 @@ fewer or smaller nodes, which a node autoscaler does for you.
 
 `--json`, `--out`, `--html`, `--compare`, `--no-compare`, `--only-new`,
 `--notify` and `--upload` behave as they do for `scan`, and `watch --kube`
-repeats the scan. `kube --upload` is refused with `--answer-key`, which scores
+repeats the scan. Advisories are in the reports and in what `--json` and
+`--upload` carry, and in nothing a comparison or a notification is made from:
+see [Also worth a look](#also-worth-a-look-advisories-which-are-not-waste). `kube --upload` is refused with `--answer-key`, which scores
 a lab instead of keeping a scan: see [Keep the history](#keep-the-history).
 The last scan is kept per cluster
 (`.cloudpilot/last-kube-scan-<context>.json`; `ask --kube` leaves one too, and
@@ -1204,8 +1338,8 @@ see above). Not yet for clusters: the daily report.
 
 `--explain` has a model write the summary, as it does for `scan`. `ask --kube`
 scans the cluster, then lets a model answer your question with two read-only
-lookups over that scan: the findings, and every Deployment, StatefulSet and
-DaemonSet it read, flagged or not (requests, peak use, hours of history, whether
+lookups over that scan: the findings (with the advisories, listed apart from
+them), and every Deployment, StatefulSet and DaemonSet it read, flagged or not (requests, peak use, hours of history, whether
 a container was killed for running out of memory). The model never reads the
 cluster itself, so a question costs one scan and nothing more. Without a
 model key, `kube --explain` shows the templated summary and says why;
@@ -1245,7 +1379,10 @@ even where someone meant minutes. Tests run all of this with a stand-in
 model, never a real one.
 
 `kube --record <dir>` and `--replay <dir>`, and `ask --kube` with the same two
-flags, are described under [Record and replay](#record-and-replay).
+flags, are described under [Record and replay](#record-and-replay). A recording
+keeps the nodes, cut to what the scan reads (their role labels, taints,
+allocatable figures), and notes whether the advisories were read. A recording
+made without them, or before they existed, replays without them.
 
 The rules are checked against a seeded cluster: see
 [`k8s-lab/`](../../k8s-lab).
@@ -1363,8 +1500,20 @@ The rules are checked against a seeded cluster: see
   values, not proof that what a model says about them is right. What it covers
   is listed under
   [Explain, ask, record and replay](#explain-ask-record-and-replay).
-- Kubernetes: limits are not changed, and a workload kept in sync by Helm,
-  Argo CD or Flux must be changed at its source. The finding says so.
+- Kubernetes: limits are not changed by the findings, and a workload kept in
+  sync by Helm, Argo CD or Flux must be changed at its source. The finding says so.
+- Kubernetes advisories: they are fixed rules over one reading of the cluster,
+  not a health check. `out-of-memory` rests on the pod's last stop, which
+  Kubernetes keeps only while the pod exists, and says nothing of how often it
+  happens. `restarting` cannot tell a crash from a deliberate restart. A pod
+  that is `Pending` only for a moment, while a node autoscaler adds a node, is
+  reported as `unschedulable` with how long it has waited. The figure the
+  `out-of-memory` command suggests is the limit plus 25%, not a measurement.
+- Kubernetes advisories, spare node capacity: an estimate by totals, described
+  under [Also worth a look](#also-worth-a-look-advisories-which-are-not-waste).
+  It has been run on the offline recording and on a hand-built cluster of nodes,
+  not on a live cluster with more than one node, because the lab has one. Its
+  dollar figure is not part of any total, by design.
 - Kubernetes, inside a cluster: the name given with `--cluster-name` is taken on
   trust, since a pod cannot ask the cluster what your team calls it. And
   `deploy/kube-watch.yaml` keeps the watch's baseline in an `emptyDir`, so a
