@@ -75,8 +75,8 @@ screen recording, and every scene shows the `REPLAY MODE` line. Making the GIF
 needs [`agg`](https://github.com/asciinema/agg); without it only the cast is
 written.
 
-`npm test` fails when the capture no longer matches what the commands print,
-or when the Kubernetes recording stops replaying. Then run the script again;
+`(cd packages/cli && npm test)` fails when the capture no longer matches what
+the commands print, or when the Kubernetes recording stops replaying. Then run the script again;
 after a change to how the cluster is read, record the lab again first:
 
 ```sh

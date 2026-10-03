@@ -9,6 +9,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CLUSTER = resolve(ROOT, "demo/cluster-lab");
 const ANSWER_KEY = resolve(ROOT, "k8s-lab/answer-key.json");
 
+/** What `str.rstrip("\n")` in demo/capture.py does, so a scene is rebuilt line for line as the capture composed it. */
+const withoutTrailingNewlines = (text: string) => text.replace(/\n+$/, "");
+
 /** Everything the capture printed to the screen, as one string with plain line ends. */
 function captured(): string {
   const [, ...events] = readFileSync(resolve(ROOT, "docs/demo.cast"), "utf8").trim().split("\n");
@@ -39,8 +42,12 @@ test("the capture in docs/ shows what the commands print today", () => {
   for (const scene of scenes) {
     const run = cli(scene.args, { blockNetwork: true });
     assert.equal(run.status, 0, run.stderr);
-    const report = run.stdout.trimEnd().split("\n");
-    const shown = (scene.lines ? report.slice(0, scene.lines) : report).join("\n");
+    // The capture shows the stderr progress first (head never cuts it), then the report, as demo/capture.py composes them.
+    const report = withoutTrailingNewlines(run.stdout).split("\n");
+    const shown = [
+      ...withoutTrailingNewlines(run.stderr).split("\n"),
+      ...(scene.lines ? report.slice(0, scene.lines) : report),
+    ].join("\n");
     assert.ok(screen.includes(shown), `the capture no longer shows what "cloudpilot ${scene.args[0]}" prints; run demo/capture.py`);
   }
   // A replay says it is one, and the capture must show that line for each scene.

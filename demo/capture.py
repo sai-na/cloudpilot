@@ -36,11 +36,6 @@ def main() -> int:
     if not os.path.exists(CLI):
         print("Build the CLI first: (cd packages/cli && npm run build)", file=sys.stderr)
         return 1
-    stage = tempfile.mkdtemp(prefix="cloudpilot-capture-")
-    os.symlink(os.path.join(ROOT, "packages", "cli", "test", "fixtures", "lab"), os.path.join(stage, "aws-lab"))
-    os.symlink(os.path.join(ROOT, "demo", "cluster-lab"), os.path.join(stage, "cluster-lab"))
-    shutil.copy(os.path.join(ROOT, "k8s-lab", "answer-key.json"), os.path.join(stage, "answer-key.json"))
-
     clock = 0.0
     events = []
 
@@ -49,25 +44,32 @@ def main() -> int:
         clock += wait
         events.append([round(clock, 3), "o", text])
 
-    for number, (shown, args, head) in enumerate(SCENES):
-        done = subprocess.run(["node", CLI, *args], cwd=stage, capture_output=True, text=True)
-        if done.returncode != 0:
-            print(done.stderr, file=sys.stderr)
-            return 1
-        report = done.stdout.rstrip("\n").split("\n")
-        if head is not None:
-            shown, report = f"{shown} | head -{head}", report[:head]
-        # Progress goes to stderr, so on a terminal it comes before the report and is not cut by head.
-        lines = done.stderr.rstrip("\n").split("\n") + report
-        out("\x1b[1;32m$\x1b[0m ", 0.6)
-        for char in shown:
-            out(char, 0.035)
-        out("\r\n", 0.5)
-        for line in lines:
-            out(line + "\r\n", 0.05)
-        last = number == len(SCENES) - 1
-        out(" " if last else "\x1b[2J\x1b[H", 5.0 if last else 4.5)
-    shutil.rmtree(stage)
+    stage = tempfile.mkdtemp(prefix="cloudpilot-capture-")
+    try:
+        os.symlink(os.path.join(ROOT, "packages", "cli", "test", "fixtures", "lab"), os.path.join(stage, "aws-lab"))
+        os.symlink(os.path.join(ROOT, "demo", "cluster-lab"), os.path.join(stage, "cluster-lab"))
+        shutil.copy(os.path.join(ROOT, "k8s-lab", "answer-key.json"), os.path.join(stage, "answer-key.json"))
+
+        for number, (shown, args, head) in enumerate(SCENES):
+            done = subprocess.run(["node", CLI, *args], cwd=stage, capture_output=True, text=True)
+            if done.returncode != 0:
+                print(done.stderr, file=sys.stderr)
+                return 1
+            report = done.stdout.rstrip("\n").split("\n")
+            if head is not None:
+                shown, report = f"{shown} | head -{head}", report[:head]
+            # Progress goes to stderr, so on a terminal it comes before the report and is not cut by head.
+            lines = done.stderr.rstrip("\n").split("\n") + report
+            out("\x1b[1;32m$\x1b[0m ", 0.6)
+            for char in shown:
+                out(char, 0.035)
+            out("\r\n", 0.5)
+            for line in lines:
+                out(line + "\r\n", 0.05)
+            last = number == len(SCENES) - 1
+            out(" " if last else "\x1b[2J\x1b[H", 5.0 if last else 4.5)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
 
     os.makedirs(os.path.join(ROOT, "docs"), exist_ok=True)
     cast = os.path.join(ROOT, "docs", "demo.cast")
@@ -81,12 +83,14 @@ def main() -> int:
         print("agg is not installed, so no GIF was made. Install it and run this again.", file=sys.stderr)
         return 0
     gif = os.path.join(ROOT, "docs", "demo.gif")
-    subprocess.run(
+    render = subprocess.run(
         ["agg", "--cols", str(COLS), "--rows", str(ROWS), "--font-size", "14", "--fps-cap", "10", "--idle-time-limit", "5", "--theme", "asciinema", cast, gif],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
     )
+    if render.returncode != 0:
+        print(render.stderr.rstrip("\n") or f"agg exited {render.returncode}", file=sys.stderr)
+        return 1
     print(f"Wrote {os.path.relpath(gif, ROOT)} ({os.path.getsize(gif) // 1024} KB)")
     return 0
 
