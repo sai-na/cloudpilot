@@ -457,7 +457,7 @@ test("at most the cap a round, biggest saving first, and what is left is held ba
   assert.deepEqual(ids(p.ran), [gp2(4).id, gp2(3).id]);
   const held = p.log.filter((e) => e.outcome === "held-back");
   assert.deepEqual(held.map((e) => e.finding.resourceIds[0]), [gp2(2).id, gp2(1).id]);
-  assert.match(held[0]!.reason!, /Held back: the cap of 2 fixes a round was reached\./);
+  assert.match(held[0]!.reason!, /The cap of 2 fixes a round was reached\./);
   assert.ok(held.every((e) => e.commands.every((c) => c.exitCode === undefined)), "none of their commands ran");
   assert.deepEqual(held[0]!.autopilot!.gates.slice(-1), ["no earlier fix on this resource"], "the gates it did pass, and not the cap");
   assert.match(p.log[0]!.autopilot!.gates.at(-1)!, /within the caps \(1 of 2 this round, 1 of 10 in all\)/);
@@ -476,7 +476,7 @@ test("the total for the whole watch holds across rounds, and everything past it 
   assert.equal(p.ran.length, 3);
   await p.round(there);
   assert.equal(p.ran.length, 4, "one more is all the total allows");
-  assert.match(p.log.filter((e) => e.outcome === "held-back").at(-1)!.reason!, /Held back: the cap of 4 fixes for this watch was reached\./);
+  assert.match(p.log.filter((e) => e.outcome === "held-back").at(-1)!.reason!, /The cap of 4 fixes for this watch was reached\./);
   await p.round(there);
   await p.round(there);
   assert.equal(p.ran.length, 4, "no round after that runs anything");
@@ -494,7 +494,7 @@ test("the first failure stops the round: the rest are held back and recorded, th
   assert.deepEqual(p.log.map((e) => [e.finding.resourceIds[0], e.outcome]), [[gp2(3).id, "failed"], [gp2(2).id, "held-back"], [gp2(1).id, "held-back"]]);
   assert.equal(p.log[0]!.commands[0]!.exitCode, 254);
   assert.match(p.log[0]!.commands[0]!.output!, /UnauthorizedOperation/);
-  assert.match(p.log[1]!.reason!, /Held back: autopilot stopped for this round, because an earlier fix failed in this round\./);
+  assert.match(p.log[1]!.reason!, /Autopilot stopped for this round, because an earlier fix failed in this round\./);
   assert.equal(result.failed, true);
   const notice = result.notice as Extract<Notice, { kind: "autopilot" }>;
   assert.deepEqual(notice.lines.map((l) => l.outcome), ["failed", "held-back", "held-back"]);
@@ -571,7 +571,7 @@ test("an entry autopilot writes is an entry the audit log reads back, and the au
   assert.match(text, /APPLIED {3}vol-\S+ {2}\(account 123456789012, ap-south-1\) {2}by sai \[autopilot\]/);
   assert.match(text, /Autopilot gates passed: rule named; fix can be undone; confidence 0\.9 \(at least 0\.9\); in 1 round of this watch in a row \(at least 1\); scan taken in this round, region read in full; no earlier fix on this resource; within the caps \(1 of 1 this round, 1 of 10 in all\)/);
   assert.match(text, /HELD-BACK {2}vol-\S+/);
-  assert.match(text, /Held back: the cap of 1 fixes a round was reached\./);
+  assert.match(text, /The cap of 1 fixes a round was reached\./);
   assert.match(text, /Way back: Online and reversible/);
   // An entry whose autopilot field is not a list of gates is not an entry.
   assert.equal(isAuditEntry({ ...p.log[0]!, autopilot: { gates: "all" } }), false);
@@ -594,7 +594,7 @@ test("a dry run runs nothing and records nothing, says what would run, counts ag
   const second = await p.round(there);
   // The two said already are not said again. One more would run, and the last is now held by the total, a new reason.
   assert.deepEqual(second.notice && (second.notice as Extract<Notice, { kind: "autopilot" }>).lines.map((l) => l.outcome), ["would-run", "held-back"]);
-  assert.match((second.notice as Extract<Notice, { kind: "autopilot" }>).lines[1]!.reason!, /the cap of 3 fixes for this watch was reached/);
+  assert.match((second.notice as Extract<Notice, { kind: "autopilot" }>).lines[1]!.reason!, /The cap of 3 fixes for this watch was reached/);
   assert.deepEqual(p.ran, []);
   assert.match(plainText(notice), /^CloudPilot autopilot \(dry run\): 2 fixes would run, 2 held back, AWS account 123456789012\n/);
   assert.match(plainText(notice), /This is a dry run: nothing was run, and the lines below are what a real run would have run\./);
@@ -608,7 +608,7 @@ test("a watch that is stopped lets no further fix start, and says so", async () 
   stop.abort();
   const result = await p.round(account([gp2(1)]), stop.signal);
   assert.deepEqual(p.ran, []);
-  assert.match(p.log[0]!.reason!, /autopilot stopped for this round, because the watch was stopped/);
+  assert.match(p.log[0]!.reason!, /Autopilot stopped for this round, because the watch was stopped/);
   assert.equal(p.log[0]!.outcome, "held-back");
   assert.equal(result.failed, false);
 });

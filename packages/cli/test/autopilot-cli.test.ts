@@ -208,7 +208,7 @@ test("the cap on a round runs the biggest savings first and holds the rest back,
       assert.match(run.stdout, /Autopilot: 2 fixes run, 2 held back\./);
       const message = eventsOf(server).find((m) => m.event === "autopilot");
       assert.match(message.text, /^CloudPilot autopilot: 2 fixes run, 2 held back, AWS account/);
-      assert.match(message.text, /3\. HELD BACK .*\(vol-0a1b2c3d4e5f60002\).*Held back: the cap of 2 fixes a round was reached\./);
+      assert.match(message.text, /3\. HELD BACK .*\(vol-0a1b2c3d4e5f60002\).*The cap of 2 fixes a round was reached\./);
     } finally {
       await server.close();
     }
@@ -217,7 +217,7 @@ test("the cap on a round runs the biggest savings first and holds the rest back,
     const run = await r.run(r.watchArgs("--autopilot", "gp2-volume", "--autopilot-after", "1", "--autopilot-max-total", "1"));
     assert.equal(run.status, 0, run.stderr);
     assert.equal(r.calls().length, 1);
-    assert.match(auditOf(r.cwd).at(-1)!.reason!, /the cap of 1 fixes for this watch was reached/);
+    assert.match(auditOf(r.cwd).at(-1)!.reason!, /The cap of 1 fixes for this watch was reached/);
   });
 });
 
@@ -227,7 +227,7 @@ test("the first failure stops the round: the later fixes are held back, recorded
     assert.equal(run.status, 1);
     assert.deepEqual(r.calls().map((c) => c.args[3]), [VOL(3)]);
     assert.deepEqual(auditOf(r.cwd).map((e) => e.outcome), ["failed", "held-back", "held-back"]);
-    assert.match(auditOf(r.cwd)[1]!.reason!, /autopilot stopped for this round, because an earlier fix failed in this round/);
+    assert.match(auditOf(r.cwd)[1]!.reason!, /Autopilot stopped for this round, because an earlier fix failed in this round/);
     assert.match(run.stdout, /Autopilot: 0 fixes run, 1 failed, 2 held back\./);
   });
 });

@@ -400,7 +400,7 @@ export function createAutopilot(settings: AutopilotSettings, io: AutopilotIO): A
 
         if (ready.length >= slots) {
           const why = totalLeft <= roundCap ? `the cap of ${settings.maxTotal} fixes for this watch was reached` : `the cap of ${roundCap} fixes a round was reached`;
-          capped.push({ f, gates, reason: `Held back: ${why}.` });
+          capped.push({ f, gates, reason: `${why[0]!.toUpperCase()}${why.slice(1)}.` });
           continue;
         }
         gates.push(`within the caps (${ready.length + 1} of ${roundCap} this round, ${total + ready.length + 1} of ${settings.maxTotal} in all)`);
@@ -413,7 +413,7 @@ export function createAutopilot(settings: AutopilotSettings, io: AutopilotIO): A
       for (const { f, p, gates } of ready) {
         const stop = failed ? "an earlier fix failed in this round" : signal.aborted ? "the watch was stopped" : auditBroken !== undefined ? "the audit log could not take the last record" : undefined;
         if (stop) {
-          await leave(f, "held-back", gates, `Held back: autopilot stopped for this round, because ${stop}.`);
+          await leave(f, "held-back", gates, `Autopilot stopped for this round, because ${stop}.`);
           continue;
         }
         attempted.add(resourceKey("account", scan.accountId, f.region, f.resourceIds));
