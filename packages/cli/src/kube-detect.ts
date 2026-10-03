@@ -2,6 +2,8 @@
  * The rules for a Kubernetes cluster. Like the AWS rules they are fixed and
  * need no model: the same cluster always gives the same findings.
  */
+import { detectAdvisories } from "./kube-advisories.js";
+import { cpuQuantity, hours, memoryQuantity } from "./kube-format.js";
 import type { ClaimInfo, ClusterInventory, PersistentVolumeInfo, Workload, WorkloadContainer } from "./kube.js";
 import { HOURS_PER_MONTH, type ClusterPrices, type Finding, type ScanResult } from "./types.js";
 
@@ -32,40 +34,21 @@ const MEMORY_NOISE_BYTES = 64 * MI;
 /** With less history than this there is nothing to judge a request by. */
 const MIN_HISTORY_HOURS = 5 / 60;
 
+export { cpuQuantity, hours, memoryQuantity };
+
 const roundUp = (value: number, step: number) => Math.ceil(value / step - 1e-9) * step;
-
-/** "500m", or "2" for whole cores: the form a manifest uses. */
-export function cpuQuantity(cores: number): string {
-  const millicores = Math.round(cores * 1000);
-  return millicores % 1000 === 0 ? String(millicores / 1000) : `${millicores}m`;
-}
-
-/** "64Mi", or "1Gi" for whole gibibytes. */
-export function memoryQuantity(bytes: number): string {
-  const mebibytes = Math.round(bytes / MI);
-  return mebibytes % 1024 === 0 && mebibytes > 0 ? `${mebibytes / 1024}Gi` : `${mebibytes}Mi`;
-}
 
 /** Use as measured, rounded up so it never reads as less than it was. */
 const cpuUse = (cores: number) => (cores < 0.001 ? "under 1m" : cpuQuantity(Math.ceil(cores * 1000 - 1e-9) / 1000));
 const memoryUse = (bytes: number) => (bytes < MI ? "under 1Mi" : memoryQuantity(Math.ceil(bytes / MI - 1e-9) * MI));
 
-/** "6 minutes", "1 hour", "7.5 hours". */
-export function hours(h: number): string {
-  if (h < 1) {
-    const minutes = Math.max(1, Math.round(h * 60));
-    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-  }
-  const rounded = Number(h.toFixed(1));
-  return `${rounded} ${rounded === 1 ? "hour" : "hours"}`;
-}
 const gib = (bytes: number) => Number((bytes / GI).toFixed(2));
 const usd = (n: number) => `$${n}`;
 
 /** A week of history is worth trusting; an hour is a hint. */
 export const confidenceFor = (historyHours: number) => (historyHours >= 168 ? 0.9 : historyHours >= 24 ? 0.8 : historyHours >= 1 ? 0.6 : 0.4);
 
-interface Resize {
+export interface Resize {
   container: WorkloadContainer;
   cpuTo?: number;
   memoryTo?: number;
@@ -108,8 +91,13 @@ function resize(container: WorkloadContainer): Resize | undefined {
 const requests = (cpu: number | undefined, memory: number | undefined) =>
   [cpu !== undefined ? `cpu=${cpuQuantity(cpu)}` : "", memory !== undefined ? `memory=${memoryQuantity(memory)}` : ""].filter(Boolean).join(",");
 
+/** The containers of a workload whose requests could come down, as the over-requested finding judges them. */
+function judgedResizes(workload: Workload): Resize[] {
+  return workload.containers.flatMap((c) => ((c.historyHours ?? 0) >= MIN_HISTORY_HOURS ? [resize(c)].flatMap((r) => (r ? [r] : [])) : []));
+}
+
 function overRequested(workload: Workload, inventory: ClusterInventory, prices: ClusterPrices): Finding | undefined {
-  const resizes = workload.containers.flatMap((c) => ((c.historyHours ?? 0) >= MIN_HISTORY_HOURS ? [resize(c)].flatMap((r) => (r ? [r] : [])) : []));
+  const resizes = judgedResizes(workload);
   if (resizes.length === 0) return undefined;
 
   const target = `${workload.kind.toLowerCase()}/${workload.name}`;
@@ -232,6 +220,21 @@ export function detectCluster(inventory: ClusterInventory, prices: ClusterPrices
     }
   }
 
+  // What the over-requested findings would free, from the same judgement that raised them, for the node capacity advisory.
+  const advisories = inventory.advisories
+    ? detectAdvisories(
+        inventory,
+        prices,
+        kept(inventory.workloads).flatMap((workload) => {
+          const resizes = judgedResizes(workload);
+          if (resizes.length === 0) return [];
+          const cpuFreedPerPod = resizes.reduce((sum, r) => sum + (r.cpuTo !== undefined ? r.container.cpuRequestCores! - r.cpuTo : 0), 0);
+          const memoryFreedPerPod = resizes.reduce((sum, r) => sum + (r.memoryTo !== undefined ? r.container.memoryRequestBytes! - r.memoryTo : 0), 0);
+          return [{ workload, cpuFreedPerPod, memoryFreedPerPod }];
+        }),
+      )
+    : undefined;
+
   return {
     accountId: inventory.context,
     // Volumes are cluster-scoped and read whole, so one can be charged to a
@@ -242,6 +245,7 @@ export function detectCluster(inventory: ClusterInventory, prices: ClusterPrices
     prices: { source: prices.source, fetchedAt: inventory.collectedAt },
     findings,
     totalMonthlyWasteUsd: findings.reduce((sum, f) => sum + f.monthlyCostUsd, 0),
+    ...(advisories ? { advisories: advisories.advisories, advisoryWarnings: advisories.warnings } : {}),
     skippedByTag: [
       ...inventory.workloads.filter((w) => w.ignored).map((w) => `${w.namespace}/${w.kind.toLowerCase()}/${w.name}`),
       ...inventory.claims.filter((c) => c.ignored).map((c) => `${c.namespace}/persistentvolumeclaim/${c.name}`),
