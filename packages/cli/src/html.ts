@@ -2,7 +2,7 @@
  * The scan as one self-contained HTML file: no fonts, images, scripts or
  * styles are fetched from anywhere, so it opens offline and prints cleanly.
  */
-import { comparisonLine, header, money, regionsWithFindings, shortId, shownFindings, skippedLine } from "./report.js";
+import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, shortId, shownFindings, skippedLine } from "./report.js";
 import type { Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
@@ -181,7 +181,9 @@ export function renderHtml(result: ScanResult, options: { summary?: string; bann
 
   const since = comparisonLine(result);
   const resolved = result.comparison?.resolved ?? [];
-  const findings = shownFindings(result, options.onlyNew)
+  const shown = shownFindings(result, options.onlyNew);
+  const note = [since, onlyNewLine(result, shown)].filter(Boolean).join(" ");
+  const findings = shown
     .map(
       (f) => `<article class="finding">
 <p class="amount"><mark>${money(f.monthlyCostUsd)}</mark><small>a month</small></p>
@@ -223,7 +225,7 @@ ${options.banner ? `<p class="replay" role="note">${escape(options.banner)}</p>`
 <div><dt>Scanned</dt><dd>${escape(result.scannedAt)}</dd></div>
 <div><dt>Prices</dt><dd>${escape((pricesLine ?? "").replace(/^Prices: /, ""))}</dd></div>
 </dl>
-${since ? `<p class="since">${escape(since)}</p>` : ""}
+${note ? `<p class="since">${escape(note)}</p>` : ""}
 ${resolved.length > 0 ? `<section class="resolved">\n<h2>Resolved since the last scan</h2>\n<ul>\n${resolved.map((r) => `<li>${escape(r.title)} (${escape(r.resourceIds.map(shortId).join(", "))}), ${money(r.monthlyCostUsd)} a month</li>`).join("\n")}\n</ul>\n</section>` : ""}
 ${options.summary ? `<section class="summary">\n<h2>Summary</h2>\n${summaryBlocks(options.summary)}\n</section>` : ""}
 ${findings}

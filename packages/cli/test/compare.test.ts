@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { compareScans } from "../src/compare.js";
+import { compareScans, isScanResult } from "../src/compare.js";
+import { renderHtml } from "../src/html.js";
 import { allowedValues, unsupportedValues } from "../src/output-check.js";
-import { renderText, templatedSummary } from "../src/report.js";
+import { renderMarkdown, renderText, templatedSummary } from "../src/report.js";
 import type { Finding, ScanResult } from "../src/types.js";
 import { cli, FIXTURE } from "./helpers.js";
 
@@ -77,6 +78,37 @@ test("a finding in a region that was not scanned again is not called resolved", 
   assert.deepEqual(result.comparison!.resolved, []);
 });
 
+test("a scan with everything fixed still says what it was costing", () => {
+  const result = compareScans(yesterday, scan([]))!;
+  const expected = /Since the last scan \(2026-10-02T00:00:00Z\): 0 new \(\$0\.00 a month\), 2 resolved \(\$75\.24 a month\), 0 unchanged\./;
+  assert.match(renderText(result), expected);
+  assert.match(renderText(result), /No waste found\./);
+  assert.match(templatedSummary(result), expected);
+  assert.deepEqual(unsupportedValues(templatedSummary(result), allowedValues(result)), []);
+  assert.match(renderMarkdown(result), expected);
+  assert.match(renderHtml(result), expected);
+});
+
+test("every report says when the list was cut down to the new findings", () => {
+  const today = scan([finding("vol-0aaaaaaaaaaaaaaaa", 57), finding("vol-0cccccccccccccccc", 9.12)]);
+  const result = compareScans(yesterday, today)!;
+  const note = /Showing only the 1 new finding\./;
+  for (const report of [renderText(result, { onlyNew: true }), renderMarkdown(result, undefined, undefined, { onlyNew: true }), renderHtml(result, { onlyNew: true })]) {
+    assert.match(report, note);
+    assert.ok(!report.includes("vol-0aaaaaaaaaaaaaaaa"), "the unchanged finding is left out");
+  }
+  // Without the flag no report claims to be filtered.
+  for (const report of [renderText(result), renderMarkdown(result), renderHtml(result)]) assert.doesNotMatch(report, note);
+});
+
+test("a scan result with a finding missing its cost is not comparable", () => {
+  const complete = scan([finding("vol-0aaaaaaaaaaaaaaaa", 57)]);
+  assert.equal(isScanResult(JSON.parse(JSON.stringify(complete))), true);
+  for (const broken of [{}, { pattern: "gp2-volume", region: "ap-south-1", title: "x", resourceIds: ["vol-1"] }, { ...complete.findings[0], monthlyCostUsd: null }]) {
+    assert.equal(isScanResult({ ...complete, findings: [broken] }), false, JSON.stringify(broken));
+  }
+});
+
 test("scans of different accounts are not compared", () => {
   assert.equal(compareScans(scan([], { accountId: "999999999999" }), scan([])), undefined);
 });
@@ -119,4 +151,17 @@ test("a file that is not a scan result is refused by name", () => {
   const run = cli(["scan", "--replay", FIXTURE, "--compare", join(FIXTURE, "manifest.json")], { blockNetwork: true });
   assert.equal(run.status, 1);
   assert.match(run.stderr, /manifest\.json is not a CloudPilot scan result/);
+});
+
+test("a scan file whose findings are the wrong shape is refused by name, not reported as $NaN", () => {
+  const first = cli(["scan", "--replay", FIXTURE, "--json"], { blockNetwork: true });
+  const earlier = JSON.parse(first.stdout);
+  const file = join(first.cwd, "half-written.json");
+  const { pattern, region, title, resourceIds } = earlier.findings[0];
+  writeFileSync(file, JSON.stringify({ ...earlier, findings: [{ pattern, region, title, resourceIds }] }));
+
+  const run = cli(["scan", "--replay", FIXTURE, "--compare", file], { blockNetwork: true });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /half-written\.json is not a CloudPilot scan result/);
+  assert.ok(!run.stdout.includes("NaN"));
 });

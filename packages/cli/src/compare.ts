@@ -6,10 +6,33 @@ import type { Comparison, Finding, ScanResult } from "./types.js";
 
 const keyOf = (f: Finding) => `${f.pattern}|${f.region}|${[...f.resourceIds].sort().join(",")}`;
 
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** True when a parsed finding carries every field a comparison and its report need. */
+function isComparableFinding(value: unknown): value is Finding {
+  const f = value as Partial<Finding> | null;
+  return Boolean(
+    f &&
+      typeof f.pattern === "string" &&
+      typeof f.region === "string" &&
+      typeof f.title === "string" &&
+      isStringList(f.resourceIds) &&
+      typeof f.monthlyCostUsd === "number" &&
+      Number.isFinite(f.monthlyCostUsd),
+  );
+}
+
 /** True when a parsed file looks like a scan result this version can compare with. */
 export function isScanResult(value: unknown): value is ScanResult {
   const v = value as Partial<ScanResult> | null;
-  return Boolean(v && typeof v.accountId === "string" && Array.isArray(v.regions) && Array.isArray(v.findings) && typeof v.scannedAt === "string");
+  return Boolean(
+    v &&
+      typeof v.accountId === "string" &&
+      isStringList(v.regions) &&
+      Array.isArray(v.findings) &&
+      v.findings.every(isComparableFinding) &&
+      typeof v.scannedAt === "string",
+  );
 }
 
 /**

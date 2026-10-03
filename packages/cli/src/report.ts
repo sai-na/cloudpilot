@@ -49,6 +49,12 @@ export function shownFindings(result: ScanResult, onlyNew = false): Finding[] {
   return onlyNew && result.comparison ? result.findings.filter((f) => f.isNew) : result.findings;
 }
 
+/** Note saying the list was cut down to the new findings, when it was. */
+export function onlyNewLine(result: ScanResult, shown: Finding[]): string | undefined {
+  if (shown.length >= result.findings.length) return undefined;
+  return `Showing only the ${shown.length} new finding${shown.length === 1 ? "" : "s"}.`;
+}
+
 const resolvedLines = (result: ScanResult) =>
   (result.comparison?.resolved ?? []).map((r) => `${r.title} (${r.resourceIds.map(shortId).join(", ")}), ${money(r.monthlyCostUsd)} a month`);
 
@@ -63,14 +69,18 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
   const dim = (s: string) => styleText("dim", s);
   const lines: string[] = [bold("CloudPilot scan"), ...header(result).map(dim), ""];
 
-  if (result.findings.length === 0) {
-    lines.push("No waste found.");
-  } else {
-    lines.push(bold(`${result.findings.length} findings, ${money(result.totalMonthlyWasteUsd)} per month of estimated waste`));
-    const since = comparisonLine(result);
-    if (since) lines.push(since);
+  lines.push(
+    result.findings.length === 0
+      ? "No waste found."
+      : bold(`${result.findings.length} findings, ${money(result.totalMonthlyWasteUsd)} per month of estimated waste`),
+  );
+  const since = comparisonLine(result);
+  if (since) lines.push(since);
+
+  if (result.findings.length > 0) {
     const shown = shownFindings(result, options.onlyNew);
-    if (shown.length < result.findings.length) lines.push(dim(`Showing only the ${shown.length} new finding${shown.length === 1 ? "" : "s"}.`));
+    const filtered = onlyNewLine(result, shown);
+    if (filtered) lines.push(dim(filtered));
     lines.push("");
     shown.forEach((f, n) => {
       lines.push(`${bold(`${String(n + 1).padStart(2)}. ${money(f.monthlyCostUsd).padStart(8)}/mo  ${f.title}`)}${f.isNew ? styleText("yellow", "  NEW") : ""}`);
@@ -109,11 +119,13 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
   lines.push(`**${result.findings.length} findings, ${money(result.totalMonthlyWasteUsd)} per month of estimated waste.**`, "");
   const since = comparisonLine(result);
   if (since) lines.push(since, "");
+  const shown = shownFindings(result, options.onlyNew);
+  const filtered = onlyNewLine(result, shown);
+  if (filtered) lines.push(filtered, "");
   if (summary) lines.push("## Summary", "", summary, "");
   const resolved = resolvedLines(result);
   if (resolved.length > 0) lines.push("## Resolved since the last scan", "", ...resolved.map((r) => `- ${r}`), "");
 
-  const shown = shownFindings(result, options.onlyNew);
   if (shown.length > 0) {
     lines.push("| # | Per month | Finding | Resource | Region | Fix risk |", "|---|---|---|---|---|---|");
     shown.forEach((f, n) => {
@@ -177,7 +189,8 @@ export const KIND: Record<Pattern, string> = {
 export function templatedSummary(result: ScanResult, options: { shortenIds?: boolean } = {}): string {
   const label = (ids: string[]) => (options.shortenIds ? ids.map(shortId) : ids).join(", ");
   if (result.findings.length === 0) {
-    return [`No waste found in ${regionLabel(result.regions)}.`, ...(skippedLine(result) ? [skippedLine(result)!] : [])].join("\n");
+    const since = comparisonLine(result);
+    return [`No waste found in ${regionLabel(result.regions)}.`, ...(since ? [since] : []), ...(skippedLine(result) ? [skippedLine(result)!] : [])].join("\n");
   }
   const where =
     result.regions.length === 1
