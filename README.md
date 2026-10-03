@@ -42,6 +42,16 @@ resource ID that is not in the scan.
 - **It runs in your account,** with your credentials, and sends no telemetry.
 - **It is open source,** so you can read what it checks.
 
+## A daily report, without asking
+
+Deploy one CloudFormation template and CloudPilot scans the account every day
+in the background. It emails you only on a day something new appears, with
+only the new findings; a day with nothing new sends nothing. It runs in your
+own account with the same read-only access. See [`deploy/`](deploy).
+
+Run by hand, a repeat scan does the same: it compares with the last scan and
+says what is new, what was resolved and what is unchanged.
+
 ## Also in the box
 
 - **What changed since last time.** A repeat scan compares with the last one
@@ -61,6 +71,7 @@ resource ID that is not in the scan.
 | [`packages/cli`](packages/cli) | The CloudPilot command, published as `@meruapps/cloudpilot` |
 | [`docs/waste-lab.md`](docs/waste-lab.md) | The waste lab: a test AWS account seeded with nine kinds of waste, and the answer key CloudPilot is scored against |
 | `terraform/`, `scripts/`, `emulator/`, `lab-spec.json`, `pricing/` | The lab itself |
+| [`deploy/`](deploy) | The daily report: a CloudFormation template that runs the scan on a schedule in your own account and emails what is new |
 | [`demo/`](demo) | Demo runbook and the record and replay scripts |
 | [`site/`](site) | The landing page |
 

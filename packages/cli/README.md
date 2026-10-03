@@ -157,6 +157,12 @@ The saved scan is the account as it was last seen, so a `--replay` run and a
 any other live run but does not compare with it, since a recording has to
 replay exactly as it ran and cannot carry a baseline of its own.
 
+To have this done every day without running anything, see the daily report in
+[`deploy/`](../../deploy): it runs `scan --only-new --out report.txt` on a
+schedule in your own account and emails the file when something is new. An
+`--out` name ending in `.txt` gets the terminal report as plain text; any
+other name gets Markdown.
+
 ### Score it against the waste lab
 
 ```sh
@@ -287,7 +293,7 @@ AWS_ENDPOINT_URL=http://localhost:5050 node dist/index.js scan --region ap-south
 | `--region <region>` | Scan only this region |
 | `--all-regions` | Scan every region enabled for the account. The default when `--region` is not given |
 | `--html <file>` | `scan` only: also write a self-contained HTML report |
-| `--out <file>` | `scan` only: also write a Markdown report |
+| `--out <file>` | `scan` only: also write the report to a file, as Markdown, or as plain text when the name ends in `.txt` |
 | `--json` | `scan` only: print the result as JSON |
 | `--explain` | `scan` only: have a model write the summary |
 | `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |

@@ -63,6 +63,8 @@ export interface ReportOptions {
    * with, so it must only be left unset when that is true.
    */
   noComparison?: "off" | "not-comparable";
+  /** Never colour the text, whatever the terminal: for a file or an email. */
+  plain?: boolean;
 }
 
 /** The findings a report lists: all of them, or with onlyNew just those the earlier scan did not have. */
@@ -91,8 +93,9 @@ const resolvedLines = (result: ScanResult) =>
 
 /** Report for a terminal. */
 export function renderText(result: ScanResult, options: ReportOptions = {}): string {
-  const bold = (s: string) => styleText("bold", s);
-  const dim = (s: string) => styleText("dim", s);
+  const paint = (style: keyof typeof ANSI, text: string) => (options.plain ? text : styleText(style, text));
+  const bold = (s: string) => paint("bold", s);
+  const dim = (s: string) => paint("dim", s);
   const lines: string[] = [bold("CloudPilot scan"), ...header(result).map(dim), ""];
 
   lines.push(
@@ -109,17 +112,17 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
     if (filtered) lines.push(dim(filtered));
     lines.push("");
     shown.forEach((f, n) => {
-      lines.push(`${bold(`${String(n + 1).padStart(2)}. ${money(f.monthlyCostUsd).padStart(8)}/mo  ${f.title}`)}${f.isNew ? styleText("yellow", "  NEW") : ""}`);
+      lines.push(`${bold(`${String(n + 1).padStart(2)}. ${money(f.monthlyCostUsd).padStart(8)}/mo  ${f.title}`)}${f.isNew ? paint("yellow", "  NEW") : ""}`);
       const region = result.regions.length > 1 ? `  ${f.region}` : "";
       lines.push(dim(`    ${f.resourceType}  ${f.resourceIds.map(shortId).join(", ")}${region}  rule confidence ${Math.round(f.confidence * 100)}%`));
       for (const e of f.evidence) lines.push(`    - ${e}`);
       lines.push(dim(`    cost: ${f.costBasis}`));
       lines.push(`    fix (${RISK_LABEL[f.fix.risk]}):`);
-      for (const c of f.fix.commands) lines.push(styleText("cyan", `      ${c}`));
+      for (const c of f.fix.commands) lines.push(paint("cyan", `      ${c}`));
       lines.push(dim(`    way back: ${f.fix.rollback}`));
       if (f.alternative) {
         lines.push(`    or: ${f.alternative.description} (saves ${money(f.alternative.monthlySavingUsd)}/mo):`);
-        for (const c of f.alternative.commands) lines.push(styleText("cyan", `      ${c}`));
+        for (const c of f.alternative.commands) lines.push(paint("cyan", `      ${c}`));
       }
       lines.push("");
     });
@@ -134,10 +137,19 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
   if (skipped) lines.push("", skipped);
 
   if (result.warnings.length > 0) {
-    lines.push("", styleText("yellow", `${result.warnings.length} check(s) could not run:`));
-    for (const w of result.warnings) lines.push(styleText("yellow", `  - ${w}`));
+    lines.push("", paint("yellow", `${result.warnings.length} check(s) could not run:`));
+    for (const w of result.warnings) lines.push(paint("yellow", `  - ${w}`));
   }
   return lines.join("\n");
+}
+
+/**
+ * The terminal report as a plain-text document, summary included: what a
+ * person reads in a file or an email, where colour codes would be noise.
+ */
+export function renderPlainText(result: ScanResult, summary?: string, banner?: string, options: ReportOptions = {}): string {
+  const parts = [...(banner ? [banner] : []), renderText(result, { ...options, plain: true }), ...(summary ? [`Summary\n\n${summary}`] : [])];
+  return `${parts.join("\n\n")}\n`;
 }
 
 /** Report as a Markdown document. */

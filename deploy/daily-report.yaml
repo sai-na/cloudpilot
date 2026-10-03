@@ -1,0 +1,300 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  CloudPilot daily report. Scans this account once a day with read-only access
+  and emails you only when new waste appears. Everything it creates is listed
+  below; CloudPilot itself only reads.
+
+Parameters:
+  Email:
+    Type: String
+    Description: Where to send the report. AWS emails a confirmation link to this address first.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    ConstraintDescription: must be an email address
+  Schedule:
+    Type: String
+    Default: rate(1 day)
+    Description: How often to scan, as an EventBridge schedule expression, e.g. rate(1 day) or cron(0 3 * * ? *).
+  Region:
+    Type: String
+    Default: ""
+    Description: Scan only this region. Leave empty to scan every region enabled for the account.
+  PackageSpec:
+    Type: String
+    Default: "@meruapps/cloudpilot"
+    Description: The CloudPilot package to run. Pin a version with @meruapps/cloudpilot@0.1.0.
+
+Resources:
+  # The previous scan, kept so the next one can say what is new. One small object.
+  StateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  ReportTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref Email
+
+  # The job's own log, kept for a month and then deleted.
+  ScanLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${AWS::StackName}"
+      RetentionInDays: 30
+
+  # What the daily scan may do: CloudPilot's read-only permissions, plus the
+  # three things the job around it needs (its own log, its one state file,
+  # and sending the report).
+  ScanRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: cloudpilot-read-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Ec2Describe
+                Effect: Allow
+                Action:
+                  - ec2:Describe*
+                Resource: "*"
+              - Sid: S3BucketMetadata
+                Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetLifecycleConfiguration
+                  - s3:ListBucketMultipartUploads
+                  - s3:ListMultipartUploadParts
+                  - s3:GetBucketTagging
+                Resource: "*"
+              - Sid: CloudWatchMetricsRead
+                Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                Resource: "*"
+              - Sid: PriceListRead
+                Effect: Allow
+                Action:
+                  - pricing:GetProducts
+                  - pricing:DescribeServices
+                Resource: "*"
+        - PolicyName: daily-job
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteItsOwnLog
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !GetAtt ScanLog.Arn
+              - Sid: KeepThePreviousScan
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${StateBucket.Arn}/last-scan.json"
+              - Sid: SendTheReport
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref ReportTopic
+
+  ScanJob:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref AWS::StackName
+      Description: Runs CloudPilot and emails the report when something new is found.
+      ServiceRole: !GetAtt ScanRole.Arn
+      TimeoutInMinutes: 15
+      Artifacts:
+        Type: NO_ARTIFACTS
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref ScanLog
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: STATE_BUCKET
+            Value: !Ref StateBucket
+          - Name: TOPIC_ARN
+            Value: !Ref ReportTopic
+          - Name: SCAN_REGION
+            Value: !Ref Region
+          - Name: PACKAGE_SPEC
+            Value: !Ref PackageSpec
+          - Name: STACK_NAME
+            Value: !Ref AWS::StackName
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 20
+            build:
+              commands:
+                - |
+                  set -eu
+                  # The previous scan, if there is one. On the first run there is not.
+                  if aws s3api head-object --bucket "$STATE_BUCKET" --key last-scan.json > /dev/null 2>&1; then
+                    aws s3 cp "s3://$STATE_BUCKET/last-scan.json" previous.json --only-show-errors
+                  else
+                    echo "No earlier scan: this is the first run, so the report lists everything."
+                  fi
+
+                  set -- scan --json --out report.txt --only-new
+                  if [ -n "$SCAN_REGION" ]; then set -- "$@" --region "$SCAN_REGION"; fi
+                  if [ -f previous.json ]; then set -- "$@" --compare previous.json; fi
+                  npx -y "$PACKAGE_SPEC" "$@" > scan.json
+
+                  # How many findings are new, and the subject line that says so.
+                  node -e '
+                    const s = require("./scan.json");
+                    const first = !s.comparison;
+                    const count = first ? s.findings.length : s.comparison.newCount;
+                    const usd = (first ? s.totalMonthlyWasteUsd : s.comparison.newMonthlyUsd).toFixed(2);
+                    const what = first ? "first report, " + count + " finding" : count + " new finding";
+                    const fs = require("fs");
+                    fs.writeFileSync("new-count.txt", String(count));
+                    fs.writeFileSync("subject.txt", "CloudPilot: " + what + (count === 1 ? "" : "s") + ", $" + usd + " a month, AWS account " + s.accountId);
+                  '
+                  NEW=$(cat new-count.txt)
+
+                  if [ "$NEW" -gt 0 ]; then
+                    # One email holds 256 KB. A longer report is cut, and says so.
+                    if [ "$(wc -c < report.txt)" -gt 240000 ]; then
+                      head -c 240000 report.txt > cut.txt
+                      printf '\n\n[Cut short: this report is too long for one email. Run CloudPilot yourself to see all of it.]\n' >> cut.txt
+                      mv cut.txt report.txt
+                    fi
+                    printf '\nThis report comes from the CloudFormation stack "%s" in your own AWS account. Delete that stack to stop it.\n' "$STACK_NAME" >> report.txt
+                    aws sns publish --topic-arn "$TOPIC_ARN" --subject "$(cat subject.txt)" --message file://report.txt > /dev/null
+                    echo "Report sent: $(cat subject.txt)"
+                  else
+                    echo "Nothing new since the last scan. No email sent."
+                  fi
+
+                  # Saved only after the report has gone out: if sending fails, the
+                  # next run still treats these findings as new and reports them.
+                  aws s3 cp scan.json "s3://$STATE_BUCKET/last-scan.json" --only-show-errors
+
+  ScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-the-scan
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource: !GetAtt ScanJob.Arn
+
+  DailySchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Starts the CloudPilot scan.
+      ScheduleExpression: !Ref Schedule
+      State: ENABLED
+      Targets:
+        - Id: cloudpilot-scan
+          Arn: !GetAtt ScanJob.Arn
+          RoleArn: !GetAtt ScheduleRole.Arn
+
+  # Silence has to mean "nothing new", never "the scan broke": a failed run
+  # sends an email of its own.
+  ScanFailed:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Emails you when the CloudPilot scan itself fails.
+      EventPattern:
+        source:
+          - aws.codebuild
+        detail-type:
+          - CodeBuild Build State Change
+        detail:
+          project-name:
+            - !Ref ScanJob
+          build-status:
+            - FAILED
+            - FAULT
+            - TIMED_OUT
+      State: ENABLED
+      Targets:
+        - Id: tell-me
+          Arn: !Ref ReportTopic
+          InputTransformer:
+            InputPathsMap:
+              project: $.detail.project-name
+              status: $.detail.build-status
+            InputTemplate: '"The CloudPilot daily scan <project> ended as <status>, so no report was sent. The reason is in the build log in CodeBuild."'
+
+  ReportTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref ReportTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LetTheFailureRuleSendItsEmail
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref ReportTopic
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt ScanFailed.Arn
+
+Outputs:
+  RunItNow:
+    Description: Start a scan without waiting for the schedule.
+    Value: !Sub "aws codebuild start-build --project-name ${ScanJob}"
+  StateBucket:
+    Description: Holds the previous scan. Empty it before deleting the stack.
+    Value: !Ref StateBucket
+  ReportTopic:
+    Description: The email topic the report is sent to.
+    Value: !Ref ReportTopic

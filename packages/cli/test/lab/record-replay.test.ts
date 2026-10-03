@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { cli, CLI, recordingText, SECRET_MARKERS, TSX } from "../helpers.js";
 
 const PROFILE = "cloudpilot-readonly";
@@ -120,6 +121,15 @@ test("a second scan from the same directory says by itself that nothing is new o
   assert.equal(redacted.status, 0, redacted.stderr);
   assert.match(redacted.stdout, /No new or resolved findings since the last scan/);
   assert.equal(readFileSync(saved, "utf8"), baseline, "the saved last scan is untouched");
+});
+
+test("CloudFormation accepts the daily report template, and it asks for nothing beyond IAM roles", () => {
+  const template = join(dirname(fileURLToPath(import.meta.url)), "../../../../deploy/daily-report.yaml");
+  const answer = JSON.parse(
+    execFileSync("aws", ["cloudformation", "validate-template", "--profile", "cloudpilot-seed", "--region", REGION, "--template-body", `file://${template}`, "--output", "json"], { encoding: "utf8" }),
+  );
+  assert.deepEqual(answer.Parameters.map((p: { ParameterKey: string }) => p.ParameterKey).sort(), ["Email", "PackageSpec", "Region", "Schedule"]);
+  assert.deepEqual(answer.Capabilities, ["CAPABILITY_IAM"]);
 });
 
 function roleArn(): string {

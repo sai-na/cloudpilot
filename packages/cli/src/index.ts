@@ -28,7 +28,7 @@ import {
   startRecord,
   startReplay,
 } from "./recording.js";
-import { money, renderMarkdown, renderText, type ReportOptions, templatedSummary } from "./report.js";
+import { money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
 import type { Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
 
 const LAST_SCAN = ".cloudpilot/last-scan.json";
@@ -296,7 +296,7 @@ const program = new Command()
 
 withCommonOptions(program.command("scan", { isDefault: true }).description("Scan the account and report wasted spend (the default command)"))
   .option("--json", "print the result as JSON instead of a report")
-  .option("--out <file>", "also write the report as Markdown")
+  .option("--out <file>", "also write the report to a file: Markdown, or plain text when the name ends in .txt")
   .option("--html <file>", "also write the report as one self-contained HTML file")
   .option("--explain", "have a model write the summary (needs a model API key; templated otherwise)")
   .option("--compare <file>", "say what changed since this earlier scan (default: the last scan made from this directory)")
@@ -323,7 +323,9 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
       console.log(`\nSummary\n\n${summary}`);
     }
     if (options.out) {
-      await writeFile(options.out, redact(renderMarkdown(result, summary, banner, view)));
+      // Markdown by default; a .txt name gets the terminal report as plain text, ready to email.
+      const plain = options.out.toLowerCase().endsWith(".txt");
+      await writeFile(options.out, redact(plain ? renderPlainText(result, summary, banner, view) : renderMarkdown(result, summary, banner, view)));
       note(`Report written to ${options.out}`);
     }
     if (options.html) {
