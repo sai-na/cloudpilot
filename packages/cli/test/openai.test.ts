@@ -55,3 +55,25 @@ test("ask runs the tools the model asks for and returns its final answer", async
   assert.equal(JSON.parse(results[0].output).totalMonthlyWasteUsd, "$42.00");
   assert.match(results[1].output, /Unknown kind/);
 });
+
+test("a model that never answers costs two short waits, then the scan ends with the templated summary and says why", async () => {
+  // A server that accepts the request and then says nothing.
+  const { createServer: listen } = await import("node:http");
+  const { cli, FIXTURE } = await import("./helpers.js");
+  const silent = listen(() => {});
+  await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  const port = (silent.address() as AddressInfo).port;
+  try {
+    const started = Date.now();
+    const run = cli(["scan", "--replay", FIXTURE, "--explain", "--live-llm", "--model", "any"], {
+      env: { OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`, NO_PROXY: "127.0.0.1", CLOUDPILOT_MODEL_TIMEOUT_MS: "400" },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.ok(Date.now() - started < 20_000, "it gave up instead of waiting ten minutes");
+    assert.match(run.stderr, /AI explanations are unavailable: .*timed out.*Showing the templated summary instead\./i);
+    assert.match(run.stdout, /Estimated waste: \$151\.53 per month across 10 findings/);
+  } finally {
+    silent.closeAllConnections();
+    silent.close();
+  }
+});

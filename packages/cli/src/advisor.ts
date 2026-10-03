@@ -95,6 +95,13 @@ export const summaryRequest = (result: ScanResult) =>
     ? `Here is the scan result as JSON:\n\n${JSON.stringify(forModel(result))}\n\nWrite a summary for the engineer who owns this cluster: the total monthly waste, then the findings in the order they should be dealt with, grouping ones that are the same kind of problem. For each, give the monthly cost, why it is waste in one sentence, and how risky the fix is. Say how much usage history the requests findings rest on, and that their saving is only realised once the cluster can run fewer or smaller nodes. Finish with the single action that saves the most for the least risk. Keep it under 300 words.`
     : `Here is the scan result as JSON:\n\n${JSON.stringify(forModel(result))}\n\nWrite a summary for the engineer who owns this account: the total monthly waste, then the findings in the order they should be dealt with, grouping ones that are the same kind of problem. For each, give the monthly cost, why it is waste in one sentence, and how risky the fix is. Finish with the single action that saves the most for the least risk. Keep it under 250 words.`;
 
+/**
+ * How long one model request may take, and one retry. The provider SDKs wait
+ * ten minutes and retry twice by default, which leaves a scan that has already
+ * finished looking hung; past this the summary falls back to the templated one.
+ */
+export const modelRequest = () => ({ timeout: Number(process.env.CLOUDPILOT_MODEL_TIMEOUT_MS) || 120_000, maxRetries: 1 });
+
 export class MissingCredentialsError extends Error {
   constructor() {
     super("No model access configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or pass --bedrock-profile to use Claude through Amazon Bedrock.");
