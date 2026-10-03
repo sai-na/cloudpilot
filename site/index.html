@@ -278,8 +278,8 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
       <p class="note">A repeat scan from the same directory compares with the last one and says what is new, what was resolved and what is unchanged.</p>
     </li>
     <li>
-      <span class="item">Remembering to check at all</span><span class="amount">A daily email</span>
-      <p class="note">Deploy one template and the scan runs every day in your own account. It writes to you only when something new appears, or if the scan itself fails.</p>
+      <span class="item">Remembering to check at all</span><span class="amount">It tells you</span>
+      <p class="note">Let it watch and it posts to Slack or Discord only when something new appears, or deploy one template and it emails you every day it has something. Either way, a check that fails says so too.</p>
     </li>
   </ol>
 </section>
@@ -425,9 +425,14 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
 </section>
 
 <section id="daily">
-  <h2>Then let it check every day</h2>
-  <p class="lead">Deploy one CloudFormation template into your own account and the scan runs on a schedule, daily unless you change it. You get an email only on a day something new appears, and it lists only what is new. A day with nothing new sends nothing. If the scan itself fails that gets its own email, so silence always means nothing new.</p>
-  <p>It runs in your account with the same read-only access, from a template you can read before you deploy it: a build job, a topic for the email, and one small file in S3 so the next run knows what is new. Nothing it creates can change, stop or delete anything else in the account, and a test in the repository fails if the template's permissions grow beyond that. The template and the steps to deploy it, or to stop it again, are in <code>deploy/</code>.</p>
+  <h2>Then let it keep checking</h2>
+  <p class="lead">Two ways to stop remembering, and both of them speak up only when there is something to decide: the first run sends the whole list once, a run with nothing new sends nothing at all, and a check that could not run gets a message of its own. Silence always means nothing new.</p>
+  <p><strong>Into the channel your team already reads.</strong> Give a scan <code>--notify</code> and your Slack or Discord webhook and it posts what is new since the last scan, each finding with its monthly cost and whether the fix can be undone; any other HTTPS webhook gets the same thing as JSON. <code>cloudpilot watch</code> does the repeating for you: one foreground process to run in tmux, systemd or a container, scanning every six hours unless you set <code>--every</code>, for the account or, with <code>--kube</code>, for the cluster. The fix commands stay in the report rather than the chat, and the webhook URL is treated as a secret: only its host is ever printed, and it is never written to a saved scan or a report.</p>
+  <div class="command">
+    <code id="watch-one-liner">npx @meruapps/cloudpilot watch --every 6h --notify https://hooks.slack.com/services/...</code>
+    <button type="button" data-copy="watch-one-liner">Copy</button>
+  </div>
+  <p><strong>Or a daily email, with nothing of yours left running.</strong> Deploy one CloudFormation template into your own account and the scan runs on a schedule, daily unless you change it. You get an email only on a day something new appears, and it lists only what is new. It runs in your account with the same read-only access, from a template you can read before you deploy it: a build job, a topic for the email, and one small file in S3 so the next run knows what is new. Nothing it creates can change, stop or delete anything else in the account, and a test in the repository fails if the template's permissions grow beyond that. The template and the steps to deploy it, or to stop it again, are in <code>deploy/</code>.</p>
 </section>
 
 <section id="pricing">
@@ -480,7 +485,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
   <h2>Questions</h2>
   <div class="faq">
     <h3>Isn't this a one-time cleanup?</h3>
-    <p>The first scan usually finds the most. But waste comes back as a team ships: a volume gets detached, a test instance is left running, a snapshot outlives its volume. CloudPilot is one command, so you can run it again whenever you like, for example before each month's bill. A repeat scan from the same directory compares with the last one and says what is new, what was resolved and what is unchanged, so you read what changed instead of the whole list again; <code>--only-new</code> prints just the new findings. Or <a href="#daily">let it check every day</a> and write to you only when something new turns up.</p>
+    <p>The first scan usually finds the most. But waste comes back as a team ships: a volume gets detached, a test instance is left running, a snapshot outlives its volume. CloudPilot is one command, so you can run it again whenever you like, for example before each month's bill. A repeat scan from the same directory compares with the last one and says what is new, what was resolved and what is unchanged, so you read what changed instead of the whole list again; <code>--only-new</code> prints just the new findings. Or <a href="#daily">let it keep checking</a> and speak up only when something new turns up: <code>cloudpilot watch --notify</code> posts to Slack or Discord, or a deployed template emails you daily.</p>
 
     <h3>Do you see my data?</h3>
     <p>No. CloudPilot runs in your CloudShell or terminal and talks to AWS with your credentials. The results are printed there and nowhere else. It reads the size of your S3 objects but never their contents.</p>

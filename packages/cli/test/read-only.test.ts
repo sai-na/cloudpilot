@@ -30,7 +30,7 @@ test("the README lists exactly the AWS operations the code calls", () => {
 });
 
 test("no other source file talks to AWS", () => {
-  for (const file of ["advisor", "assistant", "detect", "evaluate", "html", "index", "mcp", "output-check", "report"]) {
+  for (const file of ["advisor", "assistant", "detect", "evaluate", "html", "index", "mcp", "notify", "output-check", "report", "watch"]) {
     const text = readFileSync(resolve(root, `src/${file}.ts`), "utf8");
     assert.doesNotMatch(text, /@aws-sdk\/client-/, `${file}.ts imports an AWS client`);
   }

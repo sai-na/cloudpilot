@@ -228,6 +228,151 @@ schedule in your own account and emails the file when something is new. An
 `--out` name ending in `.txt` gets the terminal report as plain text; any
 other name gets Markdown.
 
+### Tell your team what is new
+
+A scan is only useful if someone reads it. `--notify` sends what is new to
+where your team already looks, and says nothing on a day when nothing is:
+
+```sh
+npx @meruapps/cloudpilot scan --notify https://hooks.slack.com/services/...
+npx @meruapps/cloudpilot kube --notify https://discord.com/api/webhooks/...
+
+# or keep the URLs out of the command line, comma-separated
+export CLOUDPILOT_NOTIFY=https://hooks.slack.com/services/...,https://example.com/hooks/cloudpilot
+```
+
+| URL | What it is sent |
+|---|---|
+| `hooks.slack.com` | A Slack incoming webhook: one text message |
+| `discord.com/api/webhooks/...` or `discordapp.com/api/webhooks/...` | A Discord webhook: one message, with mentions switched off so a resource name cannot ping anyone |
+| Any other `https` URL | A generic webhook: JSON with the new findings, the comparison and a short text (see below) |
+
+`--notify` can be given more than once, and takes the place of
+`CLOUDPILOT_NOTIFY` when it is. The variable can also be set in a `.env` file.
+Anything but `https` is refused, except `http` to `127.0.0.1` or `localhost`,
+which is for trying a webhook on your own machine.
+
+**When it sends.** `scan` and `kube` compare with the previous scan as they
+always do, and send only when that comparison finds something new. The first
+scan, with nothing to compare with, sends the whole report once. A scan with
+nothing new sends nothing, and says so on stderr. Findings that were resolved
+are shown in the report but are not a reason to send. `--notify` needs the
+comparison, so it cannot be used with `--no-compare`, nor with `kube
+--answer-key`, which scores a lab instead of reporting.
+
+**What it says.** The same lines in every service, for example:
+
+```
+CloudPilot: 2 new findings, $18.03 a month, AWS account 123456789012
+Since the last scan (2026-10-02T00:00:00Z): 2 new ($18.03 a month), 1 resolved ($18.24 a month), 1 unchanged.
+
+1. $9.12/mo  Unattached 500 GB gp2 volume (vol-0dddddddddddddddd), region ap-south-1, permanent fix
+2. $8.91/mo  Idle t3.micro: CPU never above 3.4% (i-0cccccccccccccccc), region ap-south-1, reversible fix
+
+Nothing has been changed: every fix is a proposal for a person to review and run.
+Run cloudpilot to see each finding's evidence and fix commands.
+```
+
+Each new finding gets its title, its ID, where it is (region, or namespace for
+a cluster), its monthly cost as the scan worked it out, and whether the fix
+is permanent. Fix commands are not in the chat message: they are in the
+report. A message is cut to 2,000 characters for Discord, the most it takes,
+and to 3,000 for Slack; the list gives way, the headline and the closing lines
+do not, and the message says how many findings were left out. A generic
+webhook has no such limit. It receives one JSON object: `source`
+(`cloudpilot`), `event` (`first-report`, `new-findings`, `check-failed` or
+`check-recovered`), `text` (the message above as plain lines) and `subject`.
+A report adds `scannedAt`, `totalMonthlyWasteUsd`, `comparison`, `warnings`
+and `findings`, which holds the new findings exactly as `--json` has them,
+evidence and fix commands included; a failure or a recovery adds `at` and
+either the `error` or the `failingSince` it had been failing from.
+
+**A message that fails to send is not lost.** CloudPilot says so on stderr and
+exits with status 1, and the saved scan is left as it was, so the next run
+reports the same findings again. With several URLs, the one that failed is
+not the reason the others are skipped.
+
+**A check that fails is a message of its own**, so that silence only ever
+means nothing is new. If the scan cannot run (credentials expired, cluster
+unreachable) and `--notify` is set, the webhook is told that the check itself
+failed, with the reason, and the command still exits with status 1.
+
+**Privacy.** `--notify` sends finding titles, resource IDs and costs to the
+service you name, with the account ID or cluster name, and a generic webhook
+also gets each finding's evidence and fix commands. When a check fails, the
+error it gave is sent too. Nothing else is sent, and nothing is sent anywhere
+you did not name: each message is one HTTPS request to your URL, and a redirect is
+treated as a failure instead of being followed. A webhook URL is a secret,
+since anyone who has it can post to that channel. CloudPilot never prints it,
+and never writes it to a saved scan, a report or a recording; where it must
+name a target it shows the host. Two things are outside its control: a URL
+given with `--notify` is visible in the process list of the machine, so use
+`CLOUDPILOT_NOTIFY` on a shared one, and the service you name sees what it is
+sent. `--redact-account` hides the account ID in messages too.
+
+With `--replay`, `--notify` still sends its message, since that is what was
+asked for. The `REPLAY MODE` banner says so, and leads the message, so it
+cannot pass for a live one. A replay has no saved scan to compare with, so it
+sends the whole report each time unless it is given `--compare <file>`.
+
+### Watch it
+
+`cloudpilot watch` runs the scan again and again and speaks up only when
+something changes:
+
+```sh
+npx @meruapps/cloudpilot watch --every 6h --notify https://hooks.slack.com/services/...
+npx @meruapps/cloudpilot watch --kube --every 1h --notify https://discord.com/api/webhooks/...
+```
+
+It is a foreground process on purpose: it does not detach, so run it where
+something keeps it running, such as systemd, tmux or a container. Each round
+runs the same scan as `scan` (or `kube` with `--kube`) and then waits `--every`
+before the next one, so rounds never overlap.
+
+- **Nothing new:** one line is printed, and nothing is sent.
+- **Something new:** the new findings, and anything resolved, are printed, and
+  with `--notify` they are sent, as above. The first round sends the whole
+  report once. If the first scan finds nothing, nothing is sent.
+- **The check fails** (credentials expired, cluster unreachable): the reason is
+  printed on stderr and sent, and the process carries on. The same failure in
+  the next rounds is not said again, a different one is, and when checking
+  works again that is said once, so a quiet channel means nothing is new and
+  nothing is broken.
+- **A message that cannot be sent is retried** the next round. What has been
+  reported only moves forward once every `--notify` target has the message,
+  and a failed round never moves it. This is the daily report's reasoning:
+  a lost message must not turn into a finding nobody was told about. A target
+  that already has a message is not sent it again while another is retried.
+- **Where it is kept:** `.cloudpilot/watch-baseline.json`, or
+  `.cloudpilot/watch-kube-<context>.json` for a cluster, in the directory it is
+  run from, so a restart carries on instead of reporting everything again. It
+  is separate from the scan that `scan` and `kube` save, so running those by
+  hand does not decide what the watch has told your team. `--replay` never
+  writes it, and `--redact-account` neither reads nor writes it. What a region
+  held last time is kept whenever this round did not read that region in full,
+  whether a check there failed or the round never looked, so it is not
+  reported as new when that region is read again.
+- **Stopping:** Ctrl+C or SIGTERM ends it cleanly, between rounds or in the
+  middle of one. `--max-runs <n>` ends it after `n` rounds. The exit status is
+  1 if the last round failed or its message was not delivered, and 0 otherwise,
+  and always 0 when it was stopped by a signal.
+- **How often:** `--every` takes a number and a unit (`30m`, `6h`, `1d`), and
+  defaults to `6h`. It is refused below 15 minutes and above 7 days. A round
+  reads every region (or asks Prometheus for days of history for every
+  container) and the figures it judges by are a day or a week long, so
+  reading faster than every 15 minutes finds nothing the last round missed,
+  while AWS throttles API calls and Prometheus pays for every long query. For a wait longer than a week,
+  use cron or a systemd timer and `scan --notify`.
+
+`watch` takes `--profile`, `--region`, `--all-regions`, `--lookback-hours`,
+`--price-file`, `--offline`, `--replay` and `--redact-account` for the account,
+and `--kube` with `--context`, `--namespace`, `--prometheus`, `--lookback-hours`,
+`--cpu-hour-usd`, `--memory-gib-hour-usd` and `--storage-gib-month-usd` for the
+cluster. With `--kube` the kubectl context in force when it starts is the one
+read in every round. It makes the same read-only calls as `scan` and `kube`;
+the only new outbound requests are the POSTs to your `--notify` URLs.
+
 ### Score it against the waste lab
 
 ```sh
@@ -484,7 +629,8 @@ These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
 [Kubernetes](#kubernetes). `init` takes `--profile`, `--region`, `--context`,
 `--prometheus`, `--json` and `--print-policy`: see
-[Check first with `init`](#check-first-with-init).
+[Check first with `init`](#check-first-with-init). `watch` takes the ones that
+say so: see [Watch it](#watch-it).
 
 | Option | Meaning |
 |---|---|
@@ -498,6 +644,10 @@ reads `--lookback-hours` with its own meaning and default: see
 | `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |
 | `--no-compare` | `scan` only: do not compare |
 | `--only-new` | `scan` only: list only the findings that are new since the earlier scan |
+| `--notify <url>` | `scan`, `kube` and `watch`: send what is new to this Slack, Discord or other https webhook. Repeatable; or `CLOUDPILOT_NOTIFY`, comma-separated. See [Tell your team what is new](#tell-your-team-what-is-new) |
+| `--every <interval>` | `watch` only: the wait between rounds, `15m` to `7d`. Default `6h` |
+| `--max-runs <n>` | `watch` only: stop after this many rounds. Default: until stopped |
+| `--kube` | `watch` only: watch the cluster kubectl points at instead of the AWS account |
 | `--lookback-hours <n>` | Hours of CPU and database connection history used to judge idle and oversized instances. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
 | `--offline` | Use only `--price-file` for prices |
@@ -510,7 +660,8 @@ reads `--lookback-hours` with its own meaning and default: see
 | `--redact-account` | Show the account ID as `123456789012` |
 
 The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
-and `--redact-account` runs.
+and `--redact-account` runs. With `--notify` it is saved once the message has
+been delivered, or when nothing needed sending. `watch` keeps its own.
 
 ## Kubernetes
 
@@ -576,8 +727,8 @@ fewer or smaller nodes, which a node autoscaler does for you.
 
 ### The rest works the same
 
-`--json`, `--out`, `--html`, `--compare`, `--no-compare` and `--only-new`
-behave as they do for `scan`. The last scan is kept per cluster
+`--json`, `--out`, `--html`, `--compare`, `--no-compare`, `--only-new` and
+`--notify` behave as they do for `scan`, and `watch --kube` repeats the scan. The last scan is kept per cluster
 (`.cloudpilot/last-kube-scan-<context>.json`), so a repeat scan says what is
 new without touching the AWS baseline. Label or annotate a workload or volume
 `cloudpilot/ignore=true` to leave it out. `--namespace <name>` reads one
@@ -652,6 +803,16 @@ The rules are checked against a seeded cluster: see
 - Kubernetes: limits are not changed, and a workload kept in sync by Helm,
   Argo CD or Flux must be changed at its source. The finding says so.
 
+- Notifications: if the first scan finds nothing, nothing is sent, so there is
+  no message to prove that a webhook works. Try a new URL on an account or
+  cluster that has findings.
+- Notifications: a round where some checks could not run is reported in the
+  message when there is one, and in the output, but does not send a message of
+  its own.
+- Notifications: with several URLs, a message that one of them refused is
+  retried for that one only by `watch`. A one-shot `scan` leaves the findings
+  new, so the next run sends the message to every URL again.
+
 ## Development
 
 ```sh
@@ -671,6 +832,9 @@ kubectl and Prometheus, `src/kube-detect.ts` the rules over it.
 `src/compare.ts` is a pure function from two scans to what changed.
 `src/preflight.ts` holds the `init` checks as functions over injected probes,
 with the real AWS probes beside them.
+`src/notify.ts` builds and sends the messages, and `src/watch.ts` is the loop
+behind `watch`: it is handed the scan, the clock and the sender, so its tests
+run without waiting or a network.
 
 ## Licence
 

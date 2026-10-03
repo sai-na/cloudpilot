@@ -35,8 +35,8 @@ each fix with the old values as the way back.
 1. **Read.** It asks AWS what exists, using only Describe, List and Get calls.
 2. **Apply rules.** Each kind of waste is a fixed rule over what it read.
 3. **Price.** Unit prices come from the AWS Price List.
-4. **Report.** Findings go to the terminal, and optionally to JSON, Markdown
-   or a self-contained HTML file.
+4. **Report.** Findings go to the terminal, and optionally to JSON, Markdown,
+   a self-contained HTML file, or a Slack, Discord or other webhook.
 
 None of that uses AI, so the same account always gives the same answer and no
 API key is needed. A model is optional: with a key, `--explain` writes the
@@ -72,6 +72,10 @@ says what is new, what was resolved and what is unchanged.
 - **What changed since last time.** A repeat scan compares with the last one
   made from the same directory and says what is new, what was resolved and
   what is unchanged, so nobody re-reads every finding.
+- **Say it where the team looks.** `--notify <url>` sends what is new to a
+  Slack, Discord or other webhook, and sends nothing on a run with nothing
+  new; a check that could not run gets its own message. `cloudpilot watch`
+  repeats the scan on an interval and speaks up the same way.
 - **MCP server.** `cloudpilot mcp` lets Claude Code, Cursor and other MCP
   clients scan the account or a Kubernetes cluster and query the findings
   through read-only tools.
