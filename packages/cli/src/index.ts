@@ -505,7 +505,8 @@ interface KubeOptions extends OutputOptions {
 const clusterFile = (prefix: string, context: string) => `.cloudpilot/${prefix}-${context.replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
 
 function amount(text: string, flag: string): number {
-  const value = Number(text);
+  // Number("") is 0, which would quietly read an unset shell variable as a deliberate zero.
+  const value = text.trim() === "" ? NaN : Number(text);
   if (!Number.isFinite(value) || value < 0) throw new Error(`${flag} takes a number that is zero or more. Got "${text}".`);
   return value;
 }
@@ -760,8 +761,6 @@ function anomalySettings(options: AnomaliesOptions): { rule: AnomalyRule; days?:
   if (days !== undefined && (!/^\d+$/.test(options.days!.trim()) || days < MIN_DAYS || days > MAX_DAYS)) {
     throw new Error(`--days takes a whole number from ${MIN_DAYS} to ${MAX_DAYS}. Got "${options.days}".`);
   }
-  // Number("") is 0, which would quietly switch the floor off.
-  if (options.minIncrease.trim() === "") throw new Error(`--min-increase takes a number that is zero or more. Got "${options.minIncrease}".`);
   return { rule: { sensitivity, minIncreaseUsd: amount(options.minIncrease, "--min-increase") }, days };
 }
 

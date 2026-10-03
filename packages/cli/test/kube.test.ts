@@ -382,6 +382,20 @@ test("without kubectl the command says what it needs", () => {
   assert.match(run.stderr, /kubectl was not found on your PATH\. CloudPilot reads a cluster through kubectl, with the access you already have\./);
 });
 
+test("a blank price or lookback is refused, not read as zero", () => {
+  const lab = withKubectl();
+  for (const [flag, message] of [
+    ["--cpu-hour-usd", /--cpu-hour-usd takes a number that is zero or more\. Got ""\./],
+    ["--memory-gib-hour-usd", /--memory-gib-hour-usd takes a number that is zero or more\. Got ""\./],
+    ["--storage-gib-month-usd", /--storage-gib-month-usd takes a number that is zero or more\. Got ""\./],
+    ["--lookback-hours", /--lookback-hours takes a number that is zero or more\. Got ""\./],
+  ] as [string, RegExp][]) {
+    const run = lab.run([flag, ""]);
+    assert.notEqual(run.status, 0, `${flag} "" was accepted: ${run.stdout}`);
+    assert.match(run.stderr, message);
+  }
+});
+
 test("a cluster's report never claims an AWS account", () => {
   const html = renderHtml(detectCluster(inventory({ workloads: [workload({ containers: [{ name: "app", cpuRequestCores: 2, memoryRequestBytes: 64 * MI, ...idle }] })] }), OPENCOST_DEFAULTS));
   assert.doesNotMatch(html, /AWS account|Account<|Regions</);
