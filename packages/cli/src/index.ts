@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { userInfo } from "node:os";
@@ -8,7 +8,8 @@ import { Command } from "commander";
 import { buildTools, clusterWorkloads, forModel, MCP_CLUSTER_INSTRUCTIONS, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
 import { anomaliesJson, CHARGE_NOTICE, DEFAULT_DAYS, DEFAULT_MIN_INCREASE_USD, DEFAULT_SENSITIVITY, findAnomalies, MAX_DAYS, MIN_DAYS, renderAnomalies, REPLAY_CHARGE_NOTICE, type AnomalyReport, type AnomalyRule } from "./anomaly.js";
-import { apply, ApplyError, isAuditEntry, plan, programRunner, renderAudit, type AuditEntry } from "./apply.js";
+import { apply, ApplyError, plan, programRunner, renderAudit } from "./apply.js";
+import { appendAudit, AUDIT_LOG, readAudit } from "./audit.js";
 import { callerAccount, collect, enabledRegions, mapLimit, readBill, readCpu, readDailyCosts } from "./collect.js";
 import { compareScans, isScanResult } from "./compare.js";
 import { detect, mergeScans, withBill } from "./detect.js";
@@ -1029,8 +1030,6 @@ program
     process.exitCode = result.ready ? 0 : 1;
   });
 
-const AUDIT_LOG = ".cloudpilot/audit.jsonl";
-
 /** Every scan saved in this directory: the account's, and one per cluster. */
 async function savedScans(from?: string): Promise<ScanResult[]> {
   const read = async (path: string): Promise<ScanResult | undefined> => {
@@ -1062,28 +1061,6 @@ function whoAmI(): string {
   }
 }
 
-/** The audit log, losing only the lines that cannot be read rather than the whole record. */
-async function readAudit(): Promise<{ entries: AuditEntry[]; unreadable: number }> {
-  const text = await readFile(AUDIT_LOG, "utf8").catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") return "";
-    throw new ApplyError(`${AUDIT_LOG} is there but could not be read (${err.code ?? err.message}). That file is the record of what apply has run, so this is not an empty record.`);
-  });
-  const entries: AuditEntry[] = [];
-  let unreadable = 0;
-  for (const line of text.split("\n").filter(Boolean)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      unreadable++;
-      continue;
-    }
-    if (isAuditEntry(parsed)) entries.push(parsed);
-    else unreadable++;
-  }
-  return { entries, unreadable };
-}
-
 program
   .command("apply")
   .description("Run the fix for the resources you name, after showing it and asking. The only command that can change anything")
@@ -1109,10 +1086,7 @@ program
         yes: options.yes,
         dryRun: options.dryRun,
         say: (line) => console.log(line),
-        record: async (entry) => {
-          await mkdir(dirname(AUDIT_LOG), { recursive: true });
-          await appendFile(AUDIT_LOG, `${JSON.stringify(entry)}\n`);
-        },
+        record: (entry) => appendAudit(entry),
         user: whoAmI(),
         now: () => new Date(),
       });
