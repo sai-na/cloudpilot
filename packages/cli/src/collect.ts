@@ -356,7 +356,9 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
     loadBalancers,
     launchTemplateImageIds,
     buckets,
-    warnings,
+    // The reads run side by side, so which of two failures is noticed first is chance. Sorted, the
+    // same account gives the same report whichever answer came back first, and a replay matches its recording.
+    warnings: [...warnings].sort(),
   };
 }
 

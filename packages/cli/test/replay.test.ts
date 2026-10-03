@@ -247,6 +247,34 @@ test("a role without the load balancer permission still gets a full scan: the de
   assert.match(result.warnings[0], /^\[ap-south-1\] elasticloadbalancing:DescribeLoadBalancers: AccessDenied/);
 });
 
+test("two checks that cannot run are reported in the same order however the answers arrive", async () => {
+  // The lab's read-only role, as it is until the new permissions are applied: both reads refused.
+  const refusal = (namespace: string, action: string) =>
+    Buffer.from(
+      `<ErrorResponse xmlns="http://${namespace}/">\n  <Error>\n    <Type>Sender</Type>\n    <Code>AccessDenied</Code>\n` +
+        `    <Message>User: arn:aws:sts::123456789012:assumed-role/cloudpilot-readonly/session is not authorized to perform: ${action}</Message>\n` +
+        "  </Error>\n  <RequestId>00000000-0000-0000-0000-000000000000</RequestId>\n</ErrorResponse>",
+    ).toString("base64");
+  const dir = await recordingWith((recorded) => {
+    for (const [service, namespace, action] of [
+      ["RDS", "rds.amazonaws.com/doc/2014-10-31", "rds:DescribeDBInstances"],
+      ["ELBv2", "elasticloadbalancing.amazonaws.com/doc/2015-12-01", "elasticloadbalancing:DescribeLoadBalancers"],
+    ] as const) {
+      const [responses] = Object.values(recorded.entries).filter((r) => r[0]!.service === service);
+      Object.assign(responses![0]!, { status: 403, headers: { "content-type": "text/xml" }, body: refusal(namespace, action) });
+    }
+  });
+  const run = cli(["scan", "--replay", dir, "--json"], { blockNetwork: true });
+  assert.equal(run.status, 0, run.stderr);
+  const { warnings, findings } = JSON.parse(run.stdout) as { warnings: string[]; findings: unknown[] };
+  assert.equal(findings.length, 10);
+  // The reads race each other, so the order they fail in is chance. The report's order is not.
+  assert.deepEqual(
+    warnings.map((w) => w.split(":").slice(0, 2).join(":")),
+    ["[ap-south-1] elasticloadbalancing:DescribeLoadBalancers", "[ap-south-1] rds:DescribeDBInstances"],
+  );
+});
+
 test("--bill reads last month's spend once and every form of the report says what share the waste is", async () => {
   const dir = await recordingWithBill(200, monthTotal("1234.56"));
   const json = cli(["scan", "--replay", dir, "--bill", "--json"], { blockNetwork: true });
