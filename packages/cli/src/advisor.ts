@@ -61,6 +61,9 @@ export const MCP_INSTRUCTIONS = `CloudPilot is a read-only scanner for wasted AW
 - Resources tagged cloudpilot:ignore=true were skipped on purpose and are listed under skippedByTag.
 - A result that starts with "REPLAY MODE" comes from a recording, not a live account: tell the user.`;
 
+/** Added to the instructions only by a server that offers the cluster tools: a replaying one has no cluster. */
+export const MCP_CLUSTER_INSTRUCTIONS = `- For a Kubernetes cluster, call "scan_cluster"; "get_cluster_workloads" reads from the latest cluster scan. A cluster result names the kubectl context where an account result gives the account ID, and namespaces where an account result gives regions. Lowering a request saves money only once the freed capacity lets the cluster run fewer or smaller nodes: say so when you quote such a saving, and say how much usage history the finding rests on. A cluster object is excluded by the label or annotation cloudpilot/ignore=true on it, not by the AWS tag; those objects are the ones listed under skippedByTag. A warnings entry means part of the cluster could not be read, so the lists are incomplete: say that instead of calling something absent.`;
+
 export const summaryRequest = (result: ScanResult) =>
   `Here is the scan result as JSON:\n\n${JSON.stringify(forModel(result))}\n\nWrite a summary for the engineer who owns this account: the total monthly waste, then the findings in the order they should be dealt with, grouping ones that are the same kind of problem. For each, give the monthly cost, why it is waste in one sentence, and how risky the fix is. Finish with the single action that saves the most for the least risk. Keep it under 250 words.`;
 

@@ -67,7 +67,8 @@ says what is new, what was resolved and what is unchanged.
   made from the same directory and says what is new, what was resolved and
   what is unchanged, so nobody re-reads every finding.
 - **MCP server.** `cloudpilot mcp` lets Claude Code, Cursor and other MCP
-  clients scan the account and query the findings through read-only tools.
+  clients scan the account or a Kubernetes cluster and query the findings
+  through read-only tools.
 - **Record and replay.** A scan can be recorded and replayed later with no
   network, behind a `REPLAY MODE` banner.
 - **Ignore tag.** Resources tagged `cloudpilot:ignore=true` are skipped, and
