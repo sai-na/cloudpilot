@@ -294,6 +294,10 @@ AWS_ENDPOINT_URL=http://localhost:5050 node dist/index.js scan --region ap-south
 
 ## Options
 
+These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
+reads `--lookback-hours` with its own meaning and default: see
+[Kubernetes](#kubernetes).
+
 | Option | Meaning |
 |---|---|
 | `--profile <name>` | AWS profile to read with. Defaults to `AWS_PROFILE`, then the standard credential chain |
@@ -344,7 +348,8 @@ and the difference is worth a restart (50m CPU, 64Mi memory). A container
 that has been killed for running out of memory never has its memory lowered:
 a usage graph can miss the moment it ran out, the kill on the pod's record
 cannot. Deployments, StatefulSets and DaemonSets are judged; jobs and bare
-pods are not, and neither is anything in `kube-system`.
+pods are not, and neither is anything in the namespaces the cluster runs for
+itself (`kube-system`, `kube-public`, `kube-node-lease`).
 
 ### What it needs
 
@@ -368,7 +373,8 @@ pods are not, and neither is anything in `kube-system`.
 Requests are judged over `--lookback-hours` (default 168, a week). If
 Prometheus holds less, the finding says how much it had, and rule confidence
 drops: 90% with a week, 80% with a day, 60% with an hour, 40% with less. A
-workload with under five minutes of history is not judged at all.
+container with under five minutes of history is not judged, and a workload
+where no container has that much is listed in the report as not judged.
 
 ### What a vCPU costs
 
@@ -428,6 +434,9 @@ npm run typecheck
 `src/detect.ts` is a pure function from inventory and prices to findings;
 `src/collect.ts` holds every AWS read; `src/advisor.ts` holds the model's
 ground rules and tools, with `src/claude.ts` and `src/openai.ts` as providers.
+The cluster side is the same split: `src/kube.ts` holds every read through
+kubectl and Prometheus, `src/kube-detect.ts` the rules over it.
+`src/compare.ts` is a pure function from two scans to what changed.
 
 ## Licence
 
