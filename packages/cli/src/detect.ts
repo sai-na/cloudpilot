@@ -285,6 +285,22 @@ export function skippedByTag(inventory: Inventory): string[] {
   ];
 }
 
+/** A warning names the region whose check could not run, so a reader can tell what was missed. */
+const regionWarning = (region: string, warning: string) => `[${region}] ${warning}`;
+
+/**
+ * The regions where at least one check could not run. Their part of the scan
+ * is incomplete: what is missing from the findings may simply be unread.
+ */
+export function regionsNotFullyScanned(warnings: string[]): Set<string> {
+  const regions = new Set<string>();
+  for (const warning of warnings) {
+    const named = /^\[([^\]]+)\] /.exec(warning);
+    if (named) regions.add(named[1]!);
+  }
+  return regions;
+}
+
 /**
  * Combine per-region scans into one result. Scans must arrive in a fixed
  * order (by region name) so the same account always gives the same output.
@@ -300,6 +316,6 @@ export function mergeScans(accountId: string, scans: RegionScan[]): ScanResult {
     findings,
     totalMonthlyWasteUsd: findings.reduce((sum, f) => sum + f.monthlyCostUsd, 0),
     skippedByTag: scans.flatMap((s) => skippedByTag(s.inventory)),
-    warnings: scans.flatMap((s) => s.inventory.warnings.map((w) => `[${s.inventory.region}] ${w}`)),
+    warnings: scans.flatMap((s) => s.inventory.warnings.map((w) => regionWarning(s.inventory.region, w))),
   };
 }

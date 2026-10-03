@@ -2,7 +2,7 @@
  * The scan as one self-contained HTML file: no fonts, images, scripts or
  * styles are fetched from anywhere, so it opens offline and prints cleanly.
  */
-import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, shortId, shownFindings, skippedLine } from "./report.js";
+import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine } from "./report.js";
 import type { Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
@@ -167,7 +167,7 @@ ${commands(fix.commands)}
 }
 
 /** The report as a complete HTML document. */
-export function renderHtml(result: ScanResult, options: { summary?: string; banner?: string; onlyNew?: boolean } = {}): string {
+export function renderHtml(result: ScanResult, options: ReportOptions & { summary?: string; banner?: string } = {}): string {
   const count = result.findings.length;
   const headline =
     count === 0
@@ -182,7 +182,7 @@ export function renderHtml(result: ScanResult, options: { summary?: string; bann
   const since = comparisonLine(result);
   const resolved = result.comparison?.resolved ?? [];
   const shown = shownFindings(result, options.onlyNew);
-  const note = [since, onlyNewLine(result, shown, options.onlyNew)].filter(Boolean).join(" ");
+  const note = [since, onlyNewLine(result, shown, options)].filter(Boolean).join(" ");
   const findings = shown
     .map(
       (f) => `<article class="finding">

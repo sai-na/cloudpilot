@@ -144,15 +144,18 @@ Since the last scan (2026-10-02T09:00:00Z): 2 new ($59.74 a month), 1 resolved (
 New findings are marked, and what was resolved is listed. `--only-new` lists
 just the new findings, `--compare <file>` compares with a scan saved earlier
 by `--json`, and `--no-compare` turns it off. With `--json` every finding is
-kept and carries `isNew`, with the counts under `comparison`. A finding in a
-region that was not scanned again is never reported as resolved, and scans of
+kept and carries `isNew`, with the counts under `comparison`. A finding is
+reported as resolved only where it would have been found again: not in a region
+that was not scanned again, and not where a check could not run. Scans of
 different accounts are not compared. When a scan covers a region the last one
 did not, its findings there count as new, and the line says how many of the
 new ones that explains. With no earlier scan, `--only-new` lists every finding
 and says so.
 
 The saved scan is the account as it was last seen, so a `--replay` run and a
-`--redact-account` run both leave it untouched.
+`--redact-account` run both leave it untouched. A `--record` run saves it like
+any other live run but does not compare with it, since a recording has to
+replay exactly as it ran and cannot carry a baseline of its own.
 
 ### Score it against the waste lab
 

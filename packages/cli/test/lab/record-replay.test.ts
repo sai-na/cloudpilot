@@ -14,19 +14,29 @@ const PROFILE = "cloudpilot-readonly";
 const REGION = "ap-south-1";
 
 /** Run the CLI live, with the developer's own environment and AWS config. */
-function live(args: string[], env: NodeJS.ProcessEnv = process.env) {
+function live(args: string[], env: NodeJS.ProcessEnv = process.env, cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"))) {
   const run = spawnSync(process.execPath, ["--import", TSX, CLI, ...args], {
     encoding: "utf8",
-    cwd: mkdtempSync(join(tmpdir(), "cloudpilot-test-")),
+    cwd,
     env: { ...env, NO_COLOR: "1" },
   });
   return { status: run.status, stdout: run.stdout, stderr: run.stderr };
 }
 
-/** Record, replay with the network blocked, and return both results. */
+/**
+ * Record, replay with the network blocked, and return both results. The
+ * recording is made from a directory that already holds a saved scan, because
+ * a replay has no such scan to compare with: anything the recorded run took
+ * from local state would show up as a difference between the two.
+ */
 function recordThenReplay(dir: string, scope: string[]) {
-  const record = live(["scan", "--profile", PROFILE, ...scope, "--json", "--record", dir]);
+  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+  const seed = live(["scan", "--profile", PROFILE, ...scope, "--json"], process.env, cwd);
+  assert.equal(seed.status, 0, seed.stderr);
+  assert.ok(readFileSync(join(cwd, ".cloudpilot/last-scan.json"), "utf8").length > 0, "the seeding scan left a baseline to compare with");
+  const record = live(["scan", "--profile", PROFILE, ...scope, "--json", "--record", dir], process.env, cwd);
   assert.equal(record.status, 0, record.stderr);
+  assert.equal(JSON.parse(record.stdout).comparison, undefined, "a recorded run does not compare with local state");
   const replay = cli(["scan", "--replay", dir, "--json"], { blockNetwork: true });
   assert.equal(replay.status, 0, replay.stderr);
   const recorded = JSON.parse(record.stdout);
@@ -41,6 +51,7 @@ const single = join(mkdtempSync(join(tmpdir(), "cloudpilot-recording-")), "one-r
 test("record a scan of the lab region, then replay it byte-identically with the network blocked", () => {
   const { recorded, replayed, banner } = recordThenReplay(single, ["--region", REGION]);
   assert.ok(recorded.findings.length > 0);
+  assert.ok(recorded.findings.every((f: { isNew?: boolean }) => f.isNew === undefined), "no finding is marked against a scan the replay cannot see");
   assert.equal(JSON.stringify(replayed.findings), JSON.stringify(recorded.findings));
   assert.equal(JSON.stringify(replayed), JSON.stringify(recorded));
   assert.match(banner, /region ap-south-1\. No live calls\.$/);

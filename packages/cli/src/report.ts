@@ -46,7 +46,23 @@ export function comparisonLine(result: ScanResult): string | undefined {
   const widened = c.newInRegionsNotScannedBefore;
   if (!widened) return line;
   // A wider scan than last time: those findings are new to the reader, not necessarily new in the account.
-  return `${line} ${widened} of the new ${widened === 1 ? "one is" : "ones are"} in regions the last scan did not cover.`;
+  // "one" or "ones" follows how many are new; "is" or "are" follows how many of them this explains.
+  const ones = c.newCount === 1 ? "one" : "ones";
+  const where = widened === 1 ? "is in a region" : "are in regions";
+  return `${line} ${widened} of the new ${ones} ${where} the last scan did not cover.`;
+}
+
+export interface ReportOptions {
+  /** List only the findings that are new since the earlier scan. */
+  onlyNew?: boolean;
+  /**
+   * Why this scan carries no comparison, where the caller knows that there was
+   * more to it than there being no earlier scan: comparing was turned off or
+   * not asked for ("off"), or the scan given to compare with could not be used
+   * ("not-comparable"). Left unset, a report says there was nothing to compare
+   * with, so it must only be left unset when that is true.
+   */
+  noComparison?: "off" | "not-comparable";
 }
 
 /** The findings a report lists: all of them, or with onlyNew just those the earlier scan did not have. */
@@ -55,20 +71,23 @@ export function shownFindings(result: ScanResult, onlyNew = false): Finding[] {
 }
 
 /** Note saying the list was cut down to the new findings, when it was. */
-export function onlyNewLine(result: ScanResult, shown: Finding[], onlyNew = false): string | undefined {
-  // Asked for only the new findings with nothing to compare against: every finding is shown, and says why.
-  if (onlyNew && !result.comparison) return "No earlier scan to compare with; showing every finding.";
+export function onlyNewLine(result: ScanResult, shown: Finding[], options: ReportOptions = {}): string | undefined {
+  // Asked for only the new findings with no comparison to go by: every finding is shown, and says why that is.
+  if (options.onlyNew && !result.comparison) {
+    if (options.noComparison === "off") return "This scan was not compared with an earlier one; showing every finding.";
+    if (options.noComparison === "not-comparable") return "The scan to compare with is of a different account; showing every finding.";
+    return "No earlier scan to compare with; showing every finding.";
+  }
   if (shown.length >= result.findings.length) return undefined;
+  // The everyday outcome of --only-new: the account is as it was, so nothing is listed.
+  if (shown.length === 0) {
+    return `Nothing new since the last scan; the ${result.findings.length} finding${result.findings.length === 1 ? " already reported is" : "s already reported are"} not listed.`;
+  }
   return `Showing only the ${shown.length} new finding${shown.length === 1 ? "" : "s"}.`;
 }
 
 const resolvedLines = (result: ScanResult) =>
   (result.comparison?.resolved ?? []).map((r) => `${r.title} (${r.resourceIds.map(shortId).join(", ")}), ${money(r.monthlyCostUsd)} a month`);
-
-export interface ReportOptions {
-  /** List only the findings that are new since the earlier scan. */
-  onlyNew?: boolean;
-}
 
 /** Report for a terminal. */
 export function renderText(result: ScanResult, options: ReportOptions = {}): string {
@@ -86,7 +105,7 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
 
   if (result.findings.length > 0) {
     const shown = shownFindings(result, options.onlyNew);
-    const filtered = onlyNewLine(result, shown, options.onlyNew);
+    const filtered = onlyNewLine(result, shown, options);
     if (filtered) lines.push(dim(filtered));
     lines.push("");
     shown.forEach((f, n) => {
@@ -104,7 +123,8 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
       }
       lines.push("");
     });
-    lines.push(dim("CloudPilot is read-only: it prints these commands and never runs them."));
+    // The notice is about the commands just listed, and there are none to speak of when nothing was.
+    if (shown.length > 0) lines.push(dim("CloudPilot is read-only: it prints these commands and never runs them."));
   }
 
   const resolved = resolvedLines(result);
@@ -127,7 +147,7 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
   const since = comparisonLine(result);
   if (since) lines.push(since, "");
   const shown = shownFindings(result, options.onlyNew);
-  const filtered = onlyNewLine(result, shown, options.onlyNew);
+  const filtered = onlyNewLine(result, shown, options);
   if (filtered) lines.push(filtered, "");
   if (summary) lines.push("## Summary", "", summary, "");
   const resolved = resolvedLines(result);

@@ -87,7 +87,7 @@ test("findings in a region the last scan did not cover are new, and the report s
   const result = compareScans(yesterday, today)!;
   assert.equal(result.comparison!.newCount, 2);
   assert.equal(result.comparison!.newInRegionsNotScannedBefore, 1);
-  const expected = /2 new \(\$14\.12 a month\), 0 resolved \(\$0\.00 a month\), 2 unchanged\. 1 of the new one is in regions the last scan did not cover\./;
+  const expected = /2 new \(\$14\.12 a month\), 0 resolved \(\$0\.00 a month\), 2 unchanged\. 1 of the new ones is in a region the last scan did not cover\./;
   for (const report of [renderText(result), renderMarkdown(result), renderHtml(result), templatedSummary(result)]) assert.match(report, expected);
   assert.deepEqual(unsupportedValues(comparisonLine(result)!, allowedValues(result)), [], "the line quotes only amounts the scan holds");
   assert.equal(forModel(result).comparison!.newInRegionsNotScannedBefore, 1);
@@ -112,6 +112,73 @@ test("a finding in a region that was not scanned again is not called resolved", 
   const before = scan([finding("vol-0aaaaaaaaaaaaaaaa", 57), finding("vol-0dddddddddddddddd", 5, "us-east-1")], { regions: ["ap-south-1", "us-east-1"] });
   const result = compareScans(before, scan([finding("vol-0aaaaaaaaaaaaaaaa", 57)]))!;
   assert.deepEqual(result.comparison!.resolved, []);
+});
+
+test("a finding whose check could not run this time is not called resolved either", () => {
+  // The volume listing failed, so the region came back empty: those volumes may
+  // well still be there, and a check that did not run is never a fix.
+  const throttled = scan([], { warnings: ["[ap-south-1] ec2:DescribeVolumes: ThrottlingException - Rate exceeded"] });
+  const result = compareScans(yesterday, throttled)!;
+  assert.deepEqual(result.comparison!.resolved, []);
+  assert.equal(result.comparison!.resolvedMonthlyUsd, 0);
+  assert.match(renderText(result), /No new or resolved findings since the last scan \(2026-10-02T00:00:00Z\)\./);
+  assert.doesNotMatch(renderText(result), /Resolved since the last scan/);
+
+  // A failed check elsewhere says nothing about the region that was read in full.
+  const elsewhere = scan([], { regions: ["ap-south-1", "us-east-1"], warnings: ["[us-east-1] s3:ListAllMyBuckets: AccessDenied"] });
+  assert.equal(compareScans(yesterday, elsewhere)!.comparison!.resolved.length, 2);
+});
+
+test("asking for only the new findings when nothing is new says so, and lists no commands", () => {
+  const result = compareScans(yesterday, scan(yesterday.findings))!;
+  const note = /Nothing new since the last scan; the 2 findings already reported are not listed\./;
+  for (const report of [renderText(result, { onlyNew: true }), renderMarkdown(result, undefined, undefined, { onlyNew: true }), renderHtml(result, { onlyNew: true })]) {
+    assert.match(report, note);
+    assert.ok(!report.includes("vol-0aaaaaaaaaaaaaaaa"), "nothing is listed");
+  }
+  assert.doesNotMatch(renderText(result, { onlyNew: true }), /prints these commands/, "no commands were printed to call read-only");
+  assert.match(renderText(result), /prints these commands/);
+
+  const one = scan([finding("vol-0aaaaaaaaaaaaaaaa", 57)]);
+  const single = compareScans({ ...one, scannedAt: "2026-10-02T00:00:00Z" }, one)!;
+  assert.match(renderText(single, { onlyNew: true }), /Nothing new since the last scan; the 1 finding already reported is not listed\./);
+});
+
+test("a report says why it did not compare, instead of claiming there was no earlier scan", () => {
+  const first = scan([finding("vol-0aaaaaaaaaaaaaaaa", 57)]);
+  const cases = [
+    { options: { onlyNew: true, noComparison: "off" } as const, says: /This scan was not compared with an earlier one; showing every finding\./ },
+    { options: { onlyNew: true, noComparison: "not-comparable" } as const, says: /The scan to compare with is of a different account; showing every finding\./ },
+  ];
+  for (const { options, says } of cases) {
+    for (const report of [renderText(first, options), renderMarkdown(first, undefined, undefined, options), renderHtml(first, options)]) {
+      assert.match(report, says);
+      assert.doesNotMatch(report, /No earlier scan to compare with/);
+      assert.ok(report.includes("vol-0aaaaaaaaaaaaaaaa"), "every finding is still shown");
+    }
+  }
+});
+
+test("the command says why it did not compare when it had an earlier scan it could not use", () => {
+  const first = cli(["scan", "--replay", FIXTURE, "--json"], { blockNetwork: true });
+  assert.equal(first.status, 0, first.stderr);
+  const earlier = JSON.parse(first.stdout);
+
+  const file = join(first.cwd, "other-account.json");
+  writeFileSync(file, JSON.stringify({ ...earlier, accountId: "999999999999" }));
+  const mismatch = cli(["scan", "--replay", FIXTURE, "--compare", file, "--only-new"], { blockNetwork: true });
+  assert.equal(mismatch.status, 0, mismatch.stderr);
+  assert.match(mismatch.stdout, /The scan to compare with is of a different account; showing every finding\./);
+  assert.doesNotMatch(mismatch.stdout, /No earlier scan to compare with/);
+
+  // A saved scan is sitting right there, and comparing was turned off.
+  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+  mkdirSync(join(cwd, ".cloudpilot"));
+  writeFileSync(join(cwd, ".cloudpilot/last-scan.json"), JSON.stringify(earlier));
+  const off = cli(["scan", "--replay", FIXTURE, "--no-compare", "--only-new"], { blockNetwork: true, cwd });
+  assert.equal(off.status, 0, off.stderr);
+  assert.match(off.stdout, /This scan was not compared with an earlier one; showing every finding\./);
+  assert.doesNotMatch(off.stdout, /No earlier scan to compare with/);
 });
 
 test("a scan with everything fixed still says what it was costing", () => {

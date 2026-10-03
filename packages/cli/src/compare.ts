@@ -2,6 +2,7 @@
  * What changed between two scans, so a repeat scan can say "two new, one
  * resolved" instead of making the reader go through every finding again.
  */
+import { regionsNotFullyScanned } from "./detect.js";
 import type { Comparison, Finding, ScanResult } from "./types.js";
 
 const keyOf = (f: Finding) => `${f.pattern}|${f.region}|${[...f.resourceIds].sort().join(",")}`;
@@ -46,9 +47,13 @@ export function compareScans(previous: ScanResult, current: ScanResult): ScanRes
   const before = new Set(previous.findings.map(keyOf));
   const now = new Set(current.findings.map(keyOf));
   const findings = current.findings.map((f) => ({ ...f, isNew: !before.has(keyOf(f)) }));
-  // A finding is only "resolved" if its region was looked at again and it is gone.
+  // A finding is only "resolved" if its region was read again in full and it is
+  // gone. Where a check could not run, the resource may well still be there and
+  // only the reading of it is missing, which is never a fix.
+  const incomplete = regionsNotFullyScanned(current.warnings);
+  const readAgain = (region: string) => current.regions.includes(region) && !incomplete.has(region);
   const resolved = previous.findings
-    .filter((f) => current.regions.includes(f.region) && !now.has(keyOf(f)))
+    .filter((f) => readAgain(f.region) && !now.has(keyOf(f)))
     .map((f) => ({ title: f.title, region: f.region, resourceIds: f.resourceIds, monthlyCostUsd: f.monthlyCostUsd }));
 
   const added = findings.filter((f) => f.isNew);

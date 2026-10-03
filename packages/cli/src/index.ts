@@ -28,7 +28,7 @@ import {
   startRecord,
   startReplay,
 } from "./recording.js";
-import { money, renderMarkdown, renderText, templatedSummary } from "./report.js";
+import { money, renderMarkdown, renderText, type ReportOptions, templatedSummary } from "./report.js";
 import type { Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
 
 const LAST_SCAN = ".cloudpilot/last-scan.json";
@@ -125,15 +125,23 @@ function begin(options: CommonOptions, command: "scan" | "ask", question: string
   return { banner, scope: { homeRegion: session.homeRegion, region: session.region } };
 }
 
+interface CompareOptions {
+  compare?: string | false;
+  replay?: string;
+  record?: string;
+}
+
 /**
  * The earlier scan to compare with. By default that is the last scan made
  * from this directory, so a repeat scan says what changed without being asked.
  */
-async function previousScan(options: { compare?: string | false; replay?: string }): Promise<ScanResult | undefined> {
+async function previousScan(options: CompareOptions): Promise<ScanResult | undefined> {
   if (options.compare === false) return undefined;
   const explicit = typeof options.compare === "string";
-  // A replay repeats a recording exactly; it only compares when told what to compare with.
-  if (!explicit && options.replay) return undefined;
+  // A replay repeats a recording exactly, and a recording has to replay as it
+  // ran: the saved last scan is local state no recording can carry, so neither
+  // mode picks one up by itself. Both still compare when told what to compare with.
+  if (!explicit && (options.replay || options.record)) return undefined;
   const path = explicit ? (options.compare as string) : LAST_SCAN;
   let parsed: unknown;
   try {
@@ -145,6 +153,17 @@ async function previousScan(options: { compare?: string | false; replay?: string
   if (isScanResult(parsed)) return parsed;
   if (explicit) throw new Error(`${path} is not a CloudPilot scan result (save one with --json).`);
   return undefined;
+}
+
+/**
+ * Why a report has no comparison to show, so it never claims there was no
+ * earlier scan when there was one it did not or could not use.
+ */
+function noComparisonReason(options: CompareOptions, previous: ScanResult | undefined, compared: ScanResult | undefined): ReportOptions["noComparison"] {
+  if (compared) return undefined;
+  // An earlier scan was read but could not be used: only a different account gets that far.
+  if (previous) return "not-comparable";
+  return options.compare === false || options.replay || options.record ? "off" : undefined;
 }
 
 /** Run a task per item, a few at a time, keeping the results in the order of the items. */
@@ -290,7 +309,7 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
     const compared = previous ? compareScans(previous, scanned) : undefined;
     if (previous && !compared && typeof options.compare === "string") note("The scan to compare with is of a different account; comparison skipped.");
     const result = compared ?? scanned;
-    const view = { onlyNew: Boolean(options.onlyNew) };
+    const view: ReportOptions = { onlyNew: Boolean(options.onlyNew), noComparison: noComparisonReason(options, previous, compared) };
 
     // Every scan ends with a summary: written by a model on request, built from the findings otherwise.
     const summary = options.explain
