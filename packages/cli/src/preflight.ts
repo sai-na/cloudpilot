@@ -44,7 +44,7 @@ import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import { now } from "./clock.js";
 import { clientConfig } from "./collect.js";
 import { confidenceFor, hours } from "./kube-detect.js";
-import { KubectlNotFoundError, list, prometheusCandidates, prometheusLabel, query, type KubeReader, type PrometheusRef } from "./kube.js";
+import { ClusterNameRequiredError, KubectlNotFoundError, list, prometheusCandidates, prometheusLabel, query, type KubeReader, type PrometheusRef } from "./kube.js";
 import { PRICING_ENDPOINT_REGION } from "./pricing.js";
 import { labelClient } from "./recording.js";
 
@@ -486,6 +486,7 @@ export async function checkKubernetes(reader: KubeReader, options: PreflightOpti
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof KubectlNotFoundError) return { status: "skipped", skipped: "kubectl is not on the PATH", checks: [] };
+    if (err instanceof ClusterNameRequiredError) return { status: "skipped", skipped: "running inside a cluster with no kubeconfig (name the cluster with --cluster-name)", checks: [] };
     if (/current-context|no current context/i.test(message)) return { status: "skipped", skipped: "kubectl has no current context (choose one with --context)", checks: [] };
     return { status: "skipped", skipped: `kubectl could not read its configuration: ${kubeFailure(err)}`, checks: [] };
   }

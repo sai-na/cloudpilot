@@ -429,10 +429,11 @@ before the next one, so rounds never overlap.
 
 `watch` takes `--profile`, `--region`, `--all-regions`, `--lookback-hours`,
 `--price-file`, `--offline`, `--replay` and `--redact-account` for the account,
-and `--kube` with `--context`, `--namespace`, `--prometheus`, `--lookback-hours`,
-`--cpu-hour-usd`, `--memory-gib-hour-usd` and `--storage-gib-month-usd` for the
-cluster. With `--kube` the kubectl context in force when it starts is the one
-read in every round. It makes the same read-only calls as `scan` and `kube`;
+and `--kube` with `--context`, `--cluster-name`, `--namespace`, `--prometheus`,
+`--lookback-hours`, `--cpu-hour-usd`, `--memory-gib-hour-usd` and
+`--storage-gib-month-usd` for the cluster. With `--kube` the kubectl context in force
+when it starts is the one read in every round. To have a cluster watch itself,
+from inside it, see [Read a cluster from inside it](#read-a-cluster-from-inside-it). It makes the same read-only calls as `scan` and `kube`;
 the only new outbound requests are the POSTs to your `--notify` URLs.
 
 ### Score it against the waste lab
@@ -729,6 +730,14 @@ The token stops working after an hour; delete `cloudpilot.kubeconfig` and
 `ca.crt` when you are done. Or skip the container: `npx @meruapps/cloudpilot
 kube` on the host uses your own `kubectl` and its plugins as they are.
 
+### Watch a cluster from inside it
+
+The same image runs as a Deployment in the cluster it watches, with its own
+read-only identity: [`deploy/kube-watch.yaml`](../../deploy/kube-watch.yaml),
+described in [`deploy/README.md`](../../deploy/README.md#watch-a-cluster-from-inside-it).
+The image is not published, so you build it (above) and load or push it to
+where your cluster pulls from.
+
 ### Check the image
 
 `scripts/docker-smoke.sh` builds the image and replays the recorded scan in
@@ -743,7 +752,7 @@ These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
 [Kubernetes](#kubernetes). `ask --kube` takes the `kube` options named there
 in place of the AWS ones. `init` takes `--profile`, `--region`, `--context`,
-`--prometheus`, `--json` and `--print-policy`: see
+`--cluster-name`, `--prometheus`, `--json` and `--print-policy`: see
 [Check first with `init`](#check-first-with-init). `watch` takes the ones that
 say so: see [Watch it](#watch-it).
 
@@ -763,6 +772,7 @@ say so: see [Watch it](#watch-it).
 | `--every <interval>` | `watch` only: the wait between rounds, `15m` to `7d`. Default `6h` |
 | `--max-runs <n>` | `watch` only: stop after this many rounds. Default: until stopped |
 | `--kube` | `watch` only: watch the cluster kubectl points at instead of the AWS account |
+| `--cluster-name <name>` | `kube`, `watch --kube`, `ask --kube` and `init`: inside a cluster with no kubeconfig, what to call it (or `CLOUDPILOT_CLUSTER_NAME`). Use the kubectl context name your team uses for it: the fix commands carry `--context <name>`. Ignored when kubectl has a context; not with `--context`. See [Read a cluster from inside it](#read-a-cluster-from-inside-it) |
 | `--bill` | `scan` only: also read last month's total spend from Cost Explorer and say what share of it the waste is. AWS charges $0.01 for this one request, so it is never made unless you ask |
 | `--lookback-hours <n>` | Hours of CPU, database connection and NAT gateway and load balancer traffic history used to judge idle and oversized resources. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
@@ -812,7 +822,9 @@ itself (`kube-system`, `kube-public`, `kube-node-lease`).
 - **`kubectl`**, which also brings whatever sign-in your cluster uses. Every
   cluster read is `kubectl get --raw`, which can only GET; the only other call
   is `kubectl config view --minify`, to learn the current context. A test fails
-  if the code asks kubectl for anything else.
+  if the code asks kubectl for anything else. Inside a cluster, with no
+  kubeconfig, `kubectl` reads as the pod's service account: see
+  [Read a cluster from inside it](#read-a-cluster-from-inside-it).
 - **Prometheus with the kubelet's container metrics**
   (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`),
   which kube-prometheus-stack and most setups collect. It is found among the
@@ -824,6 +836,34 @@ itself (`kube-system`, `kube-public`, `kube-node-lease`).
   [`docs/cloudpilot-kube-readonly.yaml`](../../docs/cloudpilot-kube-readonly.yaml):
   it may list workloads, pods, services and volumes and query one Prometheus
   service. It cannot read Secrets or ConfigMaps, or change anything.
+
+### Read a cluster from inside it
+
+A pod has no kubeconfig and so no context, but `kubectl` still works there: with
+none, it uses the pod's service account. CloudPilot does the same. When there is no
+kubeconfig context to read and the process is in a cluster (the two variables every
+pod is given, `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`, are set), the
+scan goes ahead, and the cluster is known by the name you give it:
+
+```sh
+cloudpilot kube --cluster-name prod-eu
+cloudpilot watch --kube --cluster-name prod-eu --every 6h
+# or: CLOUDPILOT_CLUSTER_NAME=prod-eu
+```
+
+Make that name **the kubectl context name your team uses for this cluster on their
+own machines**. The fix commands CloudPilot prints carry `--context <name>`, so that
+a command pasted into the wrong terminal cannot reach a different cluster; a name
+nobody's kubectl knows makes the paste fail, and another cluster's name would aim
+it there. Inside a cluster with no name, it stops with a message before it reads
+anything. A name is one word with no spaces, quotes or shell characters, and is
+refused otherwise. It is used only when kubectl has no context: with a kubeconfig
+(or `--context`) nothing changes, and `--cluster-name` cannot be combined with
+`--context`. The lines `Reading cluster <name> from inside it, as this pod's service
+account (read-only)...` say which case a run was in.
+
+To run the watch in a cluster as a Deployment, with the least access, see
+[`deploy/README.md`](../../deploy/README.md#watch-a-cluster-from-inside-it).
 
 ### How much history
 
@@ -1009,6 +1049,11 @@ The rules are checked against a seeded cluster: see
   [Explain, ask, record and replay](#explain-ask-record-and-replay).
 - Kubernetes: limits are not changed, and a workload kept in sync by Helm,
   Argo CD or Flux must be changed at its source. The finding says so.
+- Kubernetes, inside a cluster: the name given with `--cluster-name` is taken on
+  trust, since a pod cannot ask the cluster what your team calls it. And
+  `deploy/kube-watch.yaml` keeps the watch's baseline in an `emptyDir`, so a
+  restarted or rescheduled pod sends its first report again. See
+  [`deploy/README.md`](../../deploy/README.md#limits).
 
 - Notifications: if the first scan finds nothing, nothing is sent, so there is
   no message to prove that a webhook works. Try a new URL on an account or
