@@ -10,6 +10,7 @@
 import { CloudWatchClient, GetMetricDataCommand } from "@aws-sdk/client-cloudwatch";
 import {
   DescribeAddressesCommand,
+  DescribeNatGatewaysCommand,
   DescribeImagesCommand,
   DescribeInstancesCommand,
   DescribeLaunchTemplatesCommand,
@@ -20,6 +21,14 @@ import {
   EC2Client,
 } from "@aws-sdk/client-ec2";
 import { GetProductsCommand, PricingClient } from "@aws-sdk/client-pricing";
+import {
+  DescribeLoadBalancerAttributesCommand,
+  DescribeLoadBalancersCommand,
+  DescribeTagsCommand,
+  DescribeTargetGroupsCommand,
+  DescribeTargetHealthCommand,
+  ElasticLoadBalancingV2Client,
+} from "@aws-sdk/client-elastic-load-balancing-v2";
 import { DescribeDBInstancesCommand, RDSClient } from "@aws-sdk/client-rds";
 import {
   GetBucketLifecycleConfigurationCommand,
@@ -57,6 +66,8 @@ export interface Sample {
   bucket?: string;
   launchTemplateId?: string;
   upload?: { bucket: string; key: string; uploadId: string };
+  loadBalancerArn?: string;
+  targetGroupArn?: string;
 }
 
 export interface AwsRead {
@@ -66,6 +77,8 @@ export interface AwsRead {
   permission: string;
   /** The read can only be tried on something an earlier read found. */
   needs?: keyof Sample;
+  /** The read costs money, so init never makes it. Says why, and when a scan does. */
+  charged?: string;
 }
 
 const READS = [
@@ -75,9 +88,15 @@ const READS = [
   { service: "EC2", operation: "DescribeImages", permission: "ec2:DescribeImages" },
   { service: "EC2", operation: "DescribeInstances", permission: "ec2:DescribeInstances" },
   { service: "EC2", operation: "DescribeAddresses", permission: "ec2:DescribeAddresses" },
+  { service: "EC2", operation: "DescribeNatGateways", permission: "ec2:DescribeNatGateways" },
   { service: "EC2", operation: "DescribeLaunchTemplates", permission: "ec2:DescribeLaunchTemplates" },
   { service: "EC2", operation: "DescribeLaunchTemplateVersions", permission: "ec2:DescribeLaunchTemplateVersions", needs: "launchTemplateId" },
   { service: "RDS", operation: "DescribeDBInstances", permission: "rds:DescribeDBInstances" },
+  { service: "ELBv2", operation: "DescribeLoadBalancers", permission: "elasticloadbalancing:DescribeLoadBalancers" },
+  { service: "ELBv2", operation: "DescribeLoadBalancerAttributes", permission: "elasticloadbalancing:DescribeLoadBalancerAttributes", needs: "loadBalancerArn" },
+  { service: "ELBv2", operation: "DescribeTargetGroups", permission: "elasticloadbalancing:DescribeTargetGroups" },
+  { service: "ELBv2", operation: "DescribeTargetHealth", permission: "elasticloadbalancing:DescribeTargetHealth", needs: "targetGroupArn" },
+  { service: "ELBv2", operation: "DescribeTags", permission: "elasticloadbalancing:DescribeTags", needs: "loadBalancerArn" },
   { service: "S3", operation: "ListBuckets", permission: "s3:ListAllMyBuckets" },
   { service: "S3", operation: "GetBucketLocation", permission: "s3:GetBucketLocation", needs: "bucket" },
   { service: "S3", operation: "GetBucketLifecycleConfiguration", permission: "s3:GetLifecycleConfiguration", needs: "bucket" },
@@ -87,6 +106,12 @@ const READS = [
   { service: "S3", operation: "ListParts", permission: "s3:ListMultipartUploadParts", needs: "upload" },
   { service: "CloudWatch", operation: "GetMetricData", permission: "cloudwatch:GetMetricData" },
   { service: "Pricing", operation: "GetProducts", permission: "pricing:GetProducts" },
+  {
+    service: "CostExplorer",
+    operation: "GetCostAndUsage",
+    permission: "ce:GetCostAndUsage",
+    charged: "AWS charges $0.01 for each request, so init does not try it; only scan --bill makes it",
+  },
 ] as const satisfies readonly AwsRead[];
 
 type AwsOperation = (typeof READS)[number]["operation"];
@@ -120,6 +145,7 @@ export function awsProbes(opts: { region: string; profile?: string }): AwsProbes
   const ec2 = labelClient(new EC2Client(config), "EC2");
   const s3 = labelClient(new S3Client(config), "S3");
   const rds = labelClient(new RDSClient(config), "RDS");
+  const elb = labelClient(new ElasticLoadBalancingV2Client(config), "ELBv2");
   const cloudwatch = labelClient(new CloudWatchClient(config), "CloudWatch");
   const pricing = labelClient(new PricingClient(clientConfig({ region: PRICING_ENDPOINT_REGION, profile: opts.profile })), "Pricing");
   const within = () => ({ abortSignal: AbortSignal.timeout(AWS_TIMEOUT_MS) });
@@ -135,6 +161,7 @@ export function awsProbes(opts: { region: string; profile?: string }): AwsProbes
     DescribeImages: async () => void (await ec2.send(new DescribeImagesCommand({ Owners: ["self"], MaxResults: 5 }), within())),
     DescribeInstances: async () => void (await ec2.send(new DescribeInstancesCommand({ MaxResults: 5 }), within())),
     DescribeAddresses: async () => void (await ec2.send(new DescribeAddressesCommand({}), within())),
+    DescribeNatGateways: async () => void (await ec2.send(new DescribeNatGatewaysCommand({ MaxResults: 5 }), within())),
     DescribeLaunchTemplates: async () => {
       const res = await ec2.send(new DescribeLaunchTemplatesCommand({ MaxResults: 1 }), within());
       return { launchTemplateId: res.LaunchTemplates?.[0]?.LaunchTemplateId };
@@ -144,6 +171,18 @@ export function awsProbes(opts: { region: string; profile?: string }): AwsProbes
     },
     // 20 is the smallest page RDS accepts.
     DescribeDBInstances: async () => void (await rds.send(new DescribeDBInstancesCommand({ MaxRecords: 20 }), within())),
+    DescribeLoadBalancers: async () => {
+      const res = await elb.send(new DescribeLoadBalancersCommand({ PageSize: 1 }), within());
+      return { loadBalancerArn: res.LoadBalancers?.[0]?.LoadBalancerArn };
+    },
+    DescribeLoadBalancerAttributes: async (sample) =>
+      void (await elb.send(new DescribeLoadBalancerAttributesCommand({ LoadBalancerArn: target(sample.loadBalancerArn, "A load balancer") }), within())),
+    DescribeTargetGroups: async () => {
+      const res = await elb.send(new DescribeTargetGroupsCommand({ PageSize: 1 }), within());
+      return { targetGroupArn: res.TargetGroups?.[0]?.TargetGroupArn };
+    },
+    DescribeTargetHealth: async (sample) => void (await elb.send(new DescribeTargetHealthCommand({ TargetGroupArn: target(sample.targetGroupArn, "A target group") }), within())),
+    DescribeTags: async (sample) => void (await elb.send(new DescribeTagsCommand({ ResourceArns: [target(sample.loadBalancerArn, "A load balancer")] }), within())),
     ListBuckets: async () => {
       const res = await s3.send(new ListBucketsCommand({ BucketRegion: opts.region, MaxBuckets: 1 }), within());
       return { bucket: res.Buckets?.[0]?.Name };
@@ -172,6 +211,10 @@ export function awsProbes(opts: { region: string; profile?: string }): AwsProbes
         }),
         within(),
       );
+    },
+    // Never reached: a charged read is left out before anything is tried.
+    GetCostAndUsage: async () => {
+      throw new Error("init does not make a request AWS charges for");
     },
     GetProducts: async () => {
       await pricing.send(
@@ -295,13 +338,16 @@ const NEEDS: Record<keyof Sample, { what: string; looked: string }> = {
   bucket: { what: "a bucket", looked: "ListBuckets" },
   launchTemplateId: { what: "a launch template", looked: "DescribeLaunchTemplates" },
   upload: { what: "an incomplete multipart upload", looked: "ListMultipartUploads" },
+  loadBalancerArn: { what: "a load balancer", looked: "DescribeLoadBalancers" },
+  targetGroupArn: { what: "a target group", looked: "DescribeTargetGroups" },
 };
 
 /** Try every read a scan makes, each as soon as what it needs has been found. */
 async function tryReads(probes: AwsProbes): Promise<ReadCheck[]> {
   const sample: Sample = {};
   const results = new Map<string, Pick<ReadCheck, "status" | "detail">>();
-  let pending = [...AWS_READS];
+  // A read AWS charges for is never tried: checking that a scan will work must not cost anything.
+  let pending = AWS_READS.filter((r) => !r.charged);
   while (pending.length > 0) {
     const ready = pending.filter((r) => !r.needs || sample[r.needs] !== undefined);
     if (ready.length === 0) break;
@@ -322,7 +368,10 @@ async function tryReads(probes: AwsProbes): Promise<ReadCheck[]> {
   return AWS_READS.map((r) => {
     const need = NEEDS[r.needs!];
     const unlisted = ["denied", "failed"].includes(results.get(need?.looked)?.status ?? "");
-    const result = results.get(r.operation) ?? { status: "not-tested" as const, detail: `needs ${need?.what} to try it on; ${unlisted ? "none could be listed" : "none was found"}` };
+    const result = results.get(r.operation) ?? {
+      status: "not-tested" as const,
+      detail: r.charged ?? `needs ${need?.what} to try it on; ${unlisted ? "none could be listed" : "none was found"}`,
+    };
     return { service: r.service, operation: r.operation, permission: r.permission, ...result };
   });
 }

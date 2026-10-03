@@ -68,6 +68,32 @@ export function comparisonLine(result: ScanResult): string | undefined {
   return `${line} ${widened} of the new ${ones} ${where} the last scan did not cover.`;
 }
 
+/** "September 2026" for "2026-09". */
+const monthName = (month: string) => new Date(`${month}-01T00:00:00Z`).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+
+/** The share of the bill in words: one decimal, and never "0.0%" for waste that exists. */
+export const sharePhrase = (pct: number) => (pct === 0 ? "less than 0.1% of last month's bill" : `about ${pct.toFixed(1)}% of last month's bill`);
+
+/**
+ * What the account spent last month and what the waste found comes to as a
+ * share of it, as sentences. Empty unless the scan was asked for the bill. The
+ * percentage is the one CloudPilot worked out; this only words it.
+ */
+export function billLines(result: ScanResult): string[] {
+  const bill = result.bill;
+  if (!bill) return [];
+  const month = monthName(bill.month);
+  if (bill.unavailable !== undefined || bill.totalUsd === undefined) {
+    return [`The bill could not be read: ${(bill.unavailable ?? "no figure returned").replace(/\.$/, "")}.`];
+  }
+  const spent = `In ${month} the account spent ${money(bill.totalUsd)} (AWS Cost Explorer, unblended cost, before credits and refunds${bill.estimated ? "; AWS still marks the figure as an estimate" : ""}).`;
+  if (bill.wasteSharePct === undefined) return [spent];
+  return [
+    spent,
+    `The ${money(result.totalMonthlyWasteUsd)} a month of waste found is ${sharePhrase(bill.wasteSharePct)}. The waste is an estimate per month at current prices; the bill is last month's actual total.`,
+  ];
+}
+
 export interface ReportOptions {
   /** List only the findings that are new since the earlier scan. */
   onlyNew?: boolean;
@@ -121,6 +147,7 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
   );
   const since = comparisonLine(result);
   if (since) lines.push(since);
+  lines.push(...billLines(result));
 
   if (result.findings.length > 0) {
     const shown = shownFindings(result, options.onlyNew);
@@ -174,6 +201,8 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
   lines.push(`**${result.findings.length} findings, ${money(result.totalMonthlyWasteUsd)} per month of estimated waste.**`, "");
   const since = comparisonLine(result);
   if (since) lines.push(since, "");
+  const bill = billLines(result);
+  if (bill.length > 0) lines.push(...bill, "");
   const shown = shownFindings(result, options.onlyNew);
   const filtered = onlyNewLine(result, shown, options);
   if (filtered) lines.push(filtered, "");
@@ -232,6 +261,8 @@ export const KIND: Record<Pattern, string> = {
   "idle-instance": "Idle running instances",
   "oversized-instance": "Running instances one size too big",
   "idle-rds-instance": "Idle RDS instances",
+  "idle-nat-gateway": "Idle NAT gateways",
+  "idle-load-balancer": "Idle load balancers",
   "orphaned-snapshot": "Snapshots of deleted volumes",
   "unused-ami": "Unused AMIs",
   "bucket-without-lifecycle": "Buckets with no lifecycle rule",
@@ -251,7 +282,7 @@ export function templatedSummary(result: ScanResult, options: { shortenIds?: boo
   const label = (ids: string[]) => (options.shortenIds ? ids.map(shortId) : ids).join(", ");
   if (result.findings.length === 0) {
     const since = comparisonLine(result);
-    return [`No waste found in ${regionLabel(result)}.`, ...(since ? [since] : []), ...(skippedLine(result) ? [skippedLine(result)!] : [])].join("\n");
+    return [`No waste found in ${regionLabel(result)}.`, ...(since ? [since] : []), ...billLines(result), ...(skippedLine(result) ? [skippedLine(result)!] : [])].join("\n");
   }
   const where =
     result.regions.length === 1
@@ -261,6 +292,7 @@ export function templatedSummary(result: ScanResult, options: { shortenIds?: boo
   const lines = [
     `Estimated waste: ${money(result.totalMonthlyWasteUsd)} per month across ${result.findings.length} finding${result.findings.length === 1 ? "" : "s"} in ${where}.`,
     ...(since ? [since] : []),
+    ...billLines(result),
     "",
     "By kind, most expensive first:",
   ];

@@ -86,6 +86,8 @@ const priceBook: PriceBook = {
   rdsInstanceHour: { "db.t3.micro|MySQL|Single-AZ": 0.034 },
   rdsStorageGbMonth: { "gp3|MySQL|Single-AZ": 0.1265 },
   instanceSpecs: { "m5.large": { vcpu: 2, memoryGib: 8 } },
+  natGatewayHour: 0.056,
+  loadBalancerHour: { application: 0.0239 },
   s3StandardGbMonth: 0.025,
 };
 

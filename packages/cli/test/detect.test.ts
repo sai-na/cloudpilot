@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { detect, idleRdsInstances, mergeScans, oversizedCandidates } from "../src/detect.js";
-import type { Inventory, PriceBook } from "../src/types.js";
+import { detect, idleLoadBalancers, idleNatGateways, idleRdsInstances, mergeScans, oversizedCandidates, withBill } from "../src/detect.js";
+import type { Inventory, PriceBook, ScanResult } from "../src/types.js";
 
 const prices: PriceBook = {
   region: "ap-south-1",
@@ -14,6 +14,8 @@ const prices: PriceBook = {
   rdsInstanceHour: {},
   rdsStorageGbMonth: {},
   instanceSpecs: {},
+  natGatewayHour: 0,
+  loadBalancerHour: {},
   s3StandardGbMonth: 0.025,
 };
 
@@ -27,6 +29,8 @@ const empty: Inventory = {
   instances: [],
   rdsInstances: [],
   addresses: [],
+  natGateways: [],
+  loadBalancers: [],
   launchTemplateImageIds: [],
   buckets: [],
   warnings: [],
@@ -470,4 +474,263 @@ test("the instances a price lookup must cover are exactly the ones the rules cou
   });
   assert.deepEqual(oversizedCandidates(inv).map((c) => [c.instance.id, c.smaller]), [["i-big", "m5.large"]]);
   assert.deepEqual(idleRdsInstances(inv).map((d) => d.id), ["idle"]);
+});
+
+// ---- Idle NAT gateways and idle load balancers ----
+
+const networked: PriceBook = { ...sized, natGatewayHour: 0.056, loadBalancerHour: { application: 0.0239, network: 0.0239 } };
+const traffic = (hoursObserved: number, total: number, windowHours = 24, extra: object = {}) => ({ windowHours, hoursObserved, datapoints: hoursObserved * 12, total, ...extra });
+const nat = (id: string, extra: object = {}) => ({
+  id,
+  state: "available",
+  vpcId: "vpc-0a1b2c3d4e5f60718",
+  subnetId: "subnet-0a1b2c3d4e5f60718",
+  connectivityType: "public",
+  createdAt: "2026-01-01T00:00:00Z",
+  allocationIds: ["eipalloc-0a1b2c3d4e5f60718"],
+  publicIps: ["13.126.0.1"],
+  traffic: traffic(24, 0),
+  ...extra,
+});
+const natPatterns = (natGateways: ReturnType<typeof nat>[], book: PriceBook = networked) => detect(inventory({ natGateways }), book).map((f) => [f.pattern, f.resourceIds[0]]);
+
+test("idle NAT gateway: priced at its hourly rate over 730 hours, deleted, with the way back spelled out", () => {
+  const [f, ...rest] = detect(inventory({ natGateways: [nat("nat-0a1b2c3d4e5f60718", { name: "egress" })] }), networked);
+  assert.equal(rest.length, 0);
+  assert.equal(f!.pattern, "idle-nat-gateway");
+  assert.equal(f!.resourceType, "AWS::EC2::NatGateway");
+  close(f!.monthlyCostUsd, 0.056 * 730);
+  assert.match(f!.costBasis, /Data-processing charges are not included; with no traffic there are none/);
+  assert.deepEqual(f!.fix.commands, ["aws ec2 delete-nat-gateway --nat-gateway-id nat-0a1b2c3d4e5f60718 --region ap-south-1"]);
+  assert.equal(f!.fix.risk, "dangerous");
+  assert.match(f!.fix.rollback, /permanent/);
+  assert.match(f!.fix.rollback, /route table entry that points at it is not removed/);
+  assert.match(f!.fix.rollback, /black-holes/);
+  assert.match(f!.fix.rollback, /Elastic IP is not released with it/);
+  assert.match(f!.fix.rollback, /idle Elastic IP/);
+  assert.match(f!.fix.rollback, /new gateway gets a new ID/);
+  assert.equal(f!.alternative, undefined);
+  assert.ok(f!.evidence.some((e) => /BytesOutToDestination.*over the last 24\.0 h of the 24 h asked for: 0 bytes in total/.test(e)));
+  assert.ok(f!.evidence.some((e) => /does not show that nothing routes to the gateway/.test(e)));
+  assert.ok(f!.evidence.some((e) => /Elastic IP: 13\.126\.0\.1 \(eipalloc-0a1b2c3d4e5f60718\)/.test(e)));
+  assert.ok(f!.evidence.some((e) => /Name tag: egress/.test(e)));
+});
+
+test("idle NAT gateway: a private gateway has no Elastic IP to talk about", () => {
+  const [f] = detect(inventory({ natGateways: [nat("nat-0a1b2c3d4e5f60718", { connectivityType: "private", allocationIds: [], publicIps: [] })] }), networked);
+  assert.ok(!/Elastic IP/.test(f!.fix.rollback));
+  assert.ok(!f!.evidence.some((e) => /Elastic IP/.test(e)));
+  assert.match(f!.fix.rollback, /new gateway gets a new ID/);
+});
+
+test("idle NAT gateway: confidence grows with how long nothing passed", () => {
+  const confidence = (hours: number, window = hours) => detect(inventory({ natGateways: [nat("nat-1", { traffic: traffic(hours, 0, window) })] }), networked)[0]!.confidence;
+  assert.equal(confidence(6), 0.5);
+  assert.equal(confidence(24), 0.7);
+  assert.equal(confidence(168), 0.85);
+});
+
+test("idle NAT gateway: any byte, too little history, no data, another state, or no subnet is not idle", () => {
+  assert.deepEqual(
+    natPatterns([
+      nat("nat-busy", { traffic: traffic(24, 1) }),
+      // 21.5 of 24 hours is under 90% of the window.
+      nat("nat-short", { traffic: traffic(21.5, 0) }),
+      nat("nat-nodata", { traffic: undefined }),
+      nat("nat-pending", { state: "pending" }),
+      nat("nat-failed", { state: "failed" }),
+      nat("nat-deleting", { state: "deleting" }),
+      // A regional NAT gateway has no subnet and is priced differently.
+      nat("nat-regional", { subnetId: undefined }),
+      nat("nat-enough", { traffic: traffic(21.6, 0) }),
+    ]),
+    [["idle-nat-gateway", "nat-enough"]],
+  );
+});
+
+test("idle NAT gateway: with no price it is left out, and the ignore tag leaves it out and counts it as skipped", () => {
+  assert.deepEqual(natPatterns([nat("nat-1")], { ...networked, natGatewayHour: 0 }), []);
+  const inv = inventory({ natGateways: [nat("nat-kept"), nat("nat-ignored", { ignored: true })] });
+  assert.deepEqual(detect(inv, networked).map((f) => f.resourceIds[0]), ["nat-kept"]);
+  assert.deepEqual(mergeScans("123456789012", [{ inventory: inv, prices: networked, findings: detect(inv, networked) }]).skippedByTag, ["nat-ignored"]);
+});
+
+const ARN = "arn:aws:elasticloadbalancing:ap-south-1:123456789012:loadbalancer/app/web/50dc6c495c0c9188";
+const empties = [{ arn: "arn:tg-1", name: "web-tg", registeredTargets: 0 }];
+const balancer = (name: string, extra: object = {}) => ({
+  arn: ARN.replace("app/web/", `app/${name}/`),
+  name,
+  type: "application",
+  scheme: "internet-facing",
+  dnsName: `${name}-123.ap-south-1.elb.amazonaws.com`,
+  state: "active",
+  createdAt: "2026-01-01T00:00:00Z",
+  windowHours: 24,
+  deletionProtection: false,
+  targetGroups: [{ arn: "arn:tg-1", name: "web-tg", registeredTargets: 2 }],
+  traffic: traffic(24, 500),
+  ...extra,
+});
+const balancerPatterns = (loadBalancers: ReturnType<typeof balancer>[], book: PriceBook = networked) => detect(inventory({ loadBalancers }), book).map((f) => [f.pattern, f.resourceIds[0]]);
+
+test("idle load balancer with no registered targets: priced at its hourly rate, deleted, with the way back spelled out", () => {
+  const lb = balancer("web", { targetGroups: empties, traffic: undefined, deletionProtection: true });
+  const [f, ...rest] = detect(inventory({ loadBalancers: [lb] }), networked);
+  assert.equal(rest.length, 0);
+  assert.equal(f!.pattern, "idle-load-balancer");
+  assert.equal(f!.resourceType, "AWS::ElasticLoadBalancingV2::LoadBalancer");
+  assert.deepEqual(f!.resourceIds, ["web"]);
+  assert.equal(f!.title, "Idle application load balancer web: no registered targets");
+  close(f!.monthlyCostUsd, 0.0239 * 730);
+  assert.match(f!.costBasis, /LCU\) charges are not included/);
+  assert.deepEqual(f!.fix.commands, [`aws elbv2 delete-load-balancer --load-balancer-arn ${lb.arn} --region ap-south-1`]);
+  assert.equal(f!.fix.risk, "dangerous");
+  assert.match(f!.fix.rollback, /permanent/);
+  assert.match(f!.fix.rollback, /DNS name \(web-123\.ap-south-1\.elb\.amazonaws\.com\) is gone for good/);
+  assert.match(f!.fix.rollback, /new load balancer gets a new DNS name/);
+  assert.match(f!.fix.rollback, /deletion protection is on, the command is refused/);
+  assert.match(f!.fix.rollback, /target groups are left behind/);
+  assert.ok(f!.evidence.some((e) => /1 target group \(web-tg\), none with a registered target/.test(e)));
+  assert.ok(f!.evidence.some((e) => /Deletion protection is on: the delete command is refused/.test(e)));
+  assert.ok(f!.evidence.some((e) => /Traffic was not read, so requests are not ruled out/.test(e)));
+  assert.ok(f!.evidence.some((e) => e === `ARN ${lb.arn}`));
+  // Only the empty target group speaks, so the confidence stays at the bottom of the ladder.
+  assert.equal(f!.confidence, 0.5);
+});
+
+test("idle load balancer with no requests: the Application one by RequestCount, the Network one by flows", () => {
+  const [alb] = detect(inventory({ loadBalancers: [balancer("web", { traffic: traffic(24, 0) })] }), networked);
+  assert.equal(alb!.title, "Idle application load balancer web: no requests");
+  assert.ok(alb!.evidence.some((e) => /CloudWatch RequestCount over the last 24\.0 h of the 24 h asked for: 0 requests in total/.test(e)));
+  assert.equal(alb!.confidence, 0.7);
+  assert.ok(!alb!.evidence.some((e) => /target group/.test(e)));
+  assert.match(alb!.costBasis, /with no traffic there are almost none/);
+
+  const [nlb] = detect(inventory({ loadBalancers: [balancer("tcp", { type: "network", traffic: traffic(24, 0) })] }), networked);
+  assert.equal(nlb!.title, "Idle network load balancer tcp: no flows");
+  assert.ok(nlb!.evidence.some((e) => /NewFlowCount and ActiveFlowCount over the last 24\.0 h of the 24 h asked for: 0 flows in total/.test(e)));
+});
+
+test("idle load balancer: both signals are named, and a balancer CloudWatch published nothing for is judged by its age", () => {
+  const [both] = detect(inventory({ loadBalancers: [balancer("web", { targetGroups: empties, traffic: traffic(168, 0, 168), windowHours: 168 })] }), networked);
+  assert.equal(both!.title, "Idle application load balancer web: no registered targets and no requests");
+  assert.equal(both!.confidence, 0.85);
+
+  // No datapoints at all, which is what a balancer with no requests publishes: the hours it has existed count.
+  const silent = balancer("quiet", { traffic: traffic(24, 0, 24, { datapoints: 0, fromAge: true }) });
+  const [f] = detect(inventory({ loadBalancers: [silent] }), networked);
+  assert.equal(f!.title, "Idle application load balancer quiet: no requests");
+  assert.ok(f!.evidence.some((e) => /holds no RequestCount datapoints.*reports that metric only while requests flow, so none means no requests/.test(e)));
+});
+
+test("idle load balancer: any traffic clears it, even one with no targets that only redirects", () => {
+  assert.deepEqual(
+    balancerPatterns([
+      balancer("busy", { traffic: traffic(24, 1) }),
+      balancer("redirects", { targetGroups: empties, traffic: traffic(24, 9000) }),
+      // Too little history to call it idle, but not too little to see that it is in use.
+      balancer("busy-short", { targetGroups: empties, traffic: traffic(2, 5) }),
+    ]),
+    [],
+  );
+});
+
+test("idle load balancer: at least 90% of the window must be covered, and a balancer must have existed that long", () => {
+  assert.deepEqual(
+    balancerPatterns([
+      // 21.5 of 24 hours is under 90% of the window.
+      balancer("short", { traffic: traffic(21.5, 0) }),
+      balancer("enough", { traffic: traffic(21.6, 0) }),
+      // Empty target groups, but created two hours before the scan: still being set up.
+      balancer("new", { targetGroups: empties, traffic: undefined, createdAt: "2026-10-02T22:00:00Z" }),
+      balancer("no-creation-time", { targetGroups: empties, traffic: undefined, createdAt: undefined }),
+      balancer("old-enough", { targetGroups: empties, traffic: undefined, createdAt: "2026-10-02T02:00:00Z" }),
+    ]),
+    [["idle-load-balancer", "enough"], ["idle-load-balancer", "old-enough"]].sort(),
+  );
+});
+
+test("idle load balancer reported on its empty target groups alone: a traffic reading too short to count is said to be inconclusive, and the confidence stays at the bottom", () => {
+  // 100 of the 168 hours asked for is under 90% of the window, so the zero requests rule nothing out.
+  const lb = balancer("web", { targetGroups: empties, traffic: traffic(100, 0, 168), windowHours: 168 });
+  const [f, ...rest] = detect(inventory({ loadBalancers: [lb] }), networked);
+  assert.equal(rest.length, 0);
+  assert.equal(f!.title, "Idle application load balancer web: no registered targets");
+  assert.ok(
+    f!.evidence.some((e) => /CloudWatch held RequestCount for only the last 100\.0 h of the 168 h asked for, less than the 90% of the window needed, so requests over the rest of it are not ruled out/.test(e)),
+    "the short reading is named",
+  );
+  assert.ok(!f!.evidence.some((e) => /Traffic was not read/.test(e)));
+  assert.equal(f!.confidence, 0.5);
+  assert.ok(!/with no traffic there are almost none/.test(f!.costBasis));
+});
+
+test("idle load balancer: targets in any state count, and a balancer with no target group or an unread one is not judged on targets", () => {
+  assert.deepEqual(
+    balancerPatterns([
+      balancer("one-empty-one-full", { traffic: undefined, targetGroups: [...empties, { arn: "arn:tg-2", name: "api-tg", registeredTargets: 1 }] }),
+      // A balancer with no target group at all may only redirect or answer with a fixed response.
+      balancer("no-groups", { traffic: undefined, targetGroups: [] }),
+      balancer("groups-unread", { traffic: undefined, targetGroups: undefined }),
+      balancer("health-unread", { traffic: undefined, targetGroups: [{ arn: "arn:tg-3", name: "x", registeredTargets: undefined }] }),
+    ]),
+    [],
+  );
+});
+
+test("idle load balancer: Gateway and unknown types, other states, unreadable tags, the ignore tag and unpriced types are left alone", () => {
+  const idle = { targetGroups: empties, traffic: traffic(24, 0) };
+  assert.deepEqual(
+    balancerPatterns([
+      balancer("gwlb", { ...idle, type: "gateway" }),
+      balancer("mystery", { ...idle, type: "something-new" }),
+      balancer("provisioning", { ...idle, state: "provisioning" }),
+      balancer("impaired", { ...idle, state: "active_impaired" }),
+      balancer("failed", { ...idle, state: "failed" }),
+      balancer("tags-unread", { ...idle, tagsUnread: true }),
+      balancer("ignored-lb", { ...idle, ignored: true }),
+    ]),
+    [],
+  );
+  // A type the Price List had no price for is left out rather than reported at a cost that is made up.
+  assert.deepEqual(balancerPatterns([balancer("net", { ...idle, type: "network" })], { ...networked, loadBalancerHour: { application: 0.0239 } }), []);
+  const inv = inventory({ loadBalancers: [balancer("kept", idle), balancer("ignored-lb", { ...idle, ignored: true })] });
+  assert.deepEqual(detect(inv, networked).map((f) => f.resourceIds[0]), ["kept"]);
+  assert.deepEqual(mergeScans("123456789012", [{ inventory: inv, prices: networked, findings: detect(inv, networked) }]).skippedByTag, ["ignored-lb"]);
+});
+
+test("the NAT gateways and load balancers a price lookup must cover are exactly the ones the rules could report", () => {
+  const inv = inventory({
+    natGateways: [nat("nat-idle"), nat("nat-busy", { traffic: traffic(24, 5) }), nat("nat-regional", { subnetId: undefined })],
+    loadBalancers: [balancer("idle", { traffic: traffic(24, 0) }), balancer("busy"), balancer("gw", { type: "gateway", traffic: traffic(24, 0) })],
+  });
+  assert.deepEqual(idleNatGateways(inv).map((g) => g.id), ["nat-idle"]);
+  assert.deepEqual(idleLoadBalancers(inv).map((i) => [i.balancer.name, i.noTargets, i.noTraffic]), [["idle", false, true]]);
+});
+
+// ---- The bill ----
+
+const scanned = (totalMonthlyWasteUsd: number): ScanResult => ({
+  accountId: "123456789012",
+  regions: ["ap-south-1"],
+  scannedAt: "2026-10-03T00:00:00Z",
+  prices: { source: "price-file", fetchedAt: "2026-10-03T00:00:00Z" },
+  findings: [],
+  totalMonthlyWasteUsd,
+  skippedByTag: [],
+  warnings: [],
+});
+
+test("the share of the bill is worked out in code, to one decimal", () => {
+  assert.equal(withBill(scanned(151.53), { month: "2026-09", totalUsd: 1234.56 }).bill!.wasteSharePct, 12.3);
+  assert.equal(withBill(scanned(10), { month: "2026-09", totalUsd: 1000 }).bill!.wasteSharePct, 1);
+  assert.equal(withBill(scanned(0.04), { month: "2026-09", totalUsd: 1000 }).bill!.wasteSharePct, 0);
+  // Never more than the bill's own figures: the total is carried through untouched.
+  assert.deepEqual(withBill(scanned(5), { month: "2026-09", totalUsd: 100, estimated: true }).bill, { month: "2026-09", totalUsd: 100, estimated: true, wasteSharePct: 5 });
+});
+
+test("there is no share when nothing was wasted or the bill could not be read", () => {
+  assert.equal(withBill(scanned(0), { month: "2026-09", totalUsd: 100 }).bill!.wasteSharePct, undefined);
+  assert.deepEqual(withBill(scanned(5), { month: "2026-09", unavailable: "AccessDeniedException" }).bill, { month: "2026-09", unavailable: "AccessDeniedException" });
+  assert.equal(withBill(scanned(5), { month: "2026-09", totalUsd: 0 }).bill!.wasteSharePct, undefined);
 });

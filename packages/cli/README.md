@@ -30,6 +30,11 @@ CloudPilot only reads. These are all the operations it calls, and a test
 fails the build if the code calls anything that is not on this list or that
 is not a `Describe`, `List` or `Get`.
 
+Every call here is free except the last. `GetCostAndUsage` is made only when
+you pass `--bill`, and AWS charges $0.01 for each Cost Explorer request.
+CloudPilot never spends your money unasked, so without `--bill` it is never
+called.
+
 | Service | Operation | IAM permission | Used for |
 |---|---|---|---|
 | STS | `GetCallerIdentity` | none needed | The account ID shown in the report |
@@ -39,9 +44,15 @@ is not a `Describe`, `List` or `Get`.
 | EC2 | `DescribeImages` | `ec2:DescribeImages` | Unused AMIs |
 | EC2 | `DescribeInstances` | `ec2:DescribeInstances` | Stopped, idle and oversized instances |
 | EC2 | `DescribeAddresses` | `ec2:DescribeAddresses` | Idle Elastic IPs |
+| EC2 | `DescribeNatGateways` | `ec2:DescribeNatGateways` | Idle NAT gateways |
 | EC2 | `DescribeLaunchTemplates` | `ec2:DescribeLaunchTemplates` | Whether an AMI is still referenced |
 | EC2 | `DescribeLaunchTemplateVersions` | `ec2:DescribeLaunchTemplateVersions` | Whether an AMI is still referenced |
 | RDS | `DescribeDBInstances` | `rds:DescribeDBInstances` | Idle database instances |
+| ELBv2 | `DescribeLoadBalancers` | `elasticloadbalancing:DescribeLoadBalancers` | Idle Application and Network load balancers |
+| ELBv2 | `DescribeLoadBalancerAttributes` | `elasticloadbalancing:DescribeLoadBalancerAttributes` | Whether deletion protection is on |
+| ELBv2 | `DescribeTargetGroups` | `elasticloadbalancing:DescribeTargetGroups` | The target groups of a load balancer |
+| ELBv2 | `DescribeTargetHealth` | `elasticloadbalancing:DescribeTargetHealth` | Whether a target group has registered targets |
+| ELBv2 | `DescribeTags` | `elasticloadbalancing:DescribeTags` | The `cloudpilot:ignore` tag on a load balancer |
 | S3 | `ListBuckets` | `s3:ListAllMyBuckets` | The buckets in each region |
 | S3 | `GetBucketLocation` | `s3:GetBucketLocation` | A bucket's region, when the listing omits it |
 | S3 | `GetBucketLifecycleConfiguration` | `s3:GetLifecycleConfiguration` | Buckets with no lifecycle rule |
@@ -49,8 +60,9 @@ is not a `Describe`, `List` or `Get`.
 | S3 | `ListObjectsV2` | `s3:ListBucket` | Object count and size; object contents are never read |
 | S3 | `ListMultipartUploads` | `s3:ListBucketMultipartUploads` | Incomplete uploads |
 | S3 | `ListParts` | `s3:ListMultipartUploadParts` | The size of an incomplete upload |
-| CloudWatch | `GetMetricData` | `cloudwatch:GetMetricData` | CPU history of running instances, connection history of database instances |
+| CloudWatch | `GetMetricData` | `cloudwatch:GetMetricData` | CPU history of running instances, connection history of database instances, traffic of NAT gateways and load balancers |
 | Pricing | `GetProducts` | `pricing:GetProducts` | Unit prices for what was found |
+| CostExplorer | `GetCostAndUsage` | `ce:GetCostAndUsage` | Last month's total spend, only with `--bill` |
 
 CloudShell's credentials are your console permissions, which usually allow
 far more than this. To hold CloudPilot to exactly these reads, run it with a
@@ -124,6 +136,8 @@ read as a skipped check.
 | Idle instance | CloudWatch CPU never above 5% over at least 1 hour | Terminate it |
 | Oversized instance | Not idle, CPU never above 40% over at least 90% of `--lookback-hours`, and the size one step down in the same family exists | Stop it, change the instance type, start it |
 | Idle RDS instance | Status `available` and zero database connections over at least 90% of `--lookback-hours` | Delete it with a final snapshot (or stop it) |
+| Idle NAT gateway | State `available` and no bytes in or out over at least 90% of `--lookback-hours` | Delete it |
+| Idle load balancer | An active Application or Network load balancer with no registered targets in any of its target groups, or with no requests (Application) or flows (Network) over at least 90% of `--lookback-hours` | Delete it |
 | Orphaned snapshot | Source volume no longer exists and no AMI uses it | Delete it |
 | Unused AMI | No instance and no launch template references it | Deregister it and delete its snapshots |
 | Bucket without lifecycle rule | No lifecycle configuration | Add one |
@@ -132,6 +146,50 @@ read as a skipped check.
 Detection uses resource properties, not labels. Every finding carries its
 evidence, a monthly cost, a rule confidence, the fix commands, a risk level
 (`caution` or `dangerous`) and a note on what cannot be undone.
+
+### The bill, for scale
+
+```sh
+npx @meruapps/cloudpilot --bill
+```
+
+With `--bill`, CloudPilot also reads what the account spent last month and
+says what share of it the waste found comes to. One request goes to AWS Cost
+Explorer (`ce:GetCostAndUsage`, unblended cost, for the last full calendar
+month in UTC, before credits and refunds). **AWS charges $0.01 for each Cost
+Explorer request**, and CloudPilot never spends your money unasked, so the flag
+is off by default, is on `scan` only, and a scan without it never calls Cost
+Explorer. It makes that one request per scan, however many regions are scanned.
+
+Every form of the report (terminal, Markdown, plain text, HTML, JSON and the
+summary) then carries two sentences:
+
+```
+In September 2026 the account spent $1234.56 (AWS Cost Explorer, unblended cost, before credits and refunds).
+The $151.53 a month of waste found is about 12.3% of last month's bill. The waste is an estimate per month at current prices; the bill is last month's actual total.
+```
+
+The percentage is worked out by CloudPilot's code, rounded to one decimal, and
+is "less than 0.1%" when it rounds to nothing. A model never computes it: with
+`--explain` the figure is given to it as text and it may quote it, and the
+output check discards text that states any other percentage of the bill. In the
+JSON it is `bill.wasteSharePct`, next to `bill.totalUsd` and `bill.month`. When
+Cost Explorer still marks the month as an estimate, the first sentence says so.
+
+When the bill cannot be read, the report says so in one plain line, and the
+scan is otherwise whole:
+
+```
+The bill could not be read: AccessDeniedException - User: ... is not authorized to perform: ce:GetCostAndUsage.
+```
+
+That covers a role without the permission, Cost Explorer not enabled for the
+account, no data for the month yet (a new account reads nothing to the cent),
+a bill in a currency other than dollars, and any other error. No figure and no
+share are shown then. The comparison is rough on purpose: the waste is an
+estimate at today's prices and the bill is last month's actual total, so a
+resource that only appeared this month, or a bill with a large one-off charge,
+moves it. The daily report does not pass `--bill`.
 
 ### Rule confidence
 
@@ -148,6 +206,8 @@ produced by a model.
 | Idle instance | 60%, 80% or 90% | CPU only. 60% under 6 hours of data, 80% from 6 hours, 90% from 24 hours |
 | Oversized instance | 40% or 50% | CPU only: memory is invisible without the CloudWatch agent, so it is never checked. 40% under 24 hours of data, 50% from 24 hours |
 | Idle RDS instance | 50%, 70% or 85% | Connections only. 50% under 24 hours of data, 70% from 24 hours, 85% from 7 days. A job that connects once a month is not in the window |
+| Idle NAT gateway | 50%, 70% or 85% | Traffic only. 50% under 24 hours of data, 70% from 24 hours, 85% from 7 days. A route used only when another path fails carries nothing until then |
+| Idle load balancer | 50%, 70% or 85% | The same ladder, by the hours of no traffic, or by how long the balancer has existed when its targets alone were the reason. At most 50% when its traffic could not be read, or covered less than 90% of the window. A balancer that serves a yearly event is quiet the rest of the year |
 | Orphaned snapshot | 80% | The source volume is gone, but the snapshot may be a deliberate backup |
 | Unused AMI | 70% | Auto Scaling launch configurations and other accounts are not visible to the scan |
 | Bucket without lifecycle rule | 90% | The configuration is simply absent |
@@ -158,8 +218,10 @@ produced by a model.
 Tag a resource `cloudpilot:ignore` = `true` and no finding is raised for it.
 Skipping is never silent: the report and the summary state how many resources
 were skipped and list them. Volumes, snapshots, AMIs, instances, DB instances,
-Elastic IPs and buckets can be tagged; an ignored bucket takes its incomplete uploads
-with it.
+Elastic IPs, NAT gateways, load balancers and buckets can be tagged; an ignored
+bucket takes its incomplete uploads with it. A load balancer whose tags cannot be
+read (`elasticloadbalancing:DescribeTags` is missing) is not judged at all, so
+the ignore tag is never overridden by a permission gap.
 
 ## Run it from source
 
@@ -472,7 +534,8 @@ From a source checkout, the command is `node` with
 | `get_cluster_workloads` | Which cluster, namespaces, Prometheus and lookback the latest cluster scan covered, whatever it could not read, and every workload it read, flagged or not: replicas, and each container's requests, peak use, hours of history, and whether it was killed for running out of memory |
 
 Every tool is marked read-only. The account tools make the same AWS calls
-as the list above and nothing else, and the cluster tools only run
+as the list above and nothing else, except the one paid call: there is no
+`--bill` here, so no tool ever reads Cost Explorer. The cluster tools only run
 `kubectl get --raw`. Cluster costs use the OpenCost default prices here.
 The server tells the client's model the same ground rules `ask` uses:
 quote figures exactly, and present fix commands as proposals for a person.
@@ -700,7 +763,8 @@ say so: see [Watch it](#watch-it).
 | `--every <interval>` | `watch` only: the wait between rounds, `15m` to `7d`. Default `6h` |
 | `--max-runs <n>` | `watch` only: stop after this many rounds. Default: until stopped |
 | `--kube` | `watch` only: watch the cluster kubectl points at instead of the AWS account |
-| `--lookback-hours <n>` | Hours of CPU and database connection history used to judge idle and oversized instances. Default 24 |
+| `--bill` | `scan` only: also read last month's total spend from Cost Explorer and say what share of it the waste is. AWS charges $0.01 for this one request, so it is never made unless you ask |
+| `--lookback-hours <n>` | Hours of CPU, database connection and NAT gateway and load balancer traffic history used to judge idle and oversized resources. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
 | `--offline` | Use only `--price-file` for prices |
 | `--provider <name>` | `anthropic`, `openai` or `bedrock`. Default: whichever key is set |
@@ -887,9 +951,51 @@ The rules are checked against a seeded cluster: see
 - Zero connections is zero over the window, not proof that nothing needs the
   database. Deletion protection, if on, is stated in the evidence, and RDS will
   refuse the delete until it is turned off.
-- The idle RDS and oversized instance rules are tested on hand-built
-  inventories. They have not been scored against a live seeded lab: the waste
-  lab holds no RDS instance and no oversized instance.
+- Idle NAT gateways are judged only when `available`, with a subnet. A regional
+  NAT gateway (it has no subnet) is billed differently and is never judged.
+  The cost is the hourly price over 730 hours. Data-processing charges are not
+  included (with no traffic there are none), nor is the gateway's Elastic IP,
+  which is billed on its own and is reported separately once the gateway is
+  gone. No bytes in either direction is no traffic in the window, not proof
+  that nothing routes to the gateway: a route used only in an outage is
+  invisible. Deleting it leaves any route that points at it black-holing until
+  the route is changed. A gateway with less than 90% of the window in
+  CloudWatch is not judged, and neither is one CloudWatch holds no datapoints
+  for: only a reading of zero counts as no traffic. (This relies on an idle
+  gateway still publishing zeros. It has not been seen on a live idle gateway,
+  because the lab has none.)
+- Idle load balancers are judged for Application and Network load balancers
+  only. Gateway load balancers are skipped, and so are Classic load balancers,
+  which are a different API (`elasticloadbalancing` version 1) that CloudPilot
+  does not read. A balancer is idle when none of its target groups has a
+  registered target (in any state), or when it took no requests (Application,
+  `RequestCount`) or flows (Network, `NewFlowCount` and `ActiveFlowCount`) over
+  at least 90% of the window. Any recorded traffic clears it, because a balancer
+  with no targets can still answer with a redirect or a fixed response. A
+  balancer with no target group at all is not judged on targets, for the same
+  reason. It must also be as old as 90% of the window, so one still being set
+  up is not judged on its targets. CloudWatch publishes these two metrics only
+  while traffic flows, so a balancer with no datapoints at all counts as having
+  had no traffic for as long as it has existed within the window; the evidence
+  says so. If CloudWatch cannot be read, or holds less than 90% of the window,
+  only the empty target groups speak, the evidence says which of the two it was,
+  and the confidence stays at 50%.
+- The cost of an idle load balancer is its hourly price over 730 hours.
+  Load balancer capacity unit (LCU) charges are not included. Deletion
+  protection is read (`DescribeLoadBalancerAttributes`) and stated in the
+  evidence: AWS refuses the delete until it is turned off. Deleting a load
+  balancer is permanent, its DNS name is gone for good, and its target groups
+  are left behind. With `--offline` no NAT gateway or load balancer is priced,
+  so none is reported.
+- The idle RDS, oversized instance, idle NAT gateway and idle load balancer
+  rules are tested on hand-built inventories, and the last two also on a local
+  Moto emulator with synthetic metrics. None of the four has been scored
+  against a live seeded lab: the waste lab holds no RDS instance, no oversized
+  instance, no NAT gateway and no load balancer.
+- `--bill` compares an estimate with an actual total, and rounds to one
+  decimal. The bill is the unblended cost before credits and refunds, as Cost
+  Explorer reports it for the last full calendar month in UTC. A new account,
+  or one Cost Explorer was only just enabled for, has none yet.
 - Kubernetes: peak use is taken from the history Prometheus holds. A workload
   whose busy season falls outside that window (month-end, a yearly sale) will
   look over-requested; widen `--lookback-hours` or label it

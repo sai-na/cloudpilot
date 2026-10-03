@@ -7,7 +7,7 @@
  * they want, the saving and the script follow at once, and they copy one
  * script. Fixes that can be undone start ticked; permanent ones never do.
  */
-import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine, words } from "./report.js";
+import { billLines, comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine, words } from "./report.js";
 import { ARCHIVO, COURIER_PRIME_400, COURIER_PRIME_700 } from "./fonts.js";
 import type { Finding, Fix, ScanResult } from "./types.js";
 
@@ -56,6 +56,8 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 .facts dt { font-weight: 700; color: var(--ink); }
 .facts dd { margin: 0; }
 .since { margin: -1rem 0 2.25rem; font-weight: 700; }
+.bill { margin: 0 0 2.25rem; font-weight: 700; }
+.bill span { display: block; }
 .resolved { margin-bottom: 2rem; }
 .resolved h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
 .resolved ul { margin: 0; padding-left: 1.1rem; }
@@ -315,6 +317,7 @@ export function renderHtml(result: ScanResult, options: ReportOptions & { summar
       : `${result.regions.length} scanned, findings in ${regionsWithFindings(result).join(", ") || "none"}`;
 
   const since = comparisonLine(result);
+  const bill = billLines(result);
   const resolved = result.comparison?.resolved ?? [];
   const shown = shownFindings(result, options.onlyNew);
   const note = [since, onlyNewLine(result, shown, options)].filter(Boolean).join(" ");
@@ -373,6 +376,7 @@ ${options.banner ? `<p class="replay" role="note">${escape(options.banner)}</p>`
 ${usageLine ? `<div><dt>Usage</dt><dd>${escape(usageLine.replace(/^Usage: /, ""))}</dd></div>` : ""}
 </dl>
 ${note ? `<p class="since">${escape(note)}</p>` : ""}
+${bill.length > 0 ? `<p class="bill">${bill.map((l) => `<span>${escape(l)}</span>`).join("")}</p>` : ""}
 ${resolved.length > 0 ? `<section class="resolved">\n<h2>Resolved since the last scan</h2>\n<ul>\n${resolved.map((r) => `<li>${escape(r.title)} (${escape(r.resourceIds.map(shortId).join(", "))}), ${money(r.monthlyCostUsd)} a month</li>`).join("\n")}\n</ul>\n</section>` : ""}
 ${options.summary ? `<section class="summary">\n<h2>Summary</h2>\n${summaryBlocks(options.summary)}\n</section>` : ""}
 ${findings}

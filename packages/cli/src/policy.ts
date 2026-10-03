@@ -24,6 +24,18 @@ export const READ_ONLY_POLICY = {
       "Resource": "*"
     },
     {
+      "Sid": "ElbDescribe",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeTags"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "S3BucketMetadata",
       "Effect": "Allow",
       "Action": [
@@ -53,6 +65,14 @@ export const READ_ONLY_POLICY = {
       "Action": [
         "pricing:GetProducts",
         "pricing:DescribeServices"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CostExplorerBill",
+      "Effect": "Allow",
+      "Action": [
+        "ce:GetCostAndUsage"
       ],
       "Resource": "*"
     }

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { cli } from "./helpers.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = ["src/collect.ts", "src/pricing.ts", "src/preflight.ts"].map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
@@ -62,6 +63,51 @@ test("the documented policy grants every permission the README lists, and the RE
 test("every AWS SDK package is pinned to one exact version", () => {
   const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as { dependencies: Record<string, string> };
   const sdk = Object.entries(pkg.dependencies).filter(([name]) => name.startsWith("@aws-sdk/"));
-  assert.ok(sdk.some(([name]) => name === "@aws-sdk/client-rds"));
+  for (const wanted of ["client-rds", "client-elastic-load-balancing-v2", "client-cost-explorer"]) assert.ok(sdk.some(([name]) => name === `@aws-sdk/${wanted}`), `${wanted} is a dependency`);
   for (const [name, version] of sdk) assert.equal(version, "3.929.0", `${name} must be pinned to exactly 3.929.0`);
+});
+
+test("the README lists the NAT gateway, load balancer and bill reads, and the policy names each one", () => {
+  for (const operation of ["DescribeNatGateways", "DescribeLoadBalancers", "DescribeLoadBalancerAttributes", "DescribeTargetGroups", "DescribeTargetHealth", "DescribeTags", "GetCostAndUsage"]) {
+    assert.ok(documented.includes(operation), `${operation} is in the README table`);
+    assert.ok(called.includes(operation), `${operation} is called`);
+  }
+  // NAT gateways are read through ec2:Describe*, which the policy already holds.
+  assert.ok(grants("ec2:DescribeNatGateways"));
+  // Load balancers and the bill are asked for by name, never with a wildcard that would allow more.
+  const elb = ["DescribeLoadBalancers", "DescribeLoadBalancerAttributes", "DescribeTargetGroups", "DescribeTargetHealth", "DescribeTags"].map((o) => `elasticloadbalancing:${o}`);
+  for (const action of elb) assert.ok(allowed.includes(action), `${action} is in the policy`);
+  assert.deepEqual(allowed.filter((a) => a.startsWith("elasticloadbalancing:")).sort(), elb.sort());
+  assert.deepEqual(allowed.filter((a) => a.startsWith("ce:")), ["ce:GetCostAndUsage"]);
+});
+
+/**
+ * The one paid call is behind --bill, and --bill is on scan alone. That the
+ * call is made only when the flag is given is proved against a recording in
+ * replay.test.ts; here the flag's reach over the commands is what is checked.
+ */
+test("the one paid call is offered by scan alone, which says what it costs, and no other command takes the flag", () => {
+  const help = cli(["scan", "--help"], { blockNetwork: true });
+  assert.equal(help.status, 0, help.stderr);
+  const flags = help.stdout.replace(/\s+/g, " ");
+  assert.match(flags, /--bill\b/, "scan offers the flag");
+  assert.match(flags, /AWS charges \$0\.01 for this one request, so it is never made unless you ask/, "scan's help says what it costs");
+  assert.match(readme, /AWS charges \$0\.01 for each Cost Explorer\s+request/);
+  // eval's own required option has to be given, or that is what it complains about first.
+  for (const [command, ...before] of [["ask"], ["eval", "--manifest", "/dev/null"], ["mcp"], ["kube"]]) {
+    const own = cli([command!, "--help"], { blockNetwork: true });
+    assert.match(own.stdout, /Options:/, `${command} --help lists its options`);
+    assert.doesNotMatch(own.stdout.replace(/\s+/g, " "), /--bill/, `${command} must not offer --bill`);
+    const run = cli([command!, ...before, "--bill"], { blockNetwork: true });
+    assert.notEqual(run.status, 0, `${command} --bill must be refused`);
+    assert.match(run.stderr, /unknown option '--bill'/, `${command} --bill must be refused as an unknown option`);
+  }
+});
+
+test("the landing page lists every call the README lists, and its count of kinds is right", () => {
+  const page = readFileSync(resolve(root, "../../site/index.html"), "utf8");
+  const table = page.slice(page.indexOf('<details id="api-calls">'), page.indexOf("</details>", page.indexOf('<details id="api-calls">')));
+  const rows = [...table.matchAll(/<tr><td>\w+<\/td><td>(\w+)<\/td>/g)].map((m) => m[1]!).sort();
+  assert.deepEqual(rows, documented);
+  assert.match(table, new RegExp(`makes: ${documented.length} kinds, none of which can change anything`));
 });

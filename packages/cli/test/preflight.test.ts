@@ -45,7 +45,12 @@ const found = (operation: string): Sample | void => {
   if (operation === "ListBuckets") return { bucket: "alpha" };
   if (operation === "DescribeLaunchTemplates") return { launchTemplateId: "lt-1" };
   if (operation === "ListMultipartUploads") return { upload: { bucket: "alpha", key: "k", uploadId: "u" } };
+  if (operation === "DescribeLoadBalancers") return { loadBalancerArn: "arn:aws:elasticloadbalancing:ap-south-1:123456789012:loadbalancer/app/web/1" };
+  if (operation === "DescribeTargetGroups") return { targetGroupArn: "arn:aws:elasticloadbalancing:ap-south-1:123456789012:targetgroup/web/1" };
 };
+
+/** The one read AWS charges for. init must never make it, whatever else it tries. */
+const CHARGED = "GetCostAndUsage";
 
 const statuses = (checks: Array<{ operation: string; status: string }>) => Object.fromEntries(checks.map((c) => [c.operation, c.status]));
 
@@ -85,11 +90,19 @@ test("every read allowed: ready, nothing to fix, and each read is tried on what 
   const report = await checkAws(probes, {});
   assert.equal(report.status, "ready");
   assert.deepEqual(report.identity, { account: "123456789012", arn: "arn:aws:iam::123456789012:user/alice" });
+  const tried = Object.fromEntries(seen);
   assert.equal(report.checks.length, AWS_READS.length);
-  assert.ok(report.checks.every((c) => c.status === "allowed"));
+  assert.ok(report.checks.every((c) => c.status === "allowed" || c.operation === CHARGED));
+  // The read AWS charges for is never tried, and says why and when a scan makes it.
+  assert.ok(!seen.some(([operation]) => operation === CHARGED));
+  assert.deepEqual(
+    report.checks.filter((c) => c.operation === CHARGED).map((c) => [c.status, c.detail]),
+    [["not-tested", "AWS charges $0.01 for each request, so init does not try it; only scan --bill makes it"]],
+  );
+  assert.match(tried.DescribeTags!.loadBalancerArn!, /loadbalancer\/app\/web/);
+  assert.match(tried.DescribeTargetHealth!.targetGroupArn!, /targetgroup\/web/);
   assert.equal(report.canListRegions, true);
   assert.deepEqual(report.fix, []);
-  const tried = Object.fromEntries(seen);
   assert.equal(tried.GetBucketTagging!.bucket, "alpha");
   assert.equal(tried.DescribeLaunchTemplateVersions!.launchTemplateId, "lt-1");
   assert.equal(tried.ListParts!.upload!.uploadId, "u");
@@ -108,7 +121,12 @@ test("a denied read never ends the check; the rest are still tried and the fix i
   assert.equal(report.status, "limited");
   assert.deepEqual(
     report.checks.filter((c) => c.status !== "allowed").map((c) => [c.operation, c.status, c.detail]),
-    [["DescribeVolumes", "denied", "UnauthorizedOperation"], ["GetMetricData", "denied", "UnauthorizedOperation"], ["GetProducts", "denied", "AccessDeniedException"]],
+    [
+      ["DescribeVolumes", "denied", "UnauthorizedOperation"],
+      ["GetMetricData", "denied", "UnauthorizedOperation"],
+      ["GetProducts", "denied", "AccessDeniedException"],
+      [CHARGED, "not-tested", "AWS charges $0.01 for each request, so init does not try it; only scan --bill makes it"],
+    ],
   );
   assert.deepEqual(report.fix, [
     "cloudpilot init --print-policy > cloudpilot-readonly-policy.json",
@@ -118,7 +136,7 @@ test("a denied read never ends the check; the rest are still tried and the fix i
 
   const text = renderPreflight({ ready: true, aws: report, kubernetes: { status: "skipped", skipped: "kubectl is not on the PATH", checks: [] }, next: ["x"] }, options);
   assert.match(text, /^ {2}denied {6}EC2 DescribeVolumes {2,}UnauthorizedOperation$/m);
-  assert.match(text, /15 of 18 reads allowed, 3 denied\./);
+  assert.match(text, /21 of 25 reads allowed, 3 denied, 1 not tested\./);
   assert.match(text, /A scan still runs and reports each read it cannot make as a skipped check\./);
   assert.match(text, /give these credentials the read-only policy\. The first command below writes it to a file for you to read\./);
   assert.match(text, /commands for you to run, with an identity that may change IAM\. CloudPilot does not run them:\n {4}cloudpilot init --print-policy > cloudpilot-readonly-policy\.json\n {4}aws iam create-policy/);
@@ -155,7 +173,19 @@ test("reads that need something to try on are not tested when the account has no
   assert.equal(report.status, "ready");
   assert.deepEqual(
     report.checks.filter((c) => c.status === "not-tested").map((c) => c.operation),
-    ["DescribeLaunchTemplateVersions", "GetBucketLocation", "GetBucketLifecycleConfiguration", "GetBucketTagging", "ListObjectsV2", "ListMultipartUploads", "ListParts"],
+    [
+      "DescribeLaunchTemplateVersions",
+      "DescribeLoadBalancerAttributes",
+      "DescribeTargetHealth",
+      "DescribeTags",
+      "GetBucketLocation",
+      "GetBucketLifecycleConfiguration",
+      "GetBucketTagging",
+      "ListObjectsV2",
+      "ListMultipartUploads",
+      "ListParts",
+      CHARGED,
+    ],
   );
   assert.equal(report.checks.find((c) => c.operation === "ListParts")!.detail, "needs an incomplete multipart upload to try it on; none was found");
   assert.ok(!asked.includes("ListParts") && !asked.includes("GetBucketTagging"));
@@ -568,6 +598,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(400, { "content-type": "application/x-amz-json-1.1", "x-amzn-errortype": "AccessDeniedException" });
       return res.end(JSON.stringify({ __type: "AccessDeniedException", message: "not allowed" }));
     }
+    if (action === "DescribeLoadBalancers" || action === "DescribeTargetGroups") return xml(res, 403, "<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>not allowed</Message></Error></ErrorResponse>");
     if (action === "DescribeDBInstances") return xml(res, 403, "<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>not allowed</Message></Error></ErrorResponse>");
     if (action === "GetMetricData") return xml(res, 403, "<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>not allowed</Message></Error></ErrorResponse>");
     if (action === "GetCallerIdentity") {
@@ -610,9 +641,15 @@ test("against a stand-in for AWS, the real reads are classified: allowed, denied
       DescribeImages: "denied",
       DescribeInstances: "denied",
       DescribeAddresses: "denied",
+      DescribeNatGateways: "denied",
       DescribeLaunchTemplates: "denied",
       DescribeLaunchTemplateVersions: "not-tested",
       DescribeDBInstances: "denied",
+      DescribeLoadBalancers: "denied",
+      DescribeLoadBalancerAttributes: "not-tested",
+      DescribeTargetGroups: "denied",
+      DescribeTargetHealth: "not-tested",
+      DescribeTags: "not-tested",
       ListBuckets: "allowed",
       GetBucketLocation: "allowed",
       GetBucketLifecycleConfiguration: "allowed",
@@ -622,6 +659,7 @@ test("against a stand-in for AWS, the real reads are classified: allowed, denied
       ListParts: "not-tested",
       GetMetricData: "denied",
       GetProducts: "denied",
+      GetCostAndUsage: "not-tested",
     });
     assert.equal(json.aws.status, "limited");
     assert.equal(json.aws.fix[2], "aws iam attach-user-policy --user-name alice --policy-arn arn:aws:iam::123456789012:policy/CloudPilotReadOnly");
@@ -629,7 +667,9 @@ test("against a stand-in for AWS, the real reads are classified: allowed, denied
 
     // Only reads reached AWS: Describe and Get actions through the query APIs, GETs to S3, and the Price List read.
     const requests = readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { method: string; path: string; action: string; target: string });
-    assert.ok(requests.length >= AWS_READS.length - 2);
+    // One request for each read that was tried, and none for the read AWS charges for (the loop below would catch its target).
+    const tried = (json.aws.checks as Array<{ status: string }>).filter((c) => c.status !== "not-tested").length;
+    assert.ok(requests.length >= tried, `${requests.length} requests for ${tried} reads tried`);
     for (const r of requests) {
       if (r.action) assert.match(r.action, /^(Describe|Get)[A-Z]/, r.action);
       else if (r.target) assert.match(r.target, /\.GetProducts$/);
