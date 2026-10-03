@@ -13,7 +13,9 @@ Needs `agg` (https://github.com/asciinema/agg) to turn the cast into a GIF;
 without it, only the cast is written.
 """
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +50,20 @@ ENV = {
     "HTTP_PROXY": "http://127.0.0.1:9",
 }
 
+ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def rows_filled(lines: list[str]) -> int:
+    """
+    How many rows of the COLS-wide screen these lines fill, counting the row the
+    cursor ends on. A line longer than the screen wraps onto further rows, and
+    every line here is followed by a newline, so the last one costs a row too.
+    agg scrolls rather than shrinks: a scene over the budget loses its top rows,
+    the prompt and the REPLAY MODE line first, from the GIF alone.
+    """
+    width = (len(ESCAPE.sub("", line)) for line in lines)
+    return sum(max(1, math.ceil(chars / COLS)) for chars in width) + 1
+
 
 def main() -> int:
     if not os.path.exists(CLI):
@@ -78,6 +94,15 @@ def main() -> int:
                 shown, report = f"{shown} | head -{head}", report[:head]
             # Progress goes to stderr, so on a terminal it comes before the report and is not cut by head.
             lines = done.stderr.rstrip("\n").split("\n") + report
+            filled = rows_filled([f"$ {shown}", *lines])
+            if filled > ROWS:
+                print(
+                    f"Scene {number + 1} (cloudpilot {args[0]}) fills {filled} rows of the {ROWS}-row screen, so the GIF "
+                    f"would scroll its first {filled - ROWS} row(s) away, starting with the prompt and the REPLAY MODE line. "
+                    f"Show fewer lines of the report, or raise ROWS.",
+                    file=sys.stderr,
+                )
+                return 1
             out("\x1b[1;32m$\x1b[0m ", 0.6)
             for char in shown:
                 out(char, 0.035)

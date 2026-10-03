@@ -12,14 +12,29 @@ const ANSWER_KEY = resolve(ROOT, "k8s-lab/answer-key.json");
 /** What `str.rstrip("\n")` in demo/capture.py does, so a scene is rebuilt line for line as the capture composed it. */
 const withoutTrailingNewlines = (text: string) => text.replace(/\n+$/, "");
 
+const CAST = resolve(ROOT, "docs/demo.cast");
+/** Where one scene of the capture ends and the next begins: the screen is cleared between them. */
+const CLEAR = "\u001b[2J\u001b[H";
+const ESCAPE = /\u001b\[[0-9;]*[A-Za-z]/g;
+
 /** Everything the capture printed to the screen, as one string with plain line ends. */
 function captured(): string {
-  const [, ...events] = readFileSync(resolve(ROOT, "docs/demo.cast"), "utf8").trim().split("\n");
+  const [, ...events] = readFileSync(CAST, "utf8").trim().split("\n");
   return events
     .map((line) => JSON.parse(line) as [number, string, string])
     .map(([, , text]) => text)
     .join("")
     .replaceAll("\r\n", "\n");
+}
+
+/** The screen size the cast was recorded at, which is the size demo/capture.py renders the GIF at. */
+function screenSize(): { width: number; height: number } {
+  return JSON.parse(readFileSync(CAST, "utf8").split("\n")[0]) as { width: number; height: number };
+}
+
+/** How many rows of a `width`-column screen these lines fill, counting the row the cursor ends on (see rows_filled in demo/capture.py). */
+function rowsFilled(lines: string[], width: number): number {
+  return lines.reduce((rows, line) => rows + Math.max(1, Math.ceil(line.replace(ESCAPE, "").length / width)), 0) + 1;
 }
 
 test("the cluster recording in demo/ still replays, with no network, and scores 5 of 5", () => {
@@ -52,4 +67,21 @@ test("the capture in docs/ shows what the commands print today", () => {
   }
   // A replay says it is one, and the capture must show that line for each scene.
   assert.equal(screen.match(/REPLAY MODE: /g)?.length, 3);
+});
+
+test("every scene of the capture fits the screen the GIF is rendered at", () => {
+  // agg wraps at the cast's width and scrolls past its height, so a scene over
+  // the budget loses its top rows from docs/demo.gif - the prompt first, then
+  // the REPLAY MODE line - while the cast still holds every line.
+  const { width, height } = screenSize();
+  const scenes = captured().split(CLEAR);
+  assert.equal(scenes.length, 3);
+  for (const [number, scene] of scenes.entries()) {
+    const lines = scene.replace(/\n ?$/, "").split("\n");
+    const filled = rowsFilled(lines, width);
+    assert.ok(
+      filled <= height,
+      `scene ${number + 1} of the capture fills ${filled} rows of the ${height}-row screen, so the GIF scrolls its top away; show fewer lines of the report, or raise ROWS in demo/capture.py`,
+    );
+  }
 });
