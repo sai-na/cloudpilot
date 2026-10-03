@@ -45,7 +45,8 @@ export const KUBECTL_TIMEOUT_MS = 30_000;
 /** How far back to look for container history: the cluster scan's default lookback. */
 const HISTORY_WINDOW_HOURS = 168;
 
-export const AWS_POLICY_FILE = "docs/cloudpilot-readonly-policy.json";
+/** Where the commands below write the policy to: a file in the current directory, so they work without a checkout of the repository. */
+export const AWS_POLICY_FILE = "cloudpilot-readonly-policy.json";
 export const KUBE_ROLE_FILE = "docs/cloudpilot-kube-readonly.yaml";
 
 // What the scan reads from AWS
@@ -332,7 +333,11 @@ export function policyCommands(identity: { account: string; arn: string }): stri
       : kind === "assumed-role" && rest.length > 1
         ? `aws iam attach-role-policy --role-name ${rest[0]} --policy-arn ${policy}`
         : `aws iam attach-user-policy --user-name <user> --policy-arn ${policy}   # or attach-role-policy --role-name <role>`;
-  return [`aws iam create-policy --policy-name CloudPilotReadOnly --policy-document file://${AWS_POLICY_FILE}`, attach];
+  return [
+    `cloudpilot init --print-policy > ${AWS_POLICY_FILE}`,
+    `aws iam create-policy --policy-name CloudPilotReadOnly --policy-document file://${AWS_POLICY_FILE}`,
+    attach,
+  ];
 }
 
 export async function checkAws(probes: AwsProbes, options: Pick<PreflightOptions, "profile">): Promise<AwsReport> {
@@ -508,7 +513,7 @@ function renderAws(aws: AwsReport, options: PreflightOptions): string[] {
   if (aws.fix.length > 0) {
     out.push(
       "",
-      `  To allow the reads that were denied, give these credentials the read-only policy (${AWS_POLICY_FILE} in the CloudPilot repository).`,
+      `  To allow the reads that were denied, give these credentials the read-only policy. The first command below writes it to a file for you to read.`,
       "  These are commands for you to run, with an identity that may change IAM. CloudPilot does not run them:",
       ...aws.fix.map((c) => `    ${c}`),
       "  A denial can also come from a permissions boundary or an organisation policy, which this policy does not override.",

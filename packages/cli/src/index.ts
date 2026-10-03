@@ -31,6 +31,7 @@ import {
   startRecord,
   startReplay,
 } from "./recording.js";
+import { READ_ONLY_POLICY } from "./policy.js";
 import { money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
 import type { ClusterPrices, Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
 
@@ -444,7 +445,12 @@ program
   .option("--context <name>", "kubectl context to check (default: the current one)")
   .option("--prometheus <namespace/service:port>", "the Prometheus holding usage history (default: found among the cluster's services)")
   .option("--json", "print the result as JSON")
-  .action(async (options: { profile?: string; region?: string; context?: string; prometheus?: string; json?: boolean }) => {
+  .option("--print-policy", "print the read-only IAM policy a scan needs, as JSON, and stop")
+  .action(async (options: { profile?: string; region?: string; context?: string; prometheus?: string; json?: boolean; printPolicy?: boolean }) => {
+    if (options.printPolicy) {
+      console.log(JSON.stringify(READ_ONLY_POLICY, null, 2));
+      return;
+    }
     startLive({ redact: false });
     const checking: PreflightOptions = {
       region: options.region ?? defaultRegion(),

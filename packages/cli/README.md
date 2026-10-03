@@ -86,11 +86,14 @@ out halfway through one. It reports:
 - **What to run next**: the `scan` and `kube` commands that will work.
 
 `init` creates and changes nothing. Where access is missing it prints what to
-apply and leaves it to you: for AWS, the `aws iam` commands that create the
-policy in `docs/cloudpilot-readonly-policy.json` and attach it to the
-credentials' user or role, marked as commands for you to run; for a cluster, a
-pointer to `docs/cloudpilot-kube-readonly.yaml` or to `--prometheus`. Those
-files are in the repository, not in the npm package.
+apply and leaves it to you: for AWS, the commands that write the read-only
+policy to a file (`cloudpilot init --print-policy`), create it and attach it
+to the credentials' user or role, marked as commands for you to run; for a
+cluster, a pointer to `docs/cloudpilot-kube-readonly.yaml` in the repository
+or to `--prometheus`. The AWS policy is carried in the package, so
+`--print-policy` works wherever CloudPilot was installed; it is the same
+document as `docs/cloudpilot-readonly-policy.json`, and a test fails if the
+two differ.
 
 Every AWS read it makes is one in the table above, and a test fails if it makes
 one that is not, or one that the policy does not allow. Its `kubectl` calls are

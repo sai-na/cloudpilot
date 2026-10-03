@@ -111,7 +111,8 @@ test("a denied read never ends the check; the rest are still tried and the fix i
     [["DescribeVolumes", "denied", "UnauthorizedOperation"], ["GetMetricData", "denied", "UnauthorizedOperation"], ["GetProducts", "denied", "AccessDeniedException"]],
   );
   assert.deepEqual(report.fix, [
-    "aws iam create-policy --policy-name CloudPilotReadOnly --policy-document file://docs/cloudpilot-readonly-policy.json",
+    "cloudpilot init --print-policy > cloudpilot-readonly-policy.json",
+    "aws iam create-policy --policy-name CloudPilotReadOnly --policy-document file://cloudpilot-readonly-policy.json",
     "aws iam attach-user-policy --user-name alice --policy-arn arn:aws:iam::123456789012:policy/CloudPilotReadOnly",
   ]);
 
@@ -119,12 +120,12 @@ test("a denied read never ends the check; the rest are still tried and the fix i
   assert.match(text, /^ {2}denied {6}EC2 DescribeVolumes {2,}UnauthorizedOperation$/m);
   assert.match(text, /14 of 17 reads allowed, 3 denied\./);
   assert.match(text, /A scan still runs and reports each read it cannot make as a skipped check\./);
-  assert.match(text, /docs\/cloudpilot-readonly-policy\.json in the CloudPilot repository/);
-  assert.match(text, /commands for you to run, with an identity that may change IAM\. CloudPilot does not run them:\n {4}aws iam create-policy/);
+  assert.match(text, /give these credentials the read-only policy\. The first command below writes it to a file for you to read\./);
+  assert.match(text, /commands for you to run, with an identity that may change IAM\. CloudPilot does not run them:\n {4}cloudpilot init --print-policy > cloudpilot-readonly-policy\.json\n {4}aws iam create-policy/);
 });
 
 test("the policy commands fit a user, an assumed role and anything else", () => {
-  const attach = (arn: string) => policyCommands({ account: "123456789012", arn })[1];
+  const attach = (arn: string) => policyCommands({ account: "123456789012", arn })[2];
   assert.equal(attach("arn:aws:iam::123456789012:user/team/alice"), "aws iam attach-user-policy --user-name alice --policy-arn arn:aws:iam::123456789012:policy/CloudPilotReadOnly");
   assert.equal(attach("arn:aws:sts::123456789012:assumed-role/auditor/session-1"), "aws iam attach-role-policy --role-name auditor --policy-arn arn:aws:iam::123456789012:policy/CloudPilotReadOnly");
   assert.equal(attach("arn:aws-cn:iam::123456789012:user/bob"), "aws iam attach-user-policy --user-name bob --policy-arn arn:aws-cn:iam::123456789012:policy/CloudPilotReadOnly");
@@ -598,7 +599,7 @@ test("against a stand-in for AWS, the real reads are classified: allowed, denied
       GetProducts: "denied",
     });
     assert.equal(json.aws.status, "limited");
-    assert.equal(json.aws.fix[1], "aws iam attach-user-policy --user-name alice --policy-arn arn:aws:iam::123456789012:policy/CloudPilotReadOnly");
+    assert.equal(json.aws.fix[2], "aws iam attach-user-policy --user-name alice --policy-arn arn:aws:iam::123456789012:policy/CloudPilotReadOnly");
     assert.deepEqual(json.next, ["cloudpilot scan --region ap-south-1"]);
 
     // Only reads reached AWS: Describe and Get actions through the query APIs, GETs to S3, and the Price List read.
@@ -614,4 +615,12 @@ test("against a stand-in for AWS, the real reads are classified: allowed, denied
   } finally {
     server.kill();
   }
+});
+
+test("init --print-policy prints the documented read-only policy, wherever CloudPilot was installed", () => {
+  // Run from an empty directory with no repository around it, as after an npx install.
+  const run = cli(["init", "--print-policy"], { blockNetwork: true });
+  assert.equal(run.status, 0, run.stderr);
+  const documented = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../docs/cloudpilot-readonly-policy.json"), "utf8"));
+  assert.deepEqual(JSON.parse(run.stdout), documented);
 });
