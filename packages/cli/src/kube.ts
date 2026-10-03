@@ -579,9 +579,9 @@ function podFactsOf(pod: any, owner: any, deploymentOf: Map<string, string>): Po
       memoryRequestBytes: parseBytes(spec.resources?.requests?.memory),
       memoryLimitBytes: parseBytes(spec.resources?.limits?.memory),
       restartCount: Number(status?.restartCount ?? 0),
-      ...(status?.state?.waiting?.reason ? { waitingReason: String(status.state.waiting.reason) } : {}),
+      ...(status?.state?.waiting?.reason ? { waitingReason: safeText(status.state.waiting.reason, 80) } : {}),
       ...(stopped
-        ? { terminated: { reason: stopped.reason === undefined ? undefined : String(stopped.reason), exitCode: typeof stopped.exitCode === "number" ? stopped.exitCode : undefined, finishedAt: stopped.finishedAt === undefined ? undefined : String(stopped.finishedAt) } }
+        ? { terminated: { reason: stopped.reason === undefined ? undefined : safeText(stopped.reason, 80), exitCode: typeof stopped.exitCode === "number" ? stopped.exitCode : undefined, finishedAt: stopped.finishedAt === undefined ? undefined : safeText(stopped.finishedAt, 40) } }
         : {}),
     };
   });
@@ -594,7 +594,7 @@ function podFactsOf(pod: any, owner: any, deploymentOf: Map<string, string>): Po
     createdAt: pod.metadata.creationTimestamp,
     containers,
     ...(pod.status?.phase === "Pending" && scheduled?.status === "False"
-      ? { unscheduled: { reason: scheduled.reason === undefined ? undefined : String(scheduled.reason), message: scheduled.message === undefined ? undefined : String(scheduled.message), since: scheduled.lastTransitionTime } }
+      ? { unscheduled: { reason: scheduled.reason === undefined ? undefined : safeText(scheduled.reason, 80), message: scheduled.message === undefined ? undefined : String(scheduled.message), since: scheduled.lastTransitionTime === undefined ? undefined : safeText(scheduled.lastTransitionTime, 40) } }
       : {}),
     ignored: isIgnored(pod.metadata),
   };

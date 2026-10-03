@@ -202,6 +202,34 @@ test("of several pods restarting, the worst one is shown and the rest are counte
   assert.equal(a.evidence[0], "Container app of pod api-2 has restarted 11 times. 2 of its pods show this.");
 });
 
+test("what the cluster says about a stop is made safe to print before it is read into an advisory", async () => {
+  const reader: KubeReader = {
+    identity: async () => ({ context: "prod-cluster" }),
+    get: async (path) => {
+      if (path.startsWith("/api/v1/namespaces?")) return { items: [{ metadata: { name: "prod" } }] };
+      if (path.startsWith("/api/v1/pods?"))
+        return {
+          items: [
+            {
+              metadata: { name: "api-0", namespace: "prod", ownerReferences: [{ kind: "StatefulSet", name: "api", controller: true }] },
+              spec: { containers: [{ name: "app" }] },
+              status: {
+                phase: "Running",
+                containerStatuses: [{ name: "app", restartCount: 8, state: { waiting: { reason: "Crash\u001b[31mLoop" } }, lastState: { terminated: { reason: "Er\nror\u0007", exitCode: 1, finishedAt: "2026-10-03T11:00:00Z" } } }],
+              },
+            },
+          ],
+        };
+      return { items: [] };
+    },
+  };
+  const read = await collectCluster(reader, { lookbackHours: 1, now: new Date("2026-10-03T12:00:00Z") });
+  const [a] = detectCluster(read, OPENCOST_DEFAULTS).advisories!.filter((x) => x.rule === "restarting");
+  assert.ok(a);
+  assert.doesNotMatch(JSON.stringify(a), /\\u001b|\\u0007|\\n/);
+  assert.match(a.evidence[2]!, /^Its last state was terminated: reason Er ror, exit code 1, at 2026-10-03T11:00:00Z$/);
+});
+
 // 3. No requests
 
 test("a workload container with no CPU or no memory request is reported once per workload, with no dollar figure", () => {
