@@ -361,6 +361,19 @@ test("watch --kube inside a cluster: a failure before the cluster can be read st
   });
 });
 
+test("outside a cluster, a failure before the read never claims the cluster CLOUDPILOT_CLUSTER_NAME names", async () => {
+  const k = lab();
+  await withHook(async (server) => {
+    // A laptop with the variable left in a shell profile: kubectl would have read its own current context and ignored the name entirely.
+    const brokenKubectl = { PATH: dirname(process.execPath), CLOUDPILOT_CLUSTER_NAME: "prod-eu" };
+    const run = await k.run(["kube", "--lookback-hours", "1", "--notify", server.url], brokenKubectl);
+    assert.equal(run.status, 1);
+    assert.deepEqual(events(server), ["check-failed"]);
+    assert.equal(bodies(server)[0].subject, "cluster (the current context)");
+    assert.ok(!JSON.stringify(bodies(server)[0]).includes("prod-eu"), "a cluster that was never going to be read is not named");
+  });
+});
+
 test("watch: --cluster-name is for a cluster, so it is refused without --kube", async () => {
   const run = await lab().run(["watch", "--cluster-name", "prod-eu", "--max-runs", "1"]);
   assert.equal(run.status, 1);

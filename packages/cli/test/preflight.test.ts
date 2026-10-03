@@ -262,6 +262,8 @@ function kubeReader(
     /** Hours of container history Prometheus holds; null for none. */
     history?: number | null;
     proxyError?: string;
+    /** Read from inside a cluster, through the pod's service account: the cluster is known by this name, as kubectlReader answers in a pod. */
+    inCluster?: string;
   } = {},
 ): KubeReader & { asked: string[] } {
   const asked: string[] = [];
@@ -271,6 +273,7 @@ function kubeReader(
     identity: async () => {
       if (over.missing) throw new KubectlNotFoundError();
       if (over.identityError) throw new Error(over.identityError);
+      if (over.inCluster) return { context: over.inCluster, server: "https://10.96.0.1:443", inCluster: true };
       return { context: "prod", server: "https://prod.example:6443" };
     },
     get: async (path) => {
@@ -452,13 +455,17 @@ test("the exit code is 0 when either side can be scanned and the next commands n
 
 test("inside a cluster, the next command carries the name that let the check run at all", async () => {
   const noAws = aws({ identity: async () => Promise.reject(new AwsError("CredentialsProviderError")) }).probes;
-  // In a pod there is no context: the name given is what the cluster is known by, which is what the reader answers with.
-  const inPod = await preflight({ ...options, clusterName: "prod" }, { aws: noAws, kube: kubeReader() });
-  assert.deepEqual(inPod.next, ["cloudpilot kube --cluster-name prod"], "the only thing that made the check work must be in the command it prints");
+  const inPod = await preflight({ ...options, clusterName: "prod-eu" }, { aws: noAws, kube: kubeReader({ inCluster: "prod-eu" }) });
+  assert.deepEqual(inPod.kubernetes.inCluster, true, "the reader says where it read from; nothing downstream has to work it out");
+  assert.deepEqual(inPod.next, ["cloudpilot kube --cluster-name prod-eu"], "the only thing that made the check work must be in the command it prints");
 
-  // kubectl had a context of its own, so the name was ignored: a command carrying it would say the cluster was named when it was not.
+  // kubectl had a context of its own, so the name was ignored: a command carrying it would say the cluster had to be named when it did not.
   const onALaptop = await preflight({ ...options, clusterName: "prod-eu" }, { aws: noAws, kube: kubeReader() });
-  assert.deepEqual(onALaptop.next, ["cloudpilot kube"]);
+  assert.deepEqual([onALaptop.kubernetes.inCluster, onALaptop.next], [undefined, ["cloudpilot kube"]]);
+
+  // And a laptop whose current context happens to be called what was handed over is still a laptop.
+  const sameName = await preflight({ ...options, clusterName: "prod" }, { aws: noAws, kube: kubeReader() });
+  assert.deepEqual(sameName.next, ["cloudpilot kube"]);
 });
 
 // The command

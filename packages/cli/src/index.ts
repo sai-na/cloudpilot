@@ -12,7 +12,7 @@ import { loadEnvFile } from "./env.js";
 import { evaluate, renderEvaluation } from "./evaluate.js";
 import { renderHtml } from "./html.js";
 import { now } from "./clock.js";
-import { collectCluster, kubectlReader, parseClusterName, parsePrometheusRef, type ClusterInventory, type KubeReader } from "./kube.js";
+import { collectCluster, inCluster, kubectlReader, parseClusterName, parsePrometheusRef, type ClusterInventory, type KubeReader } from "./kube.js";
 import { detectCluster, OPENCOST_DEFAULTS } from "./kube-detect.js";
 import { serveMcp } from "./mcp.js";
 import { deliver, freshFindings, httpSender, notifyUrls, parseTargets, subjectOf, type Notice, type Target } from "./notify.js";
@@ -158,9 +158,12 @@ async function notifying<T>(targets: Target[], subject: () => string, run: () =>
  * What a cluster check is about before its context is known: whatever was
  * asked for. Inside a cluster there is no context to name, so the name given
  * for the cluster stands in for one: a failure before the first read still
- * says which cluster could not be read.
+ * says which cluster could not be read. Anywhere else that name is going to be
+ * ignored, and naming a cluster that was never going to be read would be worse
+ * than saying only which cluster kubectl would have chosen.
  */
-const contextSubject = (options: { context?: string; clusterName?: string }) => `cluster ${options.context || clusterNameGiven(options) || "(the current context)"}`;
+const contextSubject = (options: { context?: string; clusterName?: string }) =>
+  `cluster ${options.context || (inCluster() ? clusterNameGiven(options) : undefined) || "(the current context)"}`;
 
 /** What a replay of this kind of run is called when the recording has none. */
 const RECORDED_AS: Record<SessionMeta["command"], string> = { scan: "scan", ask: "ask", kube: "cluster scan", "kube-ask": "cluster question" };

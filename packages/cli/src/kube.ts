@@ -36,8 +36,14 @@ export class ClusterNameRequiredError extends Error {
   }
 }
 
-/** Every pod is told where its API server is. kubectl reads the same two variables, and the pod's service account, when it has no kubeconfig. */
-const inCluster = () => Boolean(process.env.KUBERNETES_SERVICE_HOST && process.env.KUBERNETES_SERVICE_PORT);
+/**
+ * Every pod is told where its API server is. kubectl reads the same two
+ * variables, and the pod's service account, when it has no kubeconfig. This is
+ * the one test for "running in a cluster", and it decides whether a name given
+ * for the cluster is used at all: everything that speaks about a cluster
+ * before it has been read asks here rather than guessing.
+ */
+export const inCluster = () => Boolean(process.env.KUBERNETES_SERVICE_HOST && process.env.KUBERNETES_SERVICE_PORT);
 
 /**
  * The name given to a cluster that has no context. It goes into `--context`

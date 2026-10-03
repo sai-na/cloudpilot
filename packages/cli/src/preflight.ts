@@ -300,6 +300,8 @@ export interface KubeReport {
   skipped?: string;
   context?: string;
   server?: string;
+  /** The cluster was read from inside it, through the pod's service account, and `context` is the name it was given. */
+  inCluster?: boolean;
   checks: KubeListCheck[];
   prometheus?: PrometheusCheck;
 }
@@ -482,7 +484,7 @@ async function checkPrometheus(reader: KubeReader, options: PreflightOptions, se
 }
 
 export async function checkKubernetes(reader: KubeReader, options: PreflightOptions): Promise<KubeReport> {
-  let identity: { context: string; server?: string };
+  let identity: Awaited<ReturnType<KubeReader["identity"]>>;
   try {
     identity = await reader.identity();
   } catch (err) {
@@ -505,7 +507,7 @@ export async function checkKubernetes(reader: KubeReader, options: PreflightOpti
   );
   const allowed = (resource: string) => checks.find((c) => c.resource === resource)?.status === "allowed";
   const canScan = [...KUBE_REQUIRED].every((resource) => allowed(resource));
-  const base = { context: identity.context, ...(identity.server ? { server: identity.server } : {}), checks };
+  const base = { context: identity.context, ...(identity.server ? { server: identity.server } : {}), ...(identity.inCluster ? { inCluster: true } : {}), checks };
   if (!canScan) return { ...base, status: "not-ready" };
 
   const prometheus = await checkPrometheus(reader, options, allowed("services"));
@@ -525,8 +527,8 @@ function nextCommands(aws: AwsReport, kubernetes: KubeReport, options: Preflight
   }
   if (kubernetes.status === "ready" || kubernetes.status === "limited") {
     const given = options.prometheus ? ` --prometheus ${prometheusLabel(options.prometheus)}` : "";
-    // Inside a cluster there is no context to name, and the check worked only because the cluster was named: the command must carry that name too.
-    const named = options.clusterName && kubernetes.context === options.clusterName ? ` --cluster-name ${options.clusterName}` : "";
+    // Read from inside a cluster there is no context to name, and the check worked only because the cluster was named: the command must carry that name too.
+    const named = kubernetes.inCluster && options.clusterName ? ` --cluster-name ${options.clusterName}` : "";
     next.push(`cloudpilot kube${options.context ? ` --context ${options.context}` : named}${given}`);
   }
   return next;
