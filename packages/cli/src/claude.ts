@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaTool } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { fromIni } from "@aws-sdk/credential-providers";
-import { buildTools, GROUND_RULES, MissingCredentialsError, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { buildTools, groundRules, MissingCredentialsError, modelRequest, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
 import type { ScanResult } from "./types.js";
 
 export const DEFAULT_MODEL = "claude-opus-5-5";
@@ -27,6 +27,7 @@ async function llm(options: LlmOptions): Promise<Llm> {
     const bedrock = new AnthropicBedrock({
       awsRegion: options.bedrockRegion,
       providerChainResolver: async () => fromIni({ profile }),
+      ...modelRequest(),
     });
     const model = options.model ?? DEFAULT_BEDROCK_MODEL;
     return {
@@ -37,7 +38,7 @@ async function llm(options: LlmOptions): Promise<Llm> {
   }
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new MissingCredentialsError();
   return {
-    messages: new Anthropic().beta.messages,
+    messages: new Anthropic(modelRequest()).beta.messages,
     params: {
       model: options.model ?? DEFAULT_MODEL,
       max_tokens: 16000,
@@ -63,7 +64,7 @@ export async function summarize(result: ScanResult, options: LlmOptions = {}): P
   const { messages, params } = await llm(options);
   const message = await messages.create({
     ...params,
-    system: GROUND_RULES,
+    system: groundRules(result),
     messages: [{ role: "user", content: summaryRequest(result) }],
   });
   return textOf(message);
@@ -76,7 +77,7 @@ export async function ask(question: string, ctx: AskContext): Promise<string> {
   const { messages, params } = await llm(ctx.llm ?? {});
   const runner = messages.toolRunner({
     ...params,
-    system: GROUND_RULES,
+    system: groundRules(ctx.result),
     tools,
     max_iterations: 12,
     messages: [{ role: "user", content: question }],
@@ -101,6 +102,8 @@ export function describeError(err: unknown): string | undefined {
   }
   // On Bedrock a zero quota also arrives as a 429, so pass the provider's own wording through.
   if (err instanceof Anthropic.RateLimitError) return `The model's rate limit or quota was hit: ${err.message}`;
+  // A timeout is a kind of connection error, so it has to be asked about first.
+  if (err instanceof Anthropic.APIConnectionTimeoutError) return `The Anthropic API timed out: no answer within ${Math.round(modelRequest().timeout / 1000)} seconds, twice.`;
   if (err instanceof Anthropic.APIConnectionError) return "Could not reach the Anthropic API. Check the network connection.";
   if (err instanceof Anthropic.APIError) return `Anthropic API error ${err.status}: ${err.message}`;
   return undefined;

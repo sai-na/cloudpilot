@@ -1,4 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -62,6 +64,50 @@ export function cliAsync(args: string[], options: CliOptions = {}) {
   );
   return { child, cwd, done, output: () => ({ stdout, stderr }) };
 }
+
+/** Run the CLI to its end without blocking the test's own event loop, so a stand-in server in this process can answer it. */
+export function cliRun(args: string[], options: CliOptions = {}) {
+  const { cwd, command, env } = invocation(args, options);
+  return new Promise<{ status: number | null; stdout: string; stderr: string; cwd: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, command, { cwd, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr, cwd }));
+  });
+}
+
+/**
+ * A stand-in for OpenAI's Responses endpoint. `outputs` is what each request
+ * is answered with, in turn; every request is kept. `env` points a process
+ * under test at it, with a key that is good for nothing else.
+ */
+export async function fakeOpenAI(outputs: object[][]) {
+  const requests: any[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      requests.push(JSON.parse(body));
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ id: `resp_${requests.length}`, object: "response", status: "completed", model: "test", output: outputs[requests.length - 1] ?? [] }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    requests,
+    env: { OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`, NO_PROXY: "127.0.0.1" },
+    close: () => server.close(),
+  };
+}
+
+/** What a model that writes this text answers with. */
+export const says = (text: string) => [{ type: "message", id: "m1", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] }];
+/** What a model that asks for these lookups answers with. */
+export const looksUp = (...names: string[]) => names.map((name, i) => ({ type: "function_call", id: `fc_${i}`, call_id: `c${i}`, name, arguments: "{}", status: "completed" }));
 
 /** Every file of a recording as text, with stored response bodies decoded from base64. */
 export function recordingText(dir: string): string {

@@ -414,10 +414,25 @@ print every finding, cost and fix command; `scan --explain` says in one line
 that explanations are unavailable and shows a templated summary built from
 the findings; `ask` stops with a clear message.
 
+One model request is given two minutes and one retry, so a provider that
+stops answering cannot leave a finished scan hanging for the ten minutes the
+SDKs wait by default. A timeout is reported as one, and `--explain` then
+shows the templated summary as it does for any other model failure. Set
+`CLOUDPILOT_MODEL_TIMEOUT_MS` to change the limit, in milliseconds.
+
 Model text is checked before it is shown. Every resource ID and dollar
 amount in it must already exist in the scan data. If one does not, the text
 is discarded, the value that failed is logged, and the templated summary is
 shown instead.
+
+The same works for a cluster: `kube --explain` writes the summary, and
+`ask --kube` answers a question about the cluster your `kubectl` points at
+(`--context <name>` for another). See [Kubernetes](#kubernetes).
+
+```sh
+node dist/index.js kube --explain
+node dist/index.js ask --kube "which workload wastes the most, and is it safe to shrink?"
+```
 
 ### Use it from Claude Code, Cursor or any MCP client
 
@@ -468,7 +483,7 @@ apply.
 
 `--region`, `--profile`, `--redact-account` and `--replay <dir>` work here
 too. With `--replay` every result starts with the `REPLAY MODE` banner, and
-the cluster tools are not offered: a recording holds an account only.
+the cluster tools are not offered: the server replays an account only.
 
 ### Record and replay
 
@@ -486,6 +501,42 @@ is gitignored. A recording is replayed by the CloudPilot version that made
 it: requests are matched exactly, so a different version may not find them. `demo/record.sh` at the repo root records the demo set
 (`scan --explain` and two questions) in one go, and `demo/replay.sh` plays it
 back.
+
+`kube` and `ask --kube` record and replay the same way, with
+`--record <dir>` and `--replay <dir>`. A cluster recording holds every answer
+the Kubernetes API gave to the scan's reads (and the cluster's name and API
+server address), plus the model's events. A replay starts no `kubectl` at
+all: it needs no `kubectl`, no kubeconfig and no network, the clock is
+pinned to the recording time, and the first line of output is a banner of the
+same kind, naming the cluster instead of the account: `REPLAY MODE: recorded
+<time> from cluster <context>, 4 namespaces. No live calls.` A read the
+recording does not hold is an error naming it, never a call to the cluster. A
+replay does not write `.cloudpilot/last-kube-scan-<context>.json` and does
+not compare with it. It reads the context, namespace and Prometheus it was
+recorded with, and uses the recorded lookback and prices unless you pass
+`--lookback-hours` or the price options again (a lookback the recording did
+not use asks Prometheus different questions, so it ends in the missing-read
+error). `--live-llm` replays the cluster
+and calls the model live, and a recorded `ask --kube` question replays by its
+exact words.
+
+An account and a cluster can be recorded into one directory. Each session
+has a folder of its own (`scan/`, `ask-<hash>/` for the account; `kube/`,
+`kube-ask-<hash>/` for a cluster) and a line in `manifest.json`, so recording
+one never touches the other, and `scan --replay`, `kube --replay` and the two
+kinds of `ask` each find only their own sessions. Account sessions keep
+their `aws.json`; cluster sessions hold `kube.json` instead. A directory
+that holds only clusters has no account ID in its manifest.
+
+What a cluster recording leaves out: fields of pods and workloads that a scan
+never reads and that can hold a secret (container environment, commands and
+arguments, probes, and every label and annotation but `cloudpilot/ignore`,
+which includes kubectl's saved copy of the manifest), and any answer that
+contains something shaped like a key or a token, which the recording then
+simply lacks (the run says how many). It is still a recording of your cluster:
+it names its namespaces, workloads, pods, images and volumes. `--redact-account`
+is not offered for clusters, and the context name and API server address are
+recorded as they are; on EKS the context name holds the AWS account ID.
 
 ### Offline and emulator use
 
@@ -627,7 +678,8 @@ present. It needs Docker and is not part of `npm test`.
 
 These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
-[Kubernetes](#kubernetes). `init` takes `--profile`, `--region`, `--context`,
+[Kubernetes](#kubernetes). `ask --kube` takes the `kube` options named there
+in place of the AWS ones. `init` takes `--profile`, `--region`, `--context`,
 `--prometheus`, `--json` and `--print-policy`: see
 [Check first with `init`](#check-first-with-init). `watch` takes the ones that
 say so: see [Watch it](#watch-it).
@@ -639,8 +691,8 @@ say so: see [Watch it](#watch-it).
 | `--all-regions` | Scan every region enabled for the account. The default when `--region` is not given |
 | `--html <file>` | `scan` only: also write a self-contained HTML report |
 | `--out <file>` | `scan` only: also write the report to a file, as Markdown, or as plain text when the name ends in `.txt` |
-| `--json` | `scan` and `init` only: print the result as JSON |
-| `--explain` | `scan` only: have a model write the summary |
+| `--json` | `scan`, `kube` and `init` only: print the result as JSON |
+| `--explain` | `scan` and `kube` only: have a model write the summary |
 | `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |
 | `--no-compare` | `scan` only: do not compare |
 | `--only-new` | `scan` only: list only the findings that are new since the earlier scan |
@@ -654,10 +706,11 @@ say so: see [Watch it](#watch-it).
 | `--provider <name>` | `anthropic`, `openai` or `bedrock`. Default: whichever key is set |
 | `--model <id>` | Model for `--explain` and `ask` |
 | `--bedrock-profile <name>` | AWS profile for Claude through Amazon Bedrock |
-| `--record <dir>` | Run live and save the run for replay |
-| `--replay <dir>` | Repeat a recorded run with no network calls |
-| `--live-llm` | With `--replay`: AWS from the recording, model called live |
-| `--redact-account` | Show the account ID as `123456789012` |
+| `--record <dir>` | Run live and save the run for replay. Also for `kube` |
+| `--replay <dir>` | Repeat a recorded run with no network calls. Also for `kube` |
+| `--live-llm` | With `--replay`: AWS (or the cluster) from the recording, model called live |
+| `--redact-account` | Show the account ID as `123456789012`. Not with `--kube` |
+| `--kube` | `ask` only: ask about a Kubernetes cluster instead of the account. Takes `--context`, `--namespace`, `--prometheus`, `--lookback-hours` (default 168, not 24) and the price options, and refuses `--region`, `--all-regions`, `--profile`, `--price-file`, `--offline` and `--redact-account` |
 
 The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
 and `--redact-account` runs. With `--notify` it is saved once the message has
@@ -728,15 +781,58 @@ fewer or smaller nodes, which a node autoscaler does for you.
 ### The rest works the same
 
 `--json`, `--out`, `--html`, `--compare`, `--no-compare`, `--only-new` and
-`--notify` behave as they do for `scan`, and `watch --kube` repeats the scan. The last scan is kept per cluster
-(`.cloudpilot/last-kube-scan-<context>.json`), so a repeat scan says what is
-new without touching the AWS baseline. Label or annotate a workload or volume
+`--notify` behave as they do for `scan`, and `watch --kube` repeats the scan.
+The last scan is kept per cluster
+(`.cloudpilot/last-kube-scan-<context>.json`; `ask --kube` leaves one too, and
+a replay never does), so a repeat scan says what is new without touching the
+AWS baseline. Label or annotate a workload or volume
 `cloudpilot/ignore=true` to leave it out. `--namespace <name>` reads one
 namespace.
 
 The MCP server has cluster tools too (`scan_cluster`, `get_cluster_workloads`:
-see above). Not yet for clusters: `ask`, `--explain`, record and replay, and
-the daily report.
+see above). Not yet for clusters: the daily report.
+
+### Explain, ask, record and replay
+
+`--explain` has a model write the summary, as it does for `scan`. `ask --kube`
+scans the cluster, then lets a model answer your question with two read-only
+lookups over that scan: the findings, and every Deployment, StatefulSet and
+DaemonSet it read, flagged or not (requests, peak use, hours of history, whether
+a container was killed for running out of memory). The model never reads the
+cluster itself, so a question costs one scan and nothing more. Without a
+model key, `kube --explain` shows the templated summary and says why;
+`ask --kube` stops before reading anything.
+
+The model is told to name the kubectl context and namespaces rather than an
+account and regions, to quote the `cloudpilot/ignore=true` label rather than
+the AWS tag, that a lower request saves money only once the cluster can run
+fewer or smaller nodes, and how much usage history a finding rests on. It is
+given money as the strings the report shows and never a number to compute with.
+Telling it so is a request; the check is what holds it to it. Before its text
+is shown, these must all be in the scan data (for `ask`, in what the lookups
+returned), or the text is discarded and the templated summary shown, with
+what failed:
+
+- a dollar amount, including the unit prices the cluster was costed with;
+- an object written as `kind/name` or `namespace/kind/name`, for Deployments,
+  StatefulSets, DaemonSets, volume claims and volumes (a volume has no
+  namespace, so a namespace in front of one fails);
+- the namespace or context a command names (`-n`, `--namespace`, `--context`);
+- a CPU quantity in millicores (`300m`) or a memory quantity in binary units
+  (`512Mi`, `1Gi`), written as the scan writes it, so `1Gi` may not become
+  `1024Mi`.
+
+What it deliberately leaves alone, because it would flag ordinary words:
+short forms such as `deploy/web`, `pvc/data` and `sts/db`, a plural, a name
+with no kind in front of it, URLs, a kind written after a kind
+(`deployment/statefulset`), and `-n` on a line that does not run `kubectl`.
+It does not check container names, whole CPUs or plain byte counts,
+replica counts or percentages, or whether the model's reasoning is sound. A
+quantity such as `5m` is read as millicores even where someone meant minutes.
+Tests run all of this with a stand-in model, never a real one.
+
+`kube --record <dir>` and `--replay <dir>`, and `ask --kube` with the same two
+flags, are described under [Record and replay](#record-and-replay).
 
 The rules are checked against a seeded cluster: see
 [`k8s-lab/`](../../k8s-lab).
@@ -800,6 +896,11 @@ The rules are checked against a seeded cluster: see
   `cloudpilot/ignore=true`.
 - Kubernetes: a past pod is matched to its workload by name, so two workloads
   named alike in one namespace (`api` and `api-v2`) can, rarely, share history.
+- Kubernetes: the output check for model text covers dollar amounts, objects
+  named as `kind/name`, the namespace and context a command names, and CPU and
+  memory quantities. It is a guard against invented values, not proof that
+  what a model says about them is right: see
+  [Explain, ask, record and replay](#explain-ask-record-and-replay).
 - Kubernetes: limits are not changed, and a workload kept in sync by Helm,
   Argo CD or Flux must be changed at its source. The finding says so.
 
@@ -826,7 +927,10 @@ npm run fonts       # rewrite src/fonts.ts after a file in site/fonts changes
 `src/mcp.ts` is the MCP server (protocol only, no dependencies);
 `src/detect.ts` is a pure function from inventory and prices to findings;
 `src/collect.ts` holds every AWS read; `src/advisor.ts` holds the model's
-ground rules and tools, with `src/claude.ts` and `src/openai.ts` as providers.
+ground rules (one set for an account, one for a cluster) and tools, with
+`src/claude.ts` and `src/openai.ts` as providers; `src/output-check.ts` holds
+the check on what the model writes; `src/recording.ts` holds record and replay
+for both.
 The cluster side is the same split: `src/kube.ts` holds every read through
 kubectl and Prometheus, `src/kube-detect.ts` the rules over it.
 `src/compare.ts` is a pure function from two scans to what changed.
