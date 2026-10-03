@@ -73,10 +73,13 @@ out halfway through one. It reports:
   and how to supply them (CloudShell, `--profile`, environment variables).
 - **Which reads are allowed**: for each read in the table above, the cheapest
   real call of it in one region (`--region`, otherwise where a scan starts:
-  `AWS_REGION`, `AWS_DEFAULT_REGION`, then `us-east-1`). A read that is denied
-  is reported and the others are still tried. A read that needs something to
-  try on (a bucket, a launch template, an incomplete upload) is tried on the
-  first one found in that region, and reported as not tested when there is none.
+  `AWS_REGION`, `AWS_DEFAULT_REGION`, then `us-east-1`). Each read is reported
+  as allowed, denied, failed or not tested, and nothing stops at the first
+  denial. A read AWS refused is denied; a read that errored or did not answer
+  in time is failed, which is not a refusal and asks nothing of IAM. A read
+  that needs something to try on (a bucket, a launch template, an incomplete
+  upload) is tried on the first one found in that region, and reported as not
+  tested when there is none.
 - **The cluster**, when `kubectl` is on the PATH and has a current context (or
   `--context`): whether each list the cluster scan makes is allowed (a
   `kubectl get --raw` with `limit=1`), whether a Prometheus is found (or named
@@ -85,12 +88,15 @@ out halfway through one. It reports:
   context, the cluster is skipped in one line that says why.
 - **What to run next**: the `scan` and `kube` commands that will work.
 
-`init` creates and changes nothing. Where access is missing it prints what to
+`init` creates and changes nothing. Where a read was refused it prints what to
 apply and leaves it to you: for AWS, the commands that write the read-only
 policy to a file (`cloudpilot init --print-policy`), create it and attach it
 to the credentials' user or role, marked as commands for you to run; for a
 cluster, a pointer to `docs/cloudpilot-kube-readonly.yaml` in the repository
-or to `--prometheus`. The AWS policy is carried in the package, so
+or to `--prometheus`. A read that only failed asks for none of that: no policy
+commands are printed for it, and a cluster list that did not answer says to
+check that the cluster can be reached from here and to run `init` again.
+The AWS policy is carried in the package, so
 `--print-policy` works wherever CloudPilot was installed; it is the same
 document as `docs/cloudpilot-readonly-policy.json`, and a test fails if the
 two differ.
@@ -103,8 +109,8 @@ else. The Prometheus queries go through the same service proxy a scan uses.
 `--json` prints the result as JSON. The exit code is 0 when at least one of AWS
 and Kubernetes can be scanned (AWS: the credentials work and at least one read
 is allowed; Kubernetes: namespaces and pods can be listed), and 1 when neither
-can. A denied read does not change it: a scan runs and reports it as a skipped
-check.
+can. A denied or failed read does not change it: a scan runs and reports that
+read as a skipped check.
 
 ## What it finds
 
@@ -343,7 +349,8 @@ AWS_ENDPOINT_URL=http://localhost:5050 node dist/index.js scan --region ap-south
 These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
 [Kubernetes](#kubernetes). `init` takes `--profile`, `--region`, `--context`,
-`--prometheus` and `--json`: see [Check first with `init`](#check-first-with-init).
+`--prometheus`, `--json` and `--print-policy`: see
+[Check first with `init`](#check-first-with-init).
 
 | Option | Meaning |
 |---|---|
@@ -401,8 +408,9 @@ itself (`kube-system`, `kube-public`, `kube-node-lease`).
 ### What it needs
 
 - **`kubectl`**, which also brings whatever sign-in your cluster uses. Every
-  read is `kubectl get --raw`, which can only GET. A test fails if the code
-  asks kubectl for anything else.
+  cluster read is `kubectl get --raw`, which can only GET; the only other call
+  is `kubectl config view --minify`, to learn the current context. A test fails
+  if the code asks kubectl for anything else.
 - **Prometheus with the kubelet's container metrics**
   (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`),
   which kube-prometheus-stack and most setups collect. It is found among the

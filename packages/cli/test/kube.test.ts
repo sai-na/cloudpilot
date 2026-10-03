@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import { compareScans } from "../src/compare.js";
 import { evaluate } from "../src/evaluate.js";
-import { collectCluster, parseBytes, parseCpu, parsePrometheusRef, type ClusterInventory, type KubeReader, type Workload } from "../src/kube.js";
+import { collectCluster, kubectlReader, parseBytes, parseCpu, parsePrometheusRef, type ClusterInventory, type KubeReader, type Workload } from "../src/kube.js";
 import { cpuQuantity, detectCluster, hours, memoryQuantity, OPENCOST_DEFAULTS } from "../src/kube-detect.js";
 import { renderHtml } from "../src/html.js";
 import { templatedSummary } from "../src/report.js";
@@ -417,4 +417,22 @@ test("without kubectl the command says what it needs", () => {
 test("a cluster's report never claims an AWS account", () => {
   const html = renderHtml(detectCluster(inventory({ workloads: [workload({ containers: [{ name: "app", cpuRequestCores: 2, memoryRequestBytes: 64 * MI, ...idle }] })] }), OPENCOST_DEFAULTS));
   assert.doesNotMatch(html, /AWS account|Account<|Regions</);
+});
+
+test("a kubectl that never answers is stopped at the timeout init gives it, and says so", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cloudpilot-kube-hang-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  // A kubectl that reads nothing and answers far too late to be waited for.
+  writeFileSync(join(bin, "kubectl"), "#!/usr/bin/env node\nsetTimeout(() => process.stdout.write('{}'), 10_000);\n");
+  chmodSync(join(bin, "kubectl"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${dirname(process.execPath)}`;
+  try {
+    const started = Date.now();
+    await assert.rejects(kubectlReader(undefined, 300).get("/api/v1/pods?limit=1"), /kubectl did not answer within 0\.3 seconds\./);
+    assert.ok(Date.now() - started < 5_000, "the call was stopped rather than waited out");
+  } finally {
+    process.env.PATH = path;
+  }
 });
