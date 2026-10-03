@@ -119,9 +119,10 @@ The $151.53 a month of waste found is about 12.3% of last month's bill. The wast
 
 The percentage is worked out by CloudPilot's code, rounded to one decimal, and
 is "less than 0.1%" when it rounds to nothing. A model never computes it: with
-`--explain` or `ask` it is given the figure as text and may quote it, and the
+`--explain` the figure is given to it as text and it may quote it, and the
 output check discards text that states any other percentage of the bill. In the
-JSON it is `bill.wasteSharePct`, next to `bill.totalUsd` and `bill.month`.
+JSON it is `bill.wasteSharePct`, next to `bill.totalUsd` and `bill.month`. When
+Cost Explorer still marks the month as an estimate, the first sentence says so.
 
 When the bill cannot be read, the report says so in one plain line, and the
 scan is otherwise whole:
@@ -131,12 +132,12 @@ The bill could not be read: AccessDeniedException - User: ... is not authorized 
 ```
 
 That covers a role without the permission, Cost Explorer not enabled for the
-account, no data for the month yet (a new account reads zero), a bill in a
-currency other than dollars, and any other error. No figure and no share are
-shown then. The comparison is rough on purpose: the waste is an estimate at
-today's prices and the bill is last month's actual total, so a resource that
-only appeared this month, or a bill with a large one-off charge, moves it. The
-daily report does not pass `--bill`.
+account, no data for the month yet (a new account reads nothing to the cent),
+a bill in a currency other than dollars, and any other error. No figure and no
+share are shown then. The comparison is rough on purpose: the waste is an
+estimate at today's prices and the bill is last month's actual total, so a
+resource that only appeared this month, or a bill with a large one-off charge,
+moves it. The daily report does not pass `--bill`.
 
 ### Rule confidence
 
@@ -321,7 +322,8 @@ From a source checkout, the command is `node` with
 | `get_cluster_workloads` | Which cluster, namespaces, Prometheus and lookback the latest cluster scan covered, whatever it could not read, and every workload it read, flagged or not: replicas, and each container's requests, peak use, hours of history, and whether it was killed for running out of memory |
 
 Every tool is marked read-only. The account tools make the same AWS calls
-as the list above and nothing else, and the cluster tools only run
+as the list above and nothing else, except the one paid call: there is no
+`--bill` here, so no tool ever reads Cost Explorer. The cluster tools only run
 `kubectl get --raw`. Cluster costs use the OpenCost default prices here.
 The server tells the client's model the same ground rules `ask` uses:
 quote figures exactly, and present fix commands as proposals for a person.
