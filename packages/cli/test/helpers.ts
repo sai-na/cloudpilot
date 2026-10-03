@@ -67,15 +67,10 @@ export function cliAsync(args: string[], options: CliOptions = {}) {
 
 /** Run the CLI to its end without blocking the test's own event loop, so a stand-in server in this process can answer it. */
 export function cliRun(args: string[], options: CliOptions = {}) {
-  const { cwd, command, env } = invocation(args, options);
-  return new Promise<{ status: number | null; stdout: string; stderr: string; cwd: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, command, { cwd, env });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
+  const { child, done } = cliAsync(args, options);
+  return new Promise<Awaited<typeof done>>((resolve, reject) => {
     child.on("error", reject);
-    child.on("close", (status) => resolve({ status, stdout, stderr, cwd }));
+    void done.then(resolve);
   });
 }
 

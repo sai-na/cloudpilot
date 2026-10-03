@@ -85,6 +85,9 @@ const sharePercents = (result: ScanResult) => {
   return pct === undefined ? [] : pct === 0 ? [0, 0.1] : [pct];
 };
 
+/** The percentages the scan data states itself, such as the headroom a suggested request carries. A cluster has no bill, so these are the only ones its text may put near a word about spending. */
+const dataPercents = (source: string) => [...source.matchAll(PERCENT)].map((m) => Number(m[1]));
+
 /** Everything the model was given and may therefore repeat. */
 export function allowedValues(result: ScanResult, extra?: { inventories?: Inventory[]; prices?: PriceBook[]; cluster?: ClusterInventory }): Allowed {
   // What the model reads of a cluster beyond the findings is its workloads, flagged or not.
@@ -115,6 +118,7 @@ export function allowedValues(result: ScanResult, extra?: { inventories?: Invent
   if (result.cluster) {
     const { prices } = result.cluster;
     amounts.push(prices.cpuHourUsd, prices.memoryGibHourUsd, prices.storageGibMonthUsd);
+    allowed.percents.push(...dataPercents(source));
     const qualified = new Set<string>();
     const namespaces = new Set([...result.regions, ...(extra?.cluster?.namespaces ?? [])]);
     const mentioned = [

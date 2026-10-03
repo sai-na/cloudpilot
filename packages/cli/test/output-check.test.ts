@@ -217,6 +217,16 @@ test("ordinary words, and the names of kinds, are not taken for objects", () => 
   assert.deepEqual(unsupportedValues(prose, fromFindings), []);
 });
 
+test("a cluster text may quote a percentage the scan states, even next to a word about the bill", () => {
+  const headroom = clusterResult.findings.flatMap((f) => f.evidence).find((e) => e.includes("15%"));
+  assert.ok(headroom, "the scan suggests requests with headroom stated as a percentage");
+  const text = "Lowering deployment/reports to the peak plus 15% saves $24.43 a month, though the bill only drops once the cluster runs fewer nodes.";
+  assert.deepEqual(unsupportedValues(text, fromLookups), []);
+  assert.deepEqual(unsupportedValues(text, fromFindings), []);
+  // A share of the spend is still not a cluster's to state: the scan never reads a bill.
+  assert.deepEqual(unsupportedValues("That is 32% of what you spend on the cluster.", fromFindings), ["32%"]);
+});
+
 test("an account scan is checked as before, and its text is not held to cluster forms", () => {
   assert.deepEqual(unsupportedValues("Keep deployment/ghost and 300m of it, -n anywhere.", allowed), []);
 });
