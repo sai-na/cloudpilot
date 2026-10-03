@@ -193,6 +193,37 @@ test("a claim or a volume that is not validly named is reported with no delete c
   assert.ok(!out.plain.includes("kubectl delete persistentvolumeclaim Data_Claim") && !out.plain.includes(`kubectl delete persistentvolume ${EVIL}`));
 });
 
+test("a name that is missing altogether is held to the rule like any other invalid one, not let through as a blank", async () => {
+  // The emptiest name there is: the rule has to catch it, because a command built on it would name no object at all.
+  assert.equal(invalidName({ subdomain: [""] }), "(empty)");
+  assert.equal(invalidName({ label: [""] }), "(empty)");
+  const result = detectCluster(
+    await read({
+      claims: [{ metadata: { namespace: "prod" }, spec: { volumeName: "pvc-1", resources: { requests: { storage: "10Gi" } } }, status: { phase: "Bound", capacity: { storage: "10Gi" } } }],
+      volumes: [{ metadata: {}, spec: { capacity: { storage: "20Gi" }, persistentVolumeReclaimPolicy: "Retain" }, status: { phase: "Released" } }],
+    }),
+    OPENCOST_DEFAULTS,
+  );
+  assert.deepEqual(result.findings.map((f) => f.resourceIds[0]), ["persistentvolume/", "persistentvolumeclaim/"]);
+  for (const f of result.findings) {
+    assert.deepEqual(f.fix.commands, [], f.resourceIds[0]);
+    assert.match(f.fix.rollback, /^No command is printed for it: "\(empty\)" is not a valid Kubernetes name/);
+  }
+  for (const text of Object.values(shown(result))) assert.doesNotMatch(text, /kubectl delete persistentvolume/);
+});
+
+test("a claim bound to a volume whose name is missing asks for the volume by a placeholder, not by nothing", async () => {
+  const result = detectCluster(
+    await read({
+      claims: [{ metadata: { name: "data", namespace: "prod" }, spec: { volumeName: "", resources: { requests: { storage: "1Gi" } } }, status: { phase: "Bound", capacity: { storage: "1Gi" } } }],
+    }),
+    OPENCOST_DEFAULTS,
+  );
+  const f = result.findings[0]!;
+  assert.deepEqual(f.fix.commands, ["kubectl delete persistentvolumeclaim data -n prod --context prod-cluster"]);
+  assert.match(f.fix.rollback, /read it with kubectl get persistentvolume <volume> --context prod-cluster/);
+});
+
 test("a claim bound to a volume with an invalid name does not print that name in the command that checks the volume", async () => {
   const result = detectCluster(
     await read({

@@ -539,6 +539,30 @@ test("which nodes take part is read from role labels, taints and cordons, and ea
   assert.match(read.advisories!.warnings[0]!, /^A node reported no allocatable CPU or memory and was left out of the spare node capacity check: blank$/);
 });
 
+test("a node that reports zero allocatable CPU or memory holds nothing, so it is left out rather than counted into the arithmetic", async () => {
+  const reader: KubeReader = {
+    identity: async () => ({ context: "prod" }),
+    get: async (path) => {
+      if (path.startsWith("/api/v1/namespaces?")) return { items: [{ metadata: { name: "prod" } }] };
+      if (path.startsWith("/api/v1/nodes?"))
+        return {
+          items: [
+            { metadata: { name: "zero-cpu" }, status: { allocatable: { cpu: "0", memory: "16Gi" } } },
+            { metadata: { name: "zero-memory" }, status: { allocatable: { cpu: "4", memory: "0" } } },
+          ],
+        };
+      return { items: [] };
+    },
+  };
+  const read = await collectCluster(reader, { lookbackHours: 1, now: new Date("2026-10-03T12:00:00Z") });
+  assert.deepEqual(read.advisories!.nodes, []);
+  assert.match(read.advisories!.warnings[0]!, /^2 nodes reported no allocatable CPU or memory and were left out of the spare node capacity check: zero-cpu, zero-memory$/);
+  // Counted, their share of a node would be zero, and the nodes needed would be worked out by dividing by it.
+  const found = detectCluster(read, OPENCOST_DEFAULTS).advisories!;
+  assert.equal(found.find((a) => a.rule === "spare-node-capacity"), undefined);
+  for (const a of found) assert.ok(!JSON.stringify(a).includes("NaN") && !/\bNaN\b/.test([a.title, ...a.evidence, a.advice].join(" ")), a.title);
+});
+
 // An advisory is not a finding.
 
 const readerOf = (responses: Record<string, any>): KubeReader => ({

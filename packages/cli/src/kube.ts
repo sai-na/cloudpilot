@@ -384,11 +384,13 @@ const isLabel = (value: string) => value.length <= 63 && DNS_LABEL.test(value);
 /**
  * The first of these names that is not a valid Kubernetes name, shown safely, or
  * undefined when all are. A namespace or a container is a DNS-1123 label, the
- * rest a subdomain. A command is printed only for names that pass.
+ * rest a subdomain. A command is printed only for names that pass. What comes
+ * back is never the empty string, so a caller may read it as a plain yes or no:
+ * an empty name is itself invalid, and the one it is most important to catch.
  */
 export function invalidName(names: { subdomain?: string[]; label?: string[] }): string | undefined {
   const bad = names.subdomain?.find((n) => !isSubdomain(n)) ?? names.label?.find((n) => !isLabel(n));
-  return bad === undefined ? undefined : displayName(bad);
+  return bad === undefined ? undefined : displayName(bad) || "(empty)";
 }
 
 /** Why a finding for an object with an invalid name carries no command. */
@@ -399,7 +401,7 @@ const requestOf = (pod: any, resource: "cpu" | "memory") =>
 
 const CONTROL_PLANE_ROLES = ["node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"];
 
-/** The nodes, each with what the pods bound to it request. A node with no allocatable figures cannot be counted and is named in `skipped`. */
+/** The nodes, each with what the pods bound to it request. A node whose allocatable CPU or memory is missing, or is not a figure above zero, can hold nothing and cannot be counted: it is named in `skipped`. */
 function nodesFrom(nodes: any[], pods: any[], skipped: string[]): NodeInfo[] {
   const load = new Map<string, { cpu: number; memory: number; pods: number }>();
   for (const pod of pods) {
@@ -414,7 +416,7 @@ function nodesFrom(nodes: any[], pods: any[], skipped: string[]): NodeInfo[] {
     const name = displayName(raw);
     const cpu = parseCpu(node.status?.allocatable?.cpu);
     const memory = parseBytes(node.status?.allocatable?.memory);
-    if (!raw || cpu === undefined || memory === undefined) {
+    if (!raw || !cpu || !memory) {
       skipped.push(name || "(unnamed)");
       continue;
     }
