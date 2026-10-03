@@ -8,6 +8,7 @@
  * named, it is named by its host.
  */
 import { anomalyJson, PROJECTION_DAYS, type AnomalyReport } from "./anomaly.js";
+import type { AutopilotLine } from "./autopilot.js";
 import { redact } from "./recording.js";
 import { comparisonLine, money, shortId, shownFindings, words } from "./report.js";
 import type { Finding, ScanResult } from "./types.js";
@@ -74,13 +75,15 @@ export function scrub(text: string, targets: Target[]): string {
 /** What a message is about. */
 export type Notice =
   /** Findings to decide on. `result` is compared with the earlier scan unless `first`, when every finding is new. */
-  | { kind: "findings"; result: ScanResult; first: boolean; banner?: string; recoveredSince?: string }
+  | { kind: "findings"; result: ScanResult; first: boolean; banner?: string; recoveredSince?: string; autopilot?: string[] }
   /** Services that cost more than usual on the latest complete day. Sent only when there is at least one. */
   | { kind: "anomalies"; report: AnomalyReport; accountId: string; banner?: string }
   /** The check itself did not run to the end. */
-  | { kind: "failed"; subject: string; reason: string; at: string; watching: boolean; banner?: string }
+  | { kind: "failed"; subject: string; reason: string; at: string; watching: boolean; banner?: string; autopilot?: string[] }
   /** The check works again and there is nothing new to report with it. */
-  | { kind: "recovered"; subject: string; since: string; at: string; banner?: string };
+  | { kind: "recovered"; subject: string; since: string; at: string; banner?: string }
+  /** What autopilot did in one round: the fixes it ran, would have run, held back, refused or that failed. `problem` is set when it could do nothing at all. */
+  | { kind: "autopilot"; subject: string; at: string; dryRun: boolean; rules: string[]; lines: AutopilotLine[]; problem?: string };
 
 /** What a scan is of, in a few words: "AWS account 123456789012" or "cluster prod". */
 export const subjectOf = (result: ScanResult) => (result.cluster ? `cluster ${result.cluster.context}` : `AWS account ${result.accountId}`);
@@ -96,7 +99,11 @@ interface Draft {
   intro: string[];
   items: string[];
   outro: string[];
+  /** What to say when items did not fit. Without it, they are said to be in the report. */
+  more?: (left: number) => string;
 }
+
+const autopilotOn = (rules?: string[]) => (rules ? ` Autopilot is on for ${rules.join(", ")}: whatever it changed is in its own message, with the way back for each.` : "");
 
 function item(result: ScanResult, f: Finding, n: number, code: (s: string) => string): string {
   const { place } = words(result);
@@ -105,7 +112,38 @@ function item(result: ScanResult, f: Finding, n: number, code: (s: string) => st
   return `${n}. ${money(f.monthlyCostUsd)}/mo  ${f.title} (${code(ids)}), ${place} ${f.region}, ${permanence}`;
 }
 
+const OUTCOME_WORD: Record<AutopilotLine["outcome"], string> = { applied: "RAN", failed: "FAILED", "held-back": "HELD BACK", refused: "NOT RUN", "would-run": "WOULD RUN" };
+
+function autopilotDraft(notice: Extract<Notice, { kind: "autopilot" }>, code: (s: string) => string): Draft {
+  const { lines, dryRun } = notice;
+  const count = (outcome: AutopilotLine["outcome"]) => lines.filter((l) => l.outcome === outcome).length;
+  const changed = count("applied") + count("failed") > 0;
+  const parts = [
+    ...(dryRun ? [`${plural(count("would-run"), "fix")} would run`] : [`${plural(count("applied"), "fix")} run`]),
+    ...(count("failed") ? [`${count("failed")} failed`] : []),
+    ...(count("held-back") ? [`${count("held-back")} held back`] : []),
+    ...(count("refused") ? [`${count("refused")} not run`] : []),
+  ];
+  const mode = dryRun ? " (dry run)" : "";
+  return {
+    headline: notice.problem ? `CloudPilot autopilot${mode}: could not run anything, ${notice.subject}` : `CloudPilot autopilot${mode}: ${parts.join(", ")}, ${notice.subject}`,
+    intro: [
+      `Autopilot is on for ${notice.rules.join(", ")}. It runs only fixes that can be undone, and never a permanent one. Round at ${notice.at}.`,
+      ...(notice.problem ? [`Nothing was run: ${notice.problem}.`] : []),
+      ...(dryRun ? ["This is a dry run: nothing was run, and the lines below are what a real run would have run."] : changed ? ["Each fix marked RAN or FAILED was run against the account, with the way back given for it."] : notice.problem ? [] : ["Nothing was changed."]),
+    ],
+    items: lines.map((l, n) => {
+      const what = `${n + 1}. ${OUTCOME_WORD[l.outcome]}  ${money(l.monthlyCostUsd)}/mo  ${l.title} (${code(l.resourceIds.map(shortId).join(", "))}), region ${l.region}`;
+      if (l.outcome === "held-back" || l.outcome === "refused") return `${what}. ${l.reason ?? ""}`;
+      return `${what}. ${l.halfDone ? "It may be half done: check the resource. " : ""}Way back: ${l.wayBack}`;
+    }),
+    outro: ["Every command and its result is in .cloudpilot/audit.jsonl on the machine that runs the watch: run cloudpilot audit to read it."],
+    more: (left) => `... and ${left} more not listed here: ${left === 1 ? "it is" : "they are"} in the audit log. Run cloudpilot audit.`,
+  };
+}
+
 function draft(notice: Notice, code: (s: string) => string): Draft {
+  if (notice.kind === "autopilot") return autopilotDraft(notice, code);
   const banner = notice.banner ? [notice.banner] : [];
   if (notice.kind === "failed") {
     return {
@@ -117,7 +155,7 @@ function draft(notice: Notice, code: (s: string) => string): Draft {
         ...(notice.watching ? ["This is said once. CloudPilot keeps trying and will say so when checking works again."] : []),
       ],
       items: [],
-      outro: ["Nothing has been changed: this check only reads."],
+      outro: [notice.autopilot ? `Nothing was changed in this round: autopilot runs only after a check that finished.${autopilotOn(notice.autopilot)}` : "Nothing has been changed: this check only reads."],
     };
   }
   if (notice.kind === "recovered") {
@@ -164,7 +202,7 @@ function draft(notice: Notice, code: (s: string) => string): Draft {
     items: fresh.map((f, n) => item(result, f, n + 1, code)),
     outro: [
       ...(warnings > 0 ? [`${warnings} check(s) could not run, so some findings may be missing.`] : []),
-      "Nothing has been changed: every fix is a proposal for a person to review and run.",
+      notice.autopilot ? `Nothing has been changed by this message: every fix listed is a proposal.${autopilotOn(notice.autopilot)}` : "Nothing has been changed: every fix is a proposal for a person to review and run.",
       "Run cloudpilot to see each finding's evidence and fix commands.",
     ],
   };
@@ -181,7 +219,7 @@ function fit(d: Draft, limit: number, bold: (s: string) => string, escape: (s: s
   const lines = d.items.map(escape);
   const build = (shown: number) => {
     const left = lines.length - shown;
-    const cut = left > 0 ? [`... and ${left} more not listed here: ${left === 1 ? "it is" : "they are"} in the CloudPilot report.`] : [];
+    const cut = left > 0 ? [d.more ? d.more(left) : `... and ${left} more not listed here: ${left === 1 ? "it is" : "they are"} in the CloudPilot report.`] : [];
     return [...head, ...(lines.length ? [""] : []), ...lines.slice(0, shown), ...cut, "", ...tail].join("\n").trimEnd();
   };
   let shown = lines.length;
@@ -209,6 +247,19 @@ export function compose(notice: Notice, target: Pick<Target, "kind">): string {
     return JSON.stringify({ content: fit(draft(notice, noBackticks), LIMIT.discord, (s) => `**${s}**`, (s) => s), allowed_mentions: { parse: [] } });
   }
   const text = plainText(notice);
+  if (notice.kind === "autopilot") {
+    return JSON.stringify({
+      source: "cloudpilot",
+      event: "autopilot",
+      text,
+      subject: notice.subject,
+      at: notice.at,
+      dryRun: notice.dryRun,
+      rules: notice.rules,
+      lines: notice.lines,
+      ...(notice.problem ? { problem: notice.problem } : {}),
+    });
+  }
   if (notice.kind === "anomalies") {
     const { report } = notice;
     return JSON.stringify({

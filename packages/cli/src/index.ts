@@ -9,7 +9,8 @@ import { buildTools, clusterWorkloads, forModel, MCP_CLUSTER_INSTRUCTIONS, MCP_I
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
 import { anomaliesJson, CHARGE_NOTICE, DEFAULT_DAYS, DEFAULT_MIN_INCREASE_USD, DEFAULT_SENSITIVITY, findAnomalies, MAX_DAYS, MIN_DAYS, renderAnomalies, REPLAY_CHARGE_NOTICE, type AnomalyReport, type AnomalyRule } from "./anomaly.js";
 import { apply, ApplyError, plan, programRunner, renderAudit } from "./apply.js";
-import { appendAudit, AUDIT_LOG, readAudit } from "./audit.js";
+import { appendAudit, AUDIT_LOG, checkAuditWritable, readAudit } from "./audit.js";
+import { AUTOPILOT_DEFAULTS, AUTOPILOT_QUALIFYING, autopilotBanner, autopilotRefusal, createAutopilot, parseAutopilot, type AutopilotSettings } from "./autopilot.js";
 import { callerAccount, collect, enabledRegions, mapLimit, readBill, readCpu, readDailyCosts } from "./collect.js";
 import { compareScans, isScanResult } from "./compare.js";
 import { detect, mergeScans, withBill } from "./detect.js";
@@ -666,7 +667,7 @@ function finishCluster(inventory: ClusterInventory): void {
 
 const program = new Command()
   .name("cloudpilot")
-  .description("Finds wasted AWS spend and proposes the fix commands. A scan is read-only; apply runs a fix only when you name and approve it.")
+  .description("Finds wasted AWS spend and proposes the fix commands. A scan is read-only; apply runs a fix only when you name and approve it, and watch --autopilot runs only the fixes that can be undone, for the rules you name.")
   .version(VERSION);
 
 withCommonOptions(program.command("scan", { isDefault: true }).description("Scan the account and report wasted spend (the default command)"))
@@ -890,6 +891,30 @@ interface WatchCommandOptions extends Omit<CommonOptions, "lookbackHours">, Omit
   every: string;
   maxRuns?: string;
   lookbackHours?: string;
+  autopilot?: string;
+  autopilotMinConfidence?: string;
+  autopilotAfter?: string;
+  autopilotMax?: string;
+  autopilotMaxTotal?: string;
+  autopilotDryRun?: boolean;
+}
+
+/**
+ * The autopilot settings, or nothing when it is not asked for. It is refused,
+ * before anything runs, wherever it could not be trusted: a bad rule or number,
+ * a recording, a hidden account, a cluster.
+ */
+function autopilotOf(options: WatchCommandOptions): AutopilotSettings | undefined {
+  const given = [["--autopilot-min-confidence", options.autopilotMinConfidence], ["--autopilot-after", options.autopilotAfter], ["--autopilot-max", options.autopilotMax], ["--autopilot-max-total", options.autopilotMaxTotal], ["--autopilot-dry-run", options.autopilotDryRun]] as const;
+  if (options.autopilot === undefined) {
+    const stray = given.find(([, value]) => value !== undefined);
+    if (stray) throw new Error(`${stray[0]} only applies with --autopilot, which is off. Nothing here runs a fix.`);
+    return undefined;
+  }
+  const settings = parseAutopilot({ autopilot: options.autopilot, minConfidence: options.autopilotMinConfidence, after: options.autopilotAfter, max: options.autopilotMax, maxTotal: options.autopilotMaxTotal, dryRun: options.autopilotDryRun });
+  const refusal = autopilotRefusal({ replay: options.replay, redactAccount: options.redactAccount, kube: options.kube, inCluster: inCluster() });
+  if (refusal) throw new Error(refusal);
+  return settings;
 }
 
 /** Options that only mean something for one of the two things that can be watched. */
@@ -902,7 +927,7 @@ const FLAG: Record<string, string> = {
 
 program
   .command("watch")
-  .description("Scan again and again, and speak up only when something is new (a foreground process: run it under systemd, tmux or a container)")
+  .description("Scan again and again, and speak up only when something is new (a foreground process: run it under systemd, tmux or a container). It only reads, unless you turn on --autopilot")
   .option("--every <interval>", "wait this long between rounds, from 15m to 7d: 30m, 6h, 1d", DEFAULT_EVERY)
   .option("--max-runs <n>", "stop after this many rounds (default: until stopped)")
   .option("--notify <url>", NOTIFY_HELP, collectUrls)
@@ -923,12 +948,30 @@ program
   .option("--cpu-hour-usd <n>", "cluster: what one vCPU costs per hour on your nodes")
   .option("--memory-gib-hour-usd <n>", "cluster: what one GiB of memory costs per hour")
   .option("--storage-gib-month-usd <n>", "cluster: what one GiB of storage costs per month")
+  .option("--autopilot <rules>", `RUN the fix for these rules (comma-separated, no "all") when a finding passes every gate, and only if it can be undone. Off unless given. A permanent fix is never run. Can run today: ${AUTOPILOT_QUALIFYING.join(", ")}. Start with --autopilot-dry-run`)
+  .option("--autopilot-min-confidence <n>", `with --autopilot: the lowest confidence a finding may have (default ${AUTOPILOT_DEFAULTS.minConfidence})`)
+  .option("--autopilot-after <n>", `with --autopilot: rounds of this watch in a row a finding must be in (default ${AUTOPILOT_DEFAULTS.after})`)
+  .option("--autopilot-max <n>", `with --autopilot: most fixes in one round (default ${AUTOPILOT_DEFAULTS.maxPerRound}); the rest are held back`)
+  .option("--autopilot-max-total <n>", `with --autopilot: most fixes in this watch process (default ${AUTOPILOT_DEFAULTS.maxTotal})`)
+  .option("--autopilot-dry-run", "with --autopilot: do everything but run the commands; say, and send, what would have run")
   .action(async (options: WatchCommandOptions) => {
     const everyMs = parseEvery(options.every);
     const maxRuns = options.maxRuns === undefined ? undefined : parseMaxRuns(options.maxRuns);
     const targets = notifyTargets(options.notify);
     for (const key of options.kube ? AWS_ONLY : KUBE_ONLY) {
       if (options[key as keyof WatchCommandOptions] !== undefined) throw new Error(`${FLAG[key]} only applies ${options.kube ? "to the AWS account, not with --kube" : "with --kube"}.`);
+    }
+    const autopilot = autopilotOf(options);
+    // It needs the record of what was tried before, and a place to write what it does. Said now, not in the first round.
+    if (autopilot) {
+      await readAudit().catch((err) => {
+        throw new Error(`--autopilot needs the audit log: ${err instanceof Error ? err.message : err}`);
+      });
+      if (!autopilot.dryRun) {
+        await checkAuditWritable().catch((err) => {
+          throw new Error(`--autopilot needs to write ${AUDIT_LOG} before it runs anything, and cannot: ${err instanceof Error ? err.message : err}`);
+        });
+      }
     }
 
     const destination = uploadDestination(options);
@@ -973,7 +1016,8 @@ program
 
     const stop = new AbortController();
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stop.abort());
-    note(`Watching ${subject} every ${options.every}, read-only. ${targets.length > 0 ? `Messages go to ${hostsOf(targets)}.` : "No --notify target: results are printed here only."}${destination ? ` Every round is uploaded to ${destination.host}.` : ""} Ctrl+C stops it.`);
+    note(`Watching ${subject} every ${options.every}${autopilot ? "; each scan only reads" : ", read-only"}. ${targets.length > 0 ? `Messages go to ${hostsOf(targets)}.` : "No --notify target: results are printed here only."}${destination ? ` Every round is uploaded to ${destination.host}.` : ""} Ctrl+C stops it.`);
+    if (autopilot) for (const line of autopilotBanner(autopilot)) note(line);
 
     const end = await watch(
       { everyMs, maxRuns, targets, subject },
@@ -988,6 +1032,17 @@ program
           },
         },
         send: httpSender,
+        ...(autopilot
+          ? {
+              autopilot: createAutopilot(autopilot, {
+                // The fixes run with the same profile the scan reads with, as apply's do.
+                runner: programRunner(options.profile ? { ...process.env, AWS_PROFILE: options.profile } : process.env),
+                audit: { read: async () => (await readAudit()).entries, check: () => checkAuditWritable(), record: (entry) => appendAudit(entry) },
+                user: whoAmI(),
+                now: () => new Date(),
+              }),
+            }
+          : {}),
         ...(destination ? { upload: (body: string, signal: AbortSignal) => upload(destination, body, { send: httpUploader, pause: sleep }, signal) } : {}),
         clock: () => new Date(),
         sleep,
