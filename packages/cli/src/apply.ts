@@ -46,7 +46,7 @@ export function tokenize(command: string): string[] {
       if (started) args.push(current);
       current = "";
       started = false;
-    } else if (/[;&|<>$`\\\n\r(){}*?!#~]/.test(ch)) {
+    } else if (/[;&|<>$`\\\n\r(){}[\]*?!#~]/.test(ch)) {
       throw new ApplyError(`Not a plain command (it has ${JSON.stringify(ch)} outside quotes): ${command}`);
     } else {
       current += ch;
@@ -130,10 +130,9 @@ export function plan(scans: ScanResult[], names: string[], options: PlanOptions)
     const { scan, finding } = matches[0]!;
 
     const ageHours = (options.now.getTime() - Date.parse(scan.scannedAt)) / 3_600_000;
-    if (!Number.isFinite(ageHours) || ageHours > options.maxAgeHours) {
-      throw new ApplyError(
-        `The scan that found ${named} is from ${scan.scannedAt}, more than ${options.maxAgeHours} hours ago. Things may have changed since: scan again, then apply.`,
-      );
+    if (!Number.isFinite(ageHours) || Math.abs(ageHours) > options.maxAgeHours) {
+      const when = ageHours < 0 ? `more than ${options.maxAgeHours} hours in the future, so a clock is wrong` : `more than ${options.maxAgeHours} hours ago`;
+      throw new ApplyError(`The scan that found ${named} is from ${scan.scannedAt}, ${when}. Things may have changed since: scan again, then apply.`);
     }
 
     // The fix that can be undone, unless the permanent one was asked for.

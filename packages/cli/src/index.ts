@@ -459,9 +459,19 @@ async function savedScans(from?: string): Promise<ScanResult[]> {
   return scans;
 }
 
-async function readAudit(): Promise<AuditEntry[]> {
+/** The audit log, losing only the lines that cannot be read rather than the whole record. */
+async function readAudit(): Promise<{ entries: AuditEntry[]; unreadable: number }> {
   const text = await readFile(AUDIT_LOG, "utf8").catch(() => "");
-  return text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as AuditEntry);
+  const entries: AuditEntry[] = [];
+  let unreadable = 0;
+  for (const line of text.split("\n").filter(Boolean)) {
+    try {
+      entries.push(JSON.parse(line) as AuditEntry);
+    } catch {
+      unreadable++;
+    }
+  }
+  return { entries, unreadable };
 }
 
 program
@@ -508,8 +518,9 @@ program
   .description("Show every fix that apply ran, was told not to run, or refused to run from this directory")
   .option("--json", "print the entries as JSON")
   .action(async (options: { json?: boolean }) => {
-    const entries = await readAudit();
+    const { entries, unreadable } = await readAudit();
     console.log(options.json ? JSON.stringify(entries, null, 2) : renderAudit(entries));
+    if (unreadable > 0) note(`\n${unreadable} line${unreadable === 1 ? "" : "s"} of ${AUDIT_LOG} could not be read and ${unreadable === 1 ? "is" : "are"} not shown above.`);
   });
 
 withCommonOptions(program.command("eval").description("Scan, then score the findings against a waste-lab answer key"))

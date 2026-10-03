@@ -4,7 +4,7 @@
  * stand-ins that write down how they were called, so nothing real is touched.
  */
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -52,6 +52,7 @@ test("a printed command is split into arguments, and anything a shell would act 
     "aws ec2 delete-volume --volume-id 'vol-1",
     "aws ec2 delete-volume --volume-id vol-1\nrm -rf /",
     "aws ec2 delete-volume --volume-id vol-*",
+    "aws ec2 delete-volume --volume-id vol-[12]",
   ]) {
     assert.throws(() => tokenize(bad), ApplyError, bad);
   }
@@ -110,6 +111,12 @@ test("naming a resource has to be exact, unambiguous and recent", () => {
   assert.equal(plan([both], [`staging/${named}`], options)[0]!.finding.region, "staging");
 
   assert.throws(() => plan([{ ...account, scannedAt: "2026-10-02T11:00:00Z" }], [VOLUME], options), /is from 2026-10-02T11:00:00Z, more than 24 hours ago\. Things may have changed since: scan again, then apply\./);
+
+  // A scan dated in the future says a clock is wrong, so its age proves nothing.
+  assert.throws(() => plan([{ ...account, scannedAt: "2026-10-05T11:00:00Z" }], [VOLUME], options), /is from 2026-10-05T11:00:00Z, more than 24 hours in the future, so a clock is wrong\./);
+  assert.throws(() => plan([{ ...account, scannedAt: "not a date" }], [VOLUME], options), /is from not a date/);
+  // Small skew either way is still fresh.
+  assert.equal(plan([{ ...account, scannedAt: "2026-10-03T12:05:00Z" }], [VOLUME], options).length, 1);
 });
 
 /** A runner that only writes down what it was asked to run. */
@@ -270,6 +277,18 @@ test("cloudpilot apply runs the named fix through the real program's arguments a
   assert.match(audit.stdout, new RegExp(`APPLIED {3}${VOLUME} {2}\\(account 123456789012, ap-south-1\\)`));
   assert.match(audit.stdout, /APPLIED {3}deployment\/reports {2}\(cluster kind-cloudpilot-lab, shop\)/);
   assert.equal(JSON.parse(ws.run(["audit", "--json"]).stdout).length, 2);
+});
+
+test("a half-written line in the audit log costs that line, not the whole record", () => {
+  const ws = saved();
+  assert.equal(ws.run(["apply", VOLUME, "--yes"]).status, 0);
+  appendFileSync(join(ws.cwd, ".cloudpilot/audit.jsonl"), '{"at":"2026-10-03T12:00:0\n');
+
+  const audit = ws.run(["audit"]);
+  assert.equal(audit.status, 0, audit.stderr);
+  assert.match(audit.stdout, new RegExp(`APPLIED {3}${VOLUME}`));
+  assert.match(audit.stderr, /1 line of \.cloudpilot\/audit\.jsonl could not be read and is not shown above\./);
+  assert.equal(JSON.parse(ws.run(["audit", "--json"]).stdout).length, 1);
 });
 
 test("run unattended, the command refuses a permanent fix and a fix nobody approved, and runs nothing", () => {
