@@ -18,8 +18,9 @@ In an AWS account:
 
 Unattached EBS volumes, gp2 volumes that would be cheaper as gp3, idle
 Elastic IPs, stopped instances still paying for storage, idle running
-instances, snapshots of deleted volumes, unused AMIs, buckets with no
-lifecycle rule, and incomplete multipart uploads. The rules, their
+instances, running instances that are one size too big for their CPU use, idle
+RDS database instances, snapshots of deleted volumes, unused AMIs, buckets with
+no lifecycle rule, and incomplete multipart uploads. The rules, their
 confidence and their limits are in [`packages/cli/README.md`](packages/cli/README.md).
 
 In a Kubernetes cluster, with `npx @meruapps/cloudpilot kube`:

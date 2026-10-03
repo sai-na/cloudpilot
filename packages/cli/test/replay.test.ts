@@ -1,6 +1,7 @@
 /** Offline tests against a committed, account-redacted recording of the waste lab. */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { cli, FIXTURE, recordingText, SECRET_MARKERS } from "./helpers.js";
@@ -119,4 +120,34 @@ test("the HTML report is one self-contained file carrying the replay banner and 
   // Nothing is fetched: no sources, imports or CSS urls, and the only link points within the page.
   assert.doesNotMatch(html, /\bsrc=|\bhref="(?!#)|@import|url\(|https?:\/\//);
   assert.deepEqual(html.match(/\bhref="[^"]*"/g), ['href="#script"']);
+});
+
+test("a role without the database permission still gets a full scan: the denied check becomes a warning", () => {
+  // The recorded database read, answered the way IAM answers a role that may not make it.
+  const denied =
+    '<ErrorResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/">\n  <Error>\n    <Type>Sender</Type>\n    <Code>AccessDenied</Code>\n' +
+    "    <Message>User: arn:aws:sts::123456789012:assumed-role/cloudpilot-readonly/session is not authorized to perform: rds:DescribeDBInstances</Message>\n" +
+    "  </Error>\n  <RequestId>00000000-0000-0000-0000-000000000000</RequestId>\n</ErrorResponse>";
+  const dir = join(mkdtempSync(join(tmpdir(), "cloudpilot-denied-")), "recording");
+  cpSync(FIXTURE, dir, { recursive: true });
+  const file = join(dir, "scan/aws.json");
+  const recorded = JSON.parse(readFileSync(file, "utf8")) as { entries: Record<string, Array<{ service: string; status: number; headers: Record<string, string>; body: string }>> };
+  const rds = Object.values(recorded.entries).filter((responses) => responses[0]!.service === "RDS");
+  assert.equal(rds.length, 1, "the recording holds the one database read");
+  Object.assign(rds[0]![0]!, { status: 403, headers: { "content-type": "text/xml" }, body: Buffer.from(denied).toString("base64") });
+  writeFileSync(file, JSON.stringify(recorded));
+
+  const run = cli(["scan", "--replay", dir, "--json"], { blockNetwork: true });
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.findings.length, 10);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /^\[ap-south-1\] rds:DescribeDBInstances: AccessDenied/);
+});
+
+test("the lab holds no database or oversized instance, so the recorded scan reports neither rule", () => {
+  const run = cli(["scan", "--replay", FIXTURE, "--json"], { blockNetwork: true });
+  const result = JSON.parse(run.stdout);
+  assert.deepEqual(result.warnings, []);
+  assert.ok(!result.findings.some((f: { pattern: string }) => f.pattern === "idle-rds-instance" || f.pattern === "oversized-instance"));
 });

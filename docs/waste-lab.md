@@ -23,6 +23,10 @@ names your AWS account and its resources.
 | W8 | S3 bucket with three small objects | No lifecycle rule | Terraform |
 | W9 | Incomplete multipart upload in the W8 bucket | Abandoned multipart upload | `scripts/seed.sh` |
 
+The lab plants no RDS instance and no oversized instance, so the idle RDS
+and oversized instance rules are not scored by it. Their tests use
+hand-built inventories.
+
 Plus a $15 monthly budget with alerts at 50% and 100% of actual spend, and
 the `cloudpilot-readonly` IAM role. Every resource is tagged
 `Project=cloudpilot-waste-lab` and `WastePattern=<W id>` (`none` for the

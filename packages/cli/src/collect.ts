@@ -22,16 +22,19 @@ import {
   S3Client,
   type Bucket,
 } from "@aws-sdk/client-s3";
+import { paginateDescribeDBInstances, RDSClient } from "@aws-sdk/client-rds";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import { fromIni } from "@aws-sdk/credential-providers";
 import { now } from "./clock.js";
 import { awsRequestHandler, labelClient, mode, ReplayMissError } from "./recording.js";
 import type {
   BucketInfo,
+  ConnectionStats,
   CpuStats,
   InstanceInfo,
   Inventory,
   MultipartUploadInfo,
+  RdsInstanceInfo,
 } from "./types.js";
 
 export interface AwsOptions {
@@ -100,10 +103,11 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
   const config = clientConfig(opts);
   const ec2 = labelClient(new EC2Client(config), "EC2");
   const s3 = labelClient(new S3Client(config), "S3");
+  const rds = labelClient(new RDSClient(config), "RDS");
   const cloudwatch = labelClient(new CloudWatchClient(config), "CloudWatch");
   const warnings: string[] = [];
 
-  const [volumes, snapshots, images, instances, addresses, launchTemplateImageIds, buckets] = await Promise.all([
+  const [volumes, snapshots, images, instances, rdsInstances, addresses, launchTemplateImageIds, buckets] = await Promise.all([
     attempt("ec2:DescribeVolumes", warnings, [], async () => {
       const out: Inventory["volumes"] = [];
       for await (const page of paginateDescribeVolumes({ client: ec2 }, {})) {
@@ -171,9 +175,35 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
               platform: i.PlatformDetails ?? "Linux/UNIX",
               volumeIds: (i.BlockDeviceMappings ?? []).map((m) => m.Ebs?.VolumeId!).filter(Boolean),
               name: nameTag(i.Tags),
+              rootDeviceType: i.RootDeviceType,
+              lifecycle: i.InstanceLifecycle,
+              tenancy: i.Placement?.Tenancy,
               ignored: ignoredByTag(i.Tags),
             });
           }
+        }
+      }
+      return out;
+    }),
+    attempt("rds:DescribeDBInstances", warnings, [], async () => {
+      const out: RdsInstanceInfo[] = [];
+      for await (const page of paginateDescribeDBInstances({ client: rds }, {})) {
+        for (const d of page.DBInstances ?? []) {
+          out.push({
+            id: d.DBInstanceIdentifier!,
+            instanceClass: d.DBInstanceClass ?? "unknown",
+            engine: d.Engine ?? "unknown",
+            status: d.DBInstanceStatus ?? "unknown",
+            allocatedGb: d.AllocatedStorage ?? 0,
+            storageType: d.StorageType ?? "unknown",
+            multiAz: d.MultiAZ ?? false,
+            createdAt: d.InstanceCreateTime?.toISOString(),
+            clusterId: d.DBClusterIdentifier,
+            replicaOf: d.ReadReplicaSourceDBInstanceIdentifier ?? d.ReadReplicaSourceDBClusterIdentifier,
+            replicaIds: d.ReadReplicaDBInstanceIdentifiers ?? [],
+            deletionProtection: d.DeletionProtection ?? false,
+            ignored: ignoredByTag(d.TagList),
+          });
         }
       }
       return out;
@@ -219,6 +249,16 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
       }),
   );
 
+  await Promise.all(
+    rdsInstances
+      .filter((d) => d.status === "available")
+      .map(async (d) => {
+        d.connections = await attempt(`cloudwatch:GetMetricData ${d.id}`, warnings, undefined, () =>
+          connectionStats(cloudwatch, d.id, opts.lookbackHours),
+        );
+      }),
+  );
+
   return {
     accountId,
     region: opts.region,
@@ -227,6 +267,7 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
     snapshots,
     images,
     instances,
+    rdsInstances,
     addresses,
     launchTemplateImageIds,
     buckets,
@@ -352,9 +393,45 @@ async function cpuStats(cloudwatch: CloudWatchClient, instanceId: string, lookba
   const max = res.MetricDataResults?.find((r) => r.Id === "max")?.Values ?? [];
   if (avg.length === 0) return undefined;
   return {
+    windowHours: lookbackHours,
     datapoints: avg.length,
     hoursObserved: (avg.length * period) / 3600,
     averagePct: avg.reduce((a, b) => a + b, 0) / avg.length,
     maxPct: Math.max(...max, ...avg),
+  };
+}
+
+/** The highest database connection count CloudWatch holds for one RDS instance over the window. */
+async function connectionStats(cloudwatch: CloudWatchClient, dbInstanceId: string, lookbackHours: number): Promise<ConnectionStats | undefined> {
+  const end = now();
+  const start = new Date(end.getTime() - lookbackHours * 3600_000);
+  const period = lookbackHours <= 24 ? 300 : 3600;
+  const res = await cloudwatch.send(
+    new GetMetricDataCommand({
+      StartTime: start,
+      EndTime: end,
+      MetricDataQueries: [
+        {
+          Id: "max",
+          MetricStat: {
+            Metric: {
+              Namespace: "AWS/RDS",
+              MetricName: "DatabaseConnections",
+              Dimensions: [{ Name: "DBInstanceIdentifier", Value: dbInstanceId }],
+            },
+            Period: period,
+            Stat: "Maximum",
+          },
+        },
+      ],
+    }),
+  );
+  const max = res.MetricDataResults?.find((r) => r.Id === "max")?.Values ?? [];
+  if (max.length === 0) return undefined;
+  return {
+    windowHours: lookbackHours,
+    datapoints: max.length,
+    hoursObserved: (max.length * period) / 3600,
+    maxConnections: Math.max(...max),
   };
 }

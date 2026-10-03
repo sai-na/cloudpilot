@@ -7,6 +7,7 @@ export interface Inventory {
   snapshots: SnapshotInfo[];
   images: ImageInfo[];
   instances: InstanceInfo[];
+  rdsInstances: RdsInstanceInfo[];
   addresses: AddressInfo[];
   /** AMI IDs referenced by the latest and default version of every launch template. */
   launchTemplateImageIds: string[];
@@ -49,6 +50,8 @@ export interface ImageInfo {
 }
 
 export interface CpuStats {
+  /** The window that was asked for, so a reader can tell how much of it CloudWatch had data for. */
+  windowHours: number;
   hoursObserved: number;
   datapoints: number;
   averagePct: number;
@@ -67,8 +70,49 @@ export interface InstanceInfo {
   platform: string;
   volumeIds: string[];
   name?: string;
+  /** "ebs" or "instance-store". An instance-store instance cannot be stopped. */
+  rootDeviceType?: string;
+  /** "spot", "scheduled" or "capacity-block"; undefined for On-Demand. */
+  lifecycle?: string;
+  /** "default", "dedicated" or "host". Only "default" is priced. */
+  tenancy?: string;
   /** Only for running instances. Undefined when CloudWatch returned no data. */
   cpu?: CpuStats;
+}
+
+/** Database connections CloudWatch recorded for one RDS instance. */
+export interface ConnectionStats {
+  /** The window that was asked for, so a reader can tell how much of it CloudWatch had data for. */
+  windowHours: number;
+  hoursObserved: number;
+  datapoints: number;
+  /** The highest connection count in any period. Zero means nobody connected. */
+  maxConnections: number;
+}
+
+export interface RdsInstanceInfo {
+  /** Tagged cloudpilot:ignore=true, so no finding is raised for it. */
+  ignored?: boolean;
+  id: string;
+  /** For example db.t3.micro. */
+  instanceClass: string;
+  /** As RDS names it: mysql, postgres, mariadb, aurora-mysql, oracle-ee... */
+  engine: string;
+  status: string;
+  allocatedGb: number;
+  /** gp2, gp3, io1, io2 or standard. */
+  storageType: string;
+  multiAz: boolean;
+  createdAt?: string;
+  /** Set for a member of a cluster (Aurora, or a Multi-AZ DB cluster). */
+  clusterId?: string;
+  /** Set when this instance is itself a read replica. */
+  replicaOf?: string;
+  /** The read replicas that copy from this instance. */
+  replicaIds: string[];
+  deletionProtection: boolean;
+  /** Only for available instances. Undefined when CloudWatch returned no data. */
+  connections?: ConnectionStats;
 }
 
 export interface AddressInfo {
@@ -110,8 +154,26 @@ export interface PriceBook {
   snapshotGbMonth: number;
   idleIpv4Hour: number;
   instanceHour: Record<string, number>;
+  /** Hourly price of a DB instance, by rdsHourKey. */
+  rdsInstanceHour: Record<string, number>;
+  /** Monthly price of a GB of DB storage, by rdsStorageKey. */
+  rdsStorageGbMonth: Record<string, number>;
+  /**
+   * What the Price List says an instance type has, for the sizes one step
+   * down from a running instance. Only types that were looked up are here.
+   */
+  instanceSpecs: Record<string, { vcpu: number; memoryGib: number }>;
   s3StandardGbMonth: number;
 }
+
+/** The engines whose RDS price is a plain per-hour rate with no licence term, by their name in the Price List. */
+export const RDS_PRICED_ENGINES: Record<string, string> = { mysql: "MySQL", postgres: "PostgreSQL", mariadb: "MariaDB" };
+
+/** The Price List's name for each storage type CloudPilot prices. Provisioned IOPS types are not priced. */
+export const RDS_PRICED_STORAGE: Record<string, string> = { gp2: "General Purpose", gp3: "General Purpose-GP3", standard: "Magnetic" };
+
+export const rdsHourKey = (instanceClass: string, engine: string, multiAz: boolean) => `${instanceClass}|${engine}|${multiAz ? "Multi-AZ" : "Single-AZ"}`;
+export const rdsStorageKey = (storageType: string, engine: string, multiAz: boolean) => `${storageType}|${engine}|${multiAz ? "Multi-AZ" : "Single-AZ"}`;
 
 export type Pattern =
   | "unattached-ebs-volume"
@@ -119,6 +181,8 @@ export type Pattern =
   | "idle-elastic-ip"
   | "stopped-instance"
   | "idle-instance"
+  | "oversized-instance"
+  | "idle-rds-instance"
   | "orphaned-snapshot"
   | "unused-ami"
   | "bucket-without-lifecycle"
