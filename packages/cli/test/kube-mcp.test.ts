@@ -4,7 +4,7 @@
  * and kubectl replaced by a stand-in that serves the recorded lab.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, test } from "node:test";
@@ -39,7 +39,10 @@ test("a live server offers the cluster tools next to the account ones, every one
     assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name} is marked read-only`);
     assert.equal(tool.annotations?.destructiveHint, false);
   }
-  assert.match(client.getInstructions() ?? "", /For a Kubernetes cluster, call "scan_cluster"/);
+  const instructions = client.getInstructions() ?? "";
+  assert.match(instructions, /For a Kubernetes cluster, call "scan_cluster"/);
+  // The AWS ignore tag is not a legal Kubernetes label key: the model must be given the cluster form.
+  assert.match(instructions, /cloudpilot\/ignore=true/);
 });
 
 test("scan_cluster says what it read and at what prices, then gives the summary and every finding", async () => {
@@ -99,6 +102,37 @@ test("the workloads carry the identity of the scan they came from, not of a scan
   assert.equal(read.prometheus, "monitoring/prometheus:9090");
   assert.equal(read.lookbackHours, 1);
   assert.match(read.collectedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("a cluster only half readable says so, rather than reading as a cluster without Deployments", async () => {
+  // Only ReplicaSets are unreadable, as an RBAC rule that allows pods but not apps/v1 would leave them.
+  const lab = JSON.parse(readFileSync(resolve(here, "fixtures/kube-lab.json"), "utf8"));
+  for (const path of Object.keys(lab.responses)) if (path.includes("replicasets")) delete lab.responses[path];
+  const file = join(mkdtempSync(join(tmpdir(), "cloudpilot-half-lab-")), "kube-lab.json");
+  writeFileSync(file, JSON.stringify(lab));
+
+  const half = fakeKubectl(file);
+  const blind = new Client({ name: "cloudpilot-test", version: "0" });
+  await blind.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: ["--require", resolve(here, "block-network.cjs"), "--import", TSX, CLI, "mcp"],
+      cwd: mkdtempSync(join(tmpdir(), "cloudpilot-mcp-")),
+      env: { ...half.env, HOME: process.env.HOME ?? "", AWS_CONFIG_FILE: "/dev/null", AWS_SHARED_CREDENTIALS_FILE: "/dev/null" },
+      stderr: "ignore",
+    }),
+  );
+  try {
+    const read = JSON.parse(text(await blind.callTool({ name: "get_cluster_workloads", arguments: {} })));
+    // Every Deployment is missing: a pod's Deployment is only known through its ReplicaSet.
+    assert.deepEqual(read.workloads.filter((w: { kind: string }) => w.kind === "Deployment"), []);
+    assert.ok(
+      read.warnings.some((w: string) => /^ReplicaSets could not be read/.test(w)),
+      `the payload must say what it could not read: ${JSON.stringify(read.warnings)}`,
+    );
+  } finally {
+    await blind.close();
+  }
 });
 
 test("through the MCP server too, kubectl is only ever asked to read", () => {

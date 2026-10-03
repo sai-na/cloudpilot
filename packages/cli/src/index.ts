@@ -379,6 +379,7 @@ function workloadsForModel(inventory: ClusterInventory) {
     prometheus: inventory.prometheus ?? null,
     lookbackHours: inventory.lookbackHours,
     collectedAt: inventory.collectedAt,
+    warnings: inventory.warnings,
     workloads: inventory.workloads.map((w) => ({
       namespace: w.namespace,
       kind: w.kind,
@@ -622,7 +623,7 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
         {
           name: "get_cluster_workloads",
           description:
-            "Return the kubectl context, namespaces, Prometheus, lookback and time of the latest cluster scan, and every Deployment, StatefulSet and DaemonSet it read, including those NOT flagged: replicas, and for each container its CPU and memory request, its peak use over the history Prometheus holds, how many hours of history that is, and whether it has been killed for running out of memory. Use it to answer what a workload asks for and uses, or why one was not flagged. Runs scan_cluster with its defaults first if no cluster has been scanned yet.",
+            "Return the kubectl context, namespaces, Prometheus, lookback and time of the latest cluster scan, whatever it could not read (warnings), and every Deployment, StatefulSet and DaemonSet it read, including those NOT flagged: replicas, and for each container its CPU and memory request, its peak use over the history Prometheus holds, how many hours of history that is, and whether it has been killed for running out of memory. Use it to answer what a workload asks for and uses, or why one was not flagged. A warning means the list is incomplete: say so rather than calling a workload absent. Runs scan_cluster with its defaults first if no cluster has been scanned yet.",
           inputSchema: { type: "object", properties: {}, additionalProperties: false },
           run: async () => JSON.stringify(workloadsForModel((await currentCluster()).inventory)),
         },
