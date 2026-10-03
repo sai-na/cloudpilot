@@ -322,7 +322,7 @@ test("--notify sends one message when a service cost more than usual, and says w
     assert.match(body.text, /^CloudPilot: 1 service costs more than usual on \d{4}-\d\d-\d\d, \$32\.90 a day more, AWS account 123456789012$/m);
     assert.match(body.text, /1\. Amazon Elastic Compute Cloud - Compute: \$45\.20 on \d{4}-\d\d-\d\d, usually \$12\.30 \(\+\$32\.90 a day\)/);
     assert.match(body.text, /If all of it continued, that would add up to about \$987\.00 over 30 days\. That is arithmetic on one day, not a forecast\./);
-    assert.match(body.text, /Nothing has been changed: CloudPilot only reads\./);
+    assert.match(body.text, /Nothing has been changed: this check only reads\./);
     assert.ok(!(run.stdout + run.stderr).includes(SECRET), "the webhook URL is never printed");
   } finally {
     await webhook.close();

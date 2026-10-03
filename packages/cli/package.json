@@ -1,7 +1,7 @@
 {
   "name": "@meruapps/cloudpilot",
   "version": "0.1.0",
-  "description": "Read-only agent that finds wasted AWS spend and prints the commands that would fix it.",
+  "description": "Finds wasted AWS spend and prints the commands that would fix it. A scan is read-only; apply runs a fix only when you name and approve it.",
   "keywords": [
     "aws",
     "cost",

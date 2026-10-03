@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   CloudPilot daily report. Scans this account once a day with read-only access
   and emails you only when new waste appears. Everything it creates is listed
-  below; CloudPilot itself only reads.
+  below; the scan itself only reads.
 
 Parameters:
   Email:

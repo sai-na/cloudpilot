@@ -287,16 +287,16 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
 <section id="safe">
   <div class="safe-top">
     <h2>How it stays safe</h2>
-    <span class="stamp">Read-only</span>
+    <span class="stamp">Read-only scans</span>
   </div>
   <div class="safe">
     <div>
-      <h3>It only reads</h3>
+      <h3>A scan only reads</h3>
       <p>Every AWS call it makes is a Describe, a List or a Get. A test in the repository fails if the code ever calls anything else. In a cluster, every read is a <code>kubectl get --raw</code>, which can only GET, and the repository ships the least-access role those reads need.</p>
     </div>
     <div>
       <h3>It runs nothing unless you tell it to</h3>
-      <p>A scan prints each fix for you to review and says which ones are permanent. If you want CloudPilot to run one, you name it: it shows the commands, asks, and keeps a record. A fix that cannot be undone is never run unattended.</p>
+      <p>A scan, a cluster scan, <code>watch</code>, <code>ask</code>, <code>anomalies</code>, <code>init</code> and the MCP server change nothing: they print each fix for you to review and say which ones are permanent. <code>apply</code> is the only command that can change anything, and only what you name and approve: it shows the commands, asks, and keeps a record. A fix that cannot be undone is never run unattended.</p>
     </div>
     <div>
       <h3>It runs inside your own account</h3>

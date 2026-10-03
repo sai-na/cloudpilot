@@ -117,7 +117,7 @@ function draft(notice: Notice, code: (s: string) => string): Draft {
         ...(notice.watching ? ["This is said once. CloudPilot keeps trying and will say so when checking works again."] : []),
       ],
       items: [],
-      outro: ["Nothing has been changed: CloudPilot only reads."],
+      outro: ["Nothing has been changed: this check only reads."],
     };
   }
   if (notice.kind === "recovered") {
@@ -142,7 +142,7 @@ function draft(notice: Notice, code: (s: string) => string): Draft {
       ),
       outro: [
         `If all of it continued, that would add up to about ${money(report.totalMonthlyIfContinuesUsd)} over ${PROJECTION_DAYS} days. That is arithmetic on one day, not a forecast.`,
-        "Nothing has been changed: CloudPilot only reads.",
+        "Nothing has been changed: this check only reads.",
         "Run cloudpilot anomalies to see the figures behind each one.",
       ],
     };

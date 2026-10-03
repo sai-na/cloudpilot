@@ -31,7 +31,7 @@ export function groundRules(result: Pick<ScanResult, "cluster">): string {
     "",
     "Rules:",
     "- Every dollar figure, resource ID and command you give must come from the scan data or a tool result. Never estimate a number yourself; if the data does not contain it, say so.",
-    `- You cannot change anything in the ${cluster ? "cluster" : "account"} and neither can the scanner. The fix commands are proposals for a human to review and run. Never say or imply that something was fixed, deleted or changed.`,
+    `- You cannot change anything in the ${cluster ? "cluster" : "account"} and neither can the scan or any tool you have. The fix commands are proposals for a human to review and run. Never say or imply that something was fixed, deleted or changed.`,
     '- Each fix carries a risk level and a "way back" note. When you recommend a fix marked dangerous, say what is permanent about it.',
     ...(cluster
       ? [
