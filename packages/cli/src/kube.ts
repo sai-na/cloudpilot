@@ -364,7 +364,7 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
       ignored: isIgnored(c.metadata),
     })),
     volumes: volumes
-      .filter((v) => !options.namespace || v.spec?.claimRef?.namespace === options.namespace)
+      .filter((v) => !namespace || v.spec?.claimRef?.namespace === namespace)
       .map((v) => ({
         name: v.metadata.name,
         phase: v.status?.phase ?? "",
