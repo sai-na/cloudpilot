@@ -324,3 +324,36 @@ test("--redact-account hides the real account ID in every message", async () => 
     assert.ok(body.includes("123456789012"));
   }
 });
+
+// The anomalies message says what the rule did
+
+const spike = { service: "Amazon EC2", kind: "spike" as const, day: "2026-10-02", costUsd: 90, medianUsd: 20, madUsd: 1, increaseUsd: 70, monthlyIfContinuesUsd: 2100, baselineDays: 28, sameWeekday: null };
+const anomalyNotice = (weekdayCheck: boolean): Notice => ({
+  kind: "anomalies",
+  accountId: "123456789012",
+  report: {
+    status: "ok",
+    today: "2026-10-03",
+    latestDay: "2026-10-02",
+    latestDayEstimated: false,
+    baseline: { days: 28, from: "2026-09-04", to: "2026-10-01" },
+    baselineDaysFound: 28,
+    servicesChecked: 3,
+    rule: { sensitivity: 5, minIncreaseUsd: 5, weekdayCheck },
+    anomalies: [spike],
+    weekdayCleared: [],
+    totalIncreaseUsd: 70,
+    totalMonthlyIfContinuesUsd: 2100,
+  },
+});
+
+test("an anomalies message does not claim a same-weekday comparison when the weekday check was off, and the webhook body says so", () => {
+  const off = compose(anomalyNotice(false), { kind: "slack" });
+  assert.doesNotMatch(off, /same weekday/);
+  assert.match(off, /The weekday check is off/);
+  assert.equal(JSON.parse(compose(anomalyNotice(false), { kind: "generic" })).rule.weekdayCheck, false);
+  const on = compose(anomalyNotice(true), { kind: "slack" });
+  assert.match(on, /higher than the earlier days on the same weekday/);
+  assert.doesNotMatch(on, /weekday check is off/);
+  assert.equal(JSON.parse(compose(anomalyNotice(true), { kind: "generic" })).rule.weekdayCheck, true);
+});
