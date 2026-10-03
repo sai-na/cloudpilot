@@ -498,8 +498,9 @@ needs each scan to work out what is new and what was resolved. `--only-new`,
 `--no-compare` and `--notify` change what is printed or sent to your team, not
 what is uploaded. Under `watch`, every round that completed is uploaded; a
 round whose check failed has no result and uploads nothing. An upload comes
-after the report is printed, and one that fails changes nothing else: the saved scan and what `--notify` has told your
-team move as they would without it.
+after the report is printed, and one that fails changes nothing else: the
+saved scan and what `--notify` has told your team move as they would without
+it.
 
 **What the service answers, and what CloudPilot says.** One line on stderr for
 each, never the body of the answer:
@@ -946,8 +947,10 @@ fewer or smaller nodes, which a node autoscaler does for you.
 
 ### The rest works the same
 
-`--json`, `--out`, `--html`, `--compare`, `--no-compare`, `--only-new` and
-`--notify` behave as they do for `scan`, and `watch --kube` repeats the scan.
+`--json`, `--out`, `--html`, `--compare`, `--no-compare`, `--only-new`,
+`--notify` and `--upload` behave as they do for `scan`, and `watch --kube`
+repeats the scan. `kube --upload` is refused with `--answer-key`, which scores
+a lab instead of keeping a scan: see [Keep the history](#keep-the-history).
 The last scan is kept per cluster
 (`.cloudpilot/last-kube-scan-<context>.json`; `ask --kube` leaves one too, and
 a replay never does), so a repeat scan says what is new without touching the
