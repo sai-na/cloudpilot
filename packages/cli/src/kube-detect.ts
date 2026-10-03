@@ -4,8 +4,8 @@
  */
 import { detectAdvisories } from "./kube-advisories.js";
 import { cpuQuantity, hours, memoryQuantity } from "./kube-format.js";
-import type { ClaimInfo, ClusterInventory, PersistentVolumeInfo, Workload, WorkloadContainer } from "./kube.js";
-import { HOURS_PER_MONTH, type ClusterPrices, type Finding, type ScanResult } from "./types.js";
+import { invalidName, noCommandFor, type ClaimInfo, type ClusterInventory, type PersistentVolumeInfo, type Workload, type WorkloadContainer } from "./kube.js";
+import { HOURS_PER_MONTH, type ClusterPrices, type Finding, type Fix, type ScanResult } from "./types.js";
 
 /**
  * What a vCPU, a GiB of memory and a GiB of storage cost when nobody says
@@ -117,6 +117,14 @@ function overRequested(workload: Workload, inventory: ClusterInventory, prices: 
   const back = resizes.map((r) =>
     set(r, r.cpuTo !== undefined ? r.container.cpuRequestCores : undefined, r.memoryTo !== undefined ? r.container.memoryRequestBytes : undefined),
   );
+  const bad = invalidName({ subdomain: [workload.name], label: [workload.namespace, ...resizes.map((r) => r.container.name)] });
+  const fix: Fix = bad
+    ? { commands: [], risk: "caution", rollback: noCommandFor(bad) }
+    : {
+        commands: resizes.map((r) => set(r, r.cpuTo, r.memoryTo)),
+        risk: "caution",
+        rollback: `This restarts the pods one by one. To go back: ${back.join(" && ")}. If the workload is deployed by Helm, Argo CD or Flux, change the request there instead, or the next sync undoes this.`,
+      };
 
   return {
     region: workload.namespace,
@@ -132,11 +140,7 @@ function overRequested(workload: Workload, inventory: ClusterInventory, prices: 
     ],
     monthlyCostUsd: monthly,
     costBasis: `${replicas} x (${parts.join(" + ")}) x ${HOURS_PER_MONTH} h. The money is saved once the freed capacity lets the cluster run fewer or smaller nodes`,
-    fix: {
-      commands: resizes.map((r) => set(r, r.cpuTo, r.memoryTo)),
-      risk: "caution",
-      rollback: `This restarts the pods one by one. To go back: ${back.join(" && ")}. If the workload is deployed by Helm, Argo CD or Flux, change the request there instead, or the next sync undoes this.`,
-    },
+    fix,
     confidence: confidenceFor(history),
   };
 }
@@ -146,7 +150,9 @@ function unusedClaim(claim: ClaimInfo, inventory: ClusterInventory, prices: Clus
   if (claim.phase !== "Bound" || claim.mountedBy.length > 0) return undefined;
   const size = gib(claim.capacityBytes);
   const policy = claim.reclaimPolicy;
-  const check = `kubectl get persistentvolume ${claim.volumeName ?? "<volume>"} --context ${inventory.context} -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'`;
+  const bad = invalidName({ subdomain: [claim.name], label: [claim.namespace] });
+  const volumeOk = claim.volumeName !== undefined && !invalidName({ subdomain: [claim.volumeName] });
+  const check = `kubectl get persistentvolume ${volumeOk ? claim.volumeName : "<volume>"} --context ${inventory.context} -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'`;
   return {
     region: claim.namespace,
     pattern: "unused-volume-claim",
@@ -161,10 +167,11 @@ function unusedClaim(claim: ClaimInfo, inventory: ClusterInventory, prices: Clus
     monthlyCostUsd: size * prices.storageGibMonthUsd,
     costBasis: `${size} GiB x ${usd(prices.storageGibMonthUsd)}/GiB-month`,
     fix: {
-      commands: [`kubectl delete persistentvolumeclaim ${claim.name} -n ${claim.namespace} --context ${inventory.context}`],
+      commands: bad ? [] : [`kubectl delete persistentvolumeclaim ${claim.name} -n ${claim.namespace} --context ${inventory.context}`],
       risk: "dangerous",
-      rollback:
-        policy === "Retain"
+      rollback: bad
+        ? noCommandFor(bad)
+        : policy === "Retain"
           ? "The volume's reclaim policy is Retain, so deleting the claim leaves the volume and its data in place, still paid for, until the volume is deleted too."
           : policy === undefined
             ? `The volume's reclaim policy could not be read, so what deleting the claim does to the volume is unknown, and so is the saving: read it with ${check}. Delete means the claim takes the volume and its data with it; Retain means both stay, still paid for, until the volume is deleted too. Copy or snapshot the data first if any of it matters.`
@@ -177,6 +184,7 @@ function unusedClaim(claim: ClaimInfo, inventory: ClusterInventory, prices: Clus
 function releasedVolume(volume: PersistentVolumeInfo, inventory: ClusterInventory, prices: ClusterPrices): Finding | undefined {
   if (volume.phase !== "Released") return undefined;
   const size = gib(volume.capacityBytes);
+  const bad = invalidName({ subdomain: [volume.name] });
   return {
     region: volume.claim?.namespace ?? "(cluster)",
     pattern: "released-volume",
@@ -190,10 +198,11 @@ function releasedVolume(volume: PersistentVolumeInfo, inventory: ClusterInventor
     monthlyCostUsd: size * prices.storageGibMonthUsd,
     costBasis: `${size} GiB x ${usd(prices.storageGibMonthUsd)}/GiB-month`,
     fix: {
-      commands: [`kubectl delete persistentvolume ${volume.name} --context ${inventory.context}`],
+      commands: bad ? [] : [`kubectl delete persistentvolume ${volume.name} --context ${inventory.context}`],
       risk: "dangerous",
-      rollback:
-        "Deleting the volume object is permanent, and with reclaim policy Retain the disk behind it may stay in your cloud account and keep costing money: check for it there. Copy the data first if any of it matters.",
+      rollback: bad
+        ? noCommandFor(bad)
+        : "Deleting the volume object is permanent, and with reclaim policy Retain the disk behind it may stay in your cloud account and keep costing money: check for it there. Copy the data first if any of it matters.",
     },
     confidence: 0.9,
   };

@@ -289,6 +289,8 @@ function scriptLines(f: Finding, fix: Fix, what: string, savingUsd: number): str
 
 function choicesFor(f: Finding, finding: number): Choice[] {
   const alt = f.alternative;
+  // With no command there is nothing to tick and nothing for the script.
+  if (f.fix.commands.length === 0) return [{ finding, heading: "No fix command", fix: f.fix, savingUsd: 0, chosen: false, lines: "" }];
   const main: Choice = { finding, heading: "Fix", fix: f.fix, savingUsd: f.monthlyCostUsd, chosen: f.fix.risk === "caution", lines: scriptLines(f, f.fix, f.title, f.monthlyCostUsd) };
   if (!alt) return [main];
   return [
@@ -305,6 +307,12 @@ function choicesFor(f: Finding, finding: number): Choice[] {
 }
 
 function fixBlock(c: Choice): string {
+  if (c.fix.commands.length === 0) {
+    return `<section class="fix" data-risk="${c.fix.risk}">
+<h3>${escape(c.heading)}</h3>
+<p class="wayback">${escape(c.fix.rollback)}</p>
+</section>`;
+  }
   return `<section class="fix" data-risk="${c.fix.risk}">
 <h3><label><input type="checkbox" data-finding="${c.finding}" data-usd="${c.savingUsd}" data-risk="${c.fix.risk}" data-lines="${escape(c.lines)}"${c.chosen ? " checked" : ""}><span>${escape(c.heading)}</span></label></h3>
 <p class="risk">${RISK_NOTE[c.fix.risk]}</p>

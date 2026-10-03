@@ -9,7 +9,7 @@
  * the nodes that could go are worth, is an estimate and is never added to anything.
  */
 import { cpuQuantity, memoryQuantity } from "./kube-format.js";
-import { safeText, type ClusterInventory, type ContainerFacts, type NodeInfo, type PodFacts, type Workload } from "./kube.js";
+import { invalidName, noCommandFor, safeText, type ClusterInventory, type ContainerFacts, type NodeInfo, type PodFacts, type Workload } from "./kube.js";
 import { HOURS_PER_MONTH, type Advisory, type AdvisoryRule, type CapacityCase, type ClusterPrices, type Fix, type SpareCapacity } from "./types.js";
 
 const MI = 2 ** 20;
@@ -84,7 +84,9 @@ function outOfMemory(inventory: ClusterInventory): Advisory[] {
     const limit = Math.max(0, ...g.members.map((m) => m.container.memoryLimitBytes ?? 0));
     const restarts = Math.max(...g.members.map((m) => m.container.restartCount));
     const exit = g.members.find((m) => m.container.terminated?.finishedAt === when)?.container.terminated?.exitCode;
-    const target = pods[0]!.ownerIsWorkload ? g.resource : undefined;
+    const owner = pods[0]!.ownerIsWorkload ? pods[0]!.owner : undefined;
+    const bad = owner ? invalidName({ subdomain: [owner.name], label: [g.namespace, g.container] }) : undefined;
+    const target = owner && !bad ? g.resource : undefined;
     const raised = limit > 0 ? roundUp(limit * OOM_LIMIT_RAISE, OOM_LIMIT_STEP_BYTES) : undefined;
     const at = `-n ${g.namespace} --context ${inventory.context}`;
     const set = (memory: number) => `kubectl set resources ${target} ${at} -c ${g.container} --limits=memory=${memoryQuantity(memory)}`;
@@ -112,7 +114,9 @@ function outOfMemory(inventory: ClusterInventory): Advisory[] {
       advice:
         suggestion
           ? `Raise the memory limit and watch whether the kills stop. The figure suggested is the limit plus 25%, rounded up to the next 16Mi: the right one depends on the workload, and only its owner knows what it needs.`
-          : limit > 0
+          : bad
+            ? `Raise the memory limit and watch whether the kills stop. The right figure depends on the workload. ${noCommandFor(bad)}`
+            : limit > 0
             ? "Raise the memory limit and watch whether the kills stop. This pod is not part of a Deployment, StatefulSet or DaemonSet, so the change belongs wherever it is created. The right figure depends on the workload."
             : "Give the container a memory request and limit, then watch whether the kills stop. The right figures depend on the workload, and only its owner knows what it needs.",
       ...(suggestion ? { suggestion } : {}),
@@ -137,6 +141,7 @@ function restarting(inventory: ClusterInventory): Advisory[] {
   return grouped(hits).map((g) => {
     const worst = [...g.members].sort((a, b) => b.container.restartCount - a.container.restartCount || byName(a.pod, b.pod))[0]!;
     const c = worst.container;
+    const bad = invalidName({ subdomain: [worst.pod.name], label: [g.namespace, g.container] });
     const stopped = c.terminated;
     const state = [stopped?.reason ? `reason ${stopped.reason}` : "", stopped?.exitCode !== undefined ? `exit code ${stopped.exitCode}` : "", stopped?.finishedAt ? `at ${stopped.finishedAt}` : ""].filter(Boolean);
     const why = g.members.some((m) => m.loop)
@@ -154,7 +159,9 @@ function restarting(inventory: ClusterInventory): Advisory[] {
         why,
         state.length > 0 ? `Its last state was terminated: ${state.join(", ")}` : "The pod records no earlier stop for it",
       ],
-      advice: `CloudPilot cannot tell why from what it reads, and prints no fix. The log of the run before the last restart usually says: kubectl logs ${worst.pod.name} -n ${g.namespace} --context ${inventory.context} -c ${g.container} --previous`,
+      advice: bad
+        ? `CloudPilot cannot tell why from what it reads, and prints no fix. The log of the run before the last restart usually says. ${noCommandFor(bad)}`
+        : `CloudPilot cannot tell why from what it reads, and prints no fix. The log of the run before the last restart usually says: kubectl logs ${worst.pod.name} -n ${g.namespace} --context ${inventory.context} -c ${g.container} --previous`,
       countedInTotal: false,
     };
   });

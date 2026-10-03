@@ -163,6 +163,7 @@ export function plan(scans: ScanResult[], names: string[], options: PlanOptions)
       );
     }
     const fix = which === "fix" ? finding.fix : alt!;
+    if (fix.commands.length === 0) throw new ApplyError(`${named} has no command to run (${finding.title}). ${fix.rollback}`);
     // A fix that calls itself undoable but holds a command that cannot be undone would skip the prompt a permanent fix needs.
     if (fix.risk !== "dangerous" && fix.commands.some((text) => commandRisk(text) === "dangerous")) {
       throw new ApplyError(`The fix for ${named} says it can be undone but holds a command that cannot be, so it is not run. A scan CloudPilot made does not say that: scan again.`);
