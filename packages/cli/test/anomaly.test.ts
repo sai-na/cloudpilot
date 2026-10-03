@@ -16,7 +16,7 @@ import {
 } from "../src/anomaly.js";
 
 const TODAY = "2026-10-01";
-const RULE: AnomalyRule = { sensitivity: DEFAULT_SENSITIVITY, minIncreaseUsd: DEFAULT_MIN_INCREASE_USD };
+const RULE: AnomalyRule = { sensitivity: DEFAULT_SENSITIVITY, minIncreaseUsd: DEFAULT_MIN_INCREASE_USD, weekdayCheck: true };
 
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
@@ -68,6 +68,8 @@ test("a spike on a flat baseline is flagged, with the usual cost, the rise and w
     increaseUsd: 6,
     monthlyIfContinuesUsd: 180,
     baselineDays: 29,
+    // 2026-09-30 is a Wednesday; four Wednesdays came before it in the baseline.
+    sameWeekday: { weekday: "Wednesday", days: 4, checked: true, maxUsd: 10 },
   });
 });
 
@@ -275,15 +277,109 @@ test("the same holds when the weekday cost has ordinary noise", () => {
   }
 });
 
-test("known limit: a cost that is high on a few days of the week, such as a weekly job, is flagged on those days", () => {
-  // The rule cannot tell a weekly pattern from a spike when the busy days are the minority: the usual day is the
-  // quiet one, so a busy day is more than half again as much. The README says so.
-  const weeklyJob = (d: number) => (d === 6 ? 40 : 5);
-  const saturdayTwoWeeks = "2026-10-04";
+/** `weekly()` with the cost of the last day (the day before `today`) set to `last`. */
+function weeklyEnding(service: string, cost: (weekday: number) => number, today: string, last: number): DayCost[] {
+  const days = weekly(service, cost, today);
+  days[days.length - 1]!.costs[service] = last;
+  return days;
+}
+
+const weeklyJob = (d: number) => (d === 6 ? 40 : 5);
+const SATURDAY_AFTER = "2026-10-04"; // the day before it, 2026-10-03, is a Saturday
+const SUNDAY_AFTER = "2026-10-05";
+
+test("a job that runs every Saturday is not flagged on any day of the week, and the Saturday is reported as held back", () => {
   assert.equal(new Date("2026-10-03T00:00:00Z").getUTCDay(), 6);
-  assert.equal(only(run(weekly("Nightly export", weeklyJob, saturdayTwoWeeks), {}, saturdayTwoWeeks)).day, "2026-10-03");
-  const sunday = "2026-10-05";
-  assert.deepEqual(run(weekly("Nightly export", weeklyJob, sunday), {}, sunday).anomalies, [], "and not on the days around it");
+  for (let shift = 0; shift < 14; shift++) {
+    const today = addDays(SATURDAY_AFTER, shift);
+    assert.deepEqual(run(weekly("Nightly export", weeklyJob, today), {}, today).anomalies, [], `the day before ${today}`);
+  }
+  const report = run(weekly("Nightly export", weeklyJob, SATURDAY_AFTER), {}, SATURDAY_AFTER);
+  // 40 is eight times the usual day of 5, so only the weekday check keeps it quiet, and it says so.
+  assert.deepEqual(report.weekdayCleared, [
+    { service: "Nightly export", day: "2026-10-03", costUsd: 40, medianUsd: 5, sameWeekday: { weekday: "Saturday", days: 7, checked: true, maxUsd: 40 } },
+  ]);
+});
+
+test("a busy weekday far above its previous same weekdays is still flagged, and so is a spike on an ordinary weekday", () => {
+  const spike = only(run(weeklyEnding("Nightly export", weeklyJob, SATURDAY_AFTER, 400), {}, SATURDAY_AFTER));
+  assert.equal(spike.day, "2026-10-03");
+  assert.equal(spike.increaseUsd, 395);
+  assert.deepEqual(spike.sameWeekday, { weekday: "Saturday", days: 7, checked: true, maxUsd: 40 });
+  // Sunday is an ordinary day for this service (5): 30 is far above every earlier Sunday.
+  const sunday = only(run(weeklyEnding("Nightly export", weeklyJob, SUNDAY_AFTER, 30), {}, SUNDAY_AFTER));
+  assert.equal(sunday.day, "2026-10-04");
+  assert.deepEqual(sunday.sameWeekday, { weekday: "Sunday", days: 7, checked: true, maxUsd: 5 });
+});
+
+test("the weekday check needs the day to exceed the largest earlier same weekday by the floor, to the cent", () => {
+  const judged = (last: number, rule: Partial<AnomalyRule> = {}) => run(weeklyEnding("S", weeklyJob, SATURDAY_AFTER, last), rule, SATURDAY_AFTER);
+  assert.equal(judged(41).anomalies.length, 1, "exactly the floor above the largest earlier Saturday");
+  assert.equal(judged(40.99).anomalies.length, 0);
+  assert.equal(judged(40.99).weekdayCleared.length, 1);
+  assert.equal(judged(40).anomalies.length, 0, "equal to the largest is not above it");
+  assert.equal(judged(44.99, { minIncreaseUsd: 5 }).anomalies.length, 0, "the floor is the one --min-increase sets");
+  assert.equal(judged(45, { minIncreaseUsd: 5 }).anomalies.length, 1);
+  assert.equal(judged(40, { minIncreaseUsd: 0 }).anomalies.length, 0, "even with no floor, a day that only equals an earlier one is not above it");
+  assert.equal(judged(40.01, { minIncreaseUsd: 0 }).anomalies.length, 1);
+  // One earlier Saturday that was itself a spike raises the bar for the later ones: the largest decides.
+  const days = weekly("S", weeklyJob, SATURDAY_AFTER);
+  days[days.length - 1 - 7]!.costs["S"] = 300;
+  days[days.length - 1]!.costs["S"] = 200;
+  assert.deepEqual(run(days, {}, SATURDAY_AFTER).anomalies, []);
+});
+
+test("with fewer than 2 earlier days on the weekday the check does not apply, and the anomaly says so", () => {
+  // Eight days: seven earlier ones, one of each weekday. 2026-09-30 is a Wednesday and so is 2026-09-23.
+  const one = only(run(daily("S", [...repeat(10, 7), 40])));
+  assert.deepEqual(one.sameWeekday, { weekday: "Wednesday", days: 1, checked: false });
+  // Even if that one earlier Wednesday was as high: with one day there is nothing to call usual for the weekday.
+  const high = daily("S", [...repeat(10, 7), 40]);
+  high[0]!.costs["S"] = 40;
+  assert.equal(only(run(high)).sameWeekday!.days, 1);
+  // Fourteen earlier days have exactly two of each weekday, so the check applies.
+  const two = run(daily("S", [...repeat(10, 14), 40]));
+  assert.deepEqual(only(two).sameWeekday, { weekday: "Wednesday", days: 2, checked: true, maxUsd: 10 });
+  // Days Cost Explorer returned nothing for are not days: drop one earlier Wednesday and the check no longer applies.
+  const missing = daily("S", [...repeat(10, 14), 40]).filter((d) => d.day !== "2026-09-16");
+  assert.deepEqual(only(run(missing)).sameWeekday, { weekday: "Wednesday", days: 1, checked: false });
+});
+
+test("known limit: a weekly job that started one week ago is not flagged on its second run", () => {
+  // Saturdays cost 5 until 2026-09-26, the first run of the job, and 40 from then on.
+  const days = Array.from({ length: 30 }, (_, i) => {
+    const day = addDays("2026-10-04", i - 30);
+    return { day, costs: { S: new Date(`${day}T00:00:00Z`).getUTCDay() === 6 && day >= "2026-09-26" ? 40 : 5 } };
+  });
+  // The earlier Saturdays are 5, 5, 5 and 40, and 40 is not above the largest of them. The README says so.
+  const report = run(days, {}, "2026-10-04");
+  assert.deepEqual(report.anomalies, []);
+  assert.equal(report.weekdayCleared[0]!.sameWeekday.maxUsd, 40);
+});
+
+test("--no-weekday-check: the weekly job is flagged again, with no weekday comparison on it", () => {
+  const off = run(weekly("Nightly export", weeklyJob, SATURDAY_AFTER), { weekdayCheck: false }, SATURDAY_AFTER);
+  const found = only(off);
+  assert.equal(found.day, "2026-10-03");
+  assert.equal(found.sameWeekday, null);
+  assert.deepEqual(off.weekdayCleared, []);
+  assert.deepEqual(run(weekly("Nightly export", weeklyJob, SUNDAY_AFTER), { weekdayCheck: false }, SUNDAY_AFTER).anomalies, [], "and not on the days around it");
+  assert.match(renderAnomalies(off, CONTEXT), /The weekday check is off \(--no-weekday-check\)/);
+  assert.doesNotMatch(renderAnomalies(run(weekly("Nightly export", weeklyJob, SATURDAY_AFTER), {}, SATURDAY_AFTER), CONTEXT), /weekday check is off/);
+});
+
+test("new spend is not subject to the weekday check", () => {
+  const found = only(run(together(daily("Amazon EC2", repeat(20, 30)), daily("Amazon Bedrock", [...repeat(0, 29), 12.5]))));
+  assert.equal(found.kind, "new");
+  assert.equal(found.sameWeekday, null);
+  assert.equal(only(run(together(daily("Amazon EC2", repeat(20, 30)), daily("Amazon Bedrock", [...repeat(0, 29), 12.5])), { weekdayCheck: false })).kind, "new");
+});
+
+test("a service whose weekday is checked and that is flagged on the first two tests alone are told apart in the report", () => {
+  const days = together(weeklyEnding("Nightly export", weeklyJob, SATURDAY_AFTER, 40), weeklyEnding("Amazon EC2", () => 10, SATURDAY_AFTER, 90));
+  const report = run(days, {}, SATURDAY_AFTER);
+  assert.deepEqual(report.anomalies.map((a) => a.service), ["Amazon EC2"]);
+  assert.deepEqual(report.weekdayCleared.map((c) => c.service), ["Nightly export"]);
 });
 
 // ---- Rounding, merging ----
@@ -328,6 +424,22 @@ test("the text names the service, the day, the cost, the usual cost, the rise an
   assert.doesNotMatch(text, /will (cost|add|spend)|you will|wasted|saves?\b/i);
 });
 
+test("the text shows, for each spike, how the day compares with the same weekday before it", () => {
+  const text = renderAnomalies(spiking(), CONTEXT);
+  assert.match(text, /1\. Amazon EC2\n.*\n.*\n.*\n\s+same weekday\s+previous Wednesdays: at most \$12\.30 \(4 days\)\n/);
+  // New spend has no weekday to compare with.
+  assert.doesNotMatch(text.split("2. Amazon Bedrock")[1]!, /same weekday/);
+  const short = renderAnomalies(run(daily("S", [...repeat(10, 7), 40])), CONTEXT);
+  assert.match(short, /same weekday\s+could not be checked: 1 earlier Wednesday in the baseline, and at least 2 are needed/);
+});
+
+test("the text names what the weekday check held back, so that it never hides a service silently", () => {
+  const text = renderAnomalies(run(weekly("Nightly export", weeklyJob, SATURDAY_AFTER), {}, SATURDAY_AFTER), CONTEXT);
+  assert.match(text, /^Nothing unusual on 2026-10-03:/m);
+  assert.match(text, /Not flagged: its day was high against the usual day, but no higher than earlier days on the same weekday:\n  Nightly export: \$40\.00 on 2026-10-03; previous Saturdays: at most \$40\.00 \(7 days\)/);
+  assert.doesNotMatch(renderAnomalies(run(daily("S", repeat(10, 30))), CONTEXT), /Not flagged/);
+});
+
 test("the text says the day in progress is left out and that the last days can still change", () => {
   const text = renderAnomalies(spiking(), CONTEXT);
   assert.match(text, /Today \(2026-10-01\) is still in progress and is not used\./);
@@ -363,14 +475,26 @@ test("the JSON has a documented shape: the charge, the rule, the days and every 
   const json = JSON.parse(JSON.stringify(anomaliesJson(spiking(), CONTEXT)));
   assert.deepEqual(Object.keys(json), [
     "command", "accountId", "charge", "status", "today", "windowDays", "latestDay", "latestDayEstimated", "baseline", "baselineDaysFound",
-    "servicesChecked", "rule", "anomalies", "totalIncreaseUsd", "totalMonthlyIfContinuesUsd", "note",
+    "servicesChecked", "rule", "anomalies", "weekdayCleared", "totalIncreaseUsd", "totalMonthlyIfContinuesUsd", "note",
   ]);
   assert.equal(json.command, "anomalies");
   assert.deepEqual(json.charge, { requests: 1, usdPerRequest: 0.01, notice: CHARGE_NOTICE });
-  assert.deepEqual(json.rule, { sensitivity: 3, minIncreaseUsd: 1, madScale: 1.4826, flatRise: 0.5, minBaselineDays: 7, projectionDays: 30 });
+  assert.deepEqual(json.rule, { sensitivity: 3, minIncreaseUsd: 1, weekdayCheck: true, madScale: 1.4826, flatRise: 0.5, minBaselineDays: 7, minSameWeekdayDays: 2, projectionDays: 30 });
   assert.deepEqual(json.baseline, { days: 29, from: "2026-09-01", to: "2026-09-29" });
   assert.deepEqual([json.status, json.today, json.latestDay, json.windowDays, json.servicesChecked], ["ok", "2026-10-01", "2026-09-30", 30, 3]);
-  assert.deepEqual(Object.keys(json.anomalies[0]), ["service", "kind", "day", "costUsd", "medianUsd", "madUsd", "increaseUsd", "monthlyIfContinuesUsd", "baselineDays"]);
+  assert.deepEqual(Object.keys(json.anomalies[0]), ["service", "kind", "day", "costUsd", "medianUsd", "madUsd", "increaseUsd", "monthlyIfContinuesUsd", "baselineDays", "sameWeekday"]);
+  assert.deepEqual(json.anomalies[0].sameWeekday, { weekday: "Wednesday", days: 4, checked: true, maxUsd: 12.3 });
+  assert.equal(json.anomalies[1].sameWeekday, null, "new spend has none");
+  assert.deepEqual(json.weekdayCleared, []);
+  // Where the weekday could not be checked the field is there, with a null maximum; where the check held a service back it is listed.
+  const short = JSON.parse(JSON.stringify(anomaliesJson(run(daily("S", [...repeat(10, 7), 40])), CONTEXT)));
+  assert.deepEqual(short.anomalies[0].sameWeekday, { weekday: "Wednesday", days: 1, checked: false, maxUsd: null });
+  const held = JSON.parse(JSON.stringify(anomaliesJson(run(weekly("Nightly export", weeklyJob, SATURDAY_AFTER), {}, SATURDAY_AFTER), CONTEXT)));
+  assert.deepEqual(held.anomalies, []);
+  assert.deepEqual(held.weekdayCleared, [{ service: "Nightly export", day: "2026-10-03", costUsd: 40, medianUsd: 5, sameWeekday: { weekday: "Saturday", days: 7, checked: true, maxUsd: 40 } }]);
+  const off = JSON.parse(JSON.stringify(anomaliesJson(run(daily("S", [...repeat(10, 29), 40]), { weekdayCheck: false }), CONTEXT)));
+  assert.equal(off.rule.weekdayCheck, false);
+  assert.equal(off.anomalies[0].sameWeekday, null);
   assert.deepEqual([json.totalIncreaseUsd, json.totalMonthlyIfContinuesUsd], [40.9, 1227]);
   // A run that could not judge has the same keys, an empty list and nulls where there is no day.
   const empty = JSON.parse(JSON.stringify(anomaliesJson(run([]), CONTEXT)));

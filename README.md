@@ -103,9 +103,11 @@ says what is new, what was resolved and what is unchanged.
 - **Spend anomalies.** `cloudpilot anomalies` says which services cost
   unusually much on the latest complete day, from daily Cost Explorer data. A
   fixed rule finds them (the median and median absolute deviation of the days
-  before, and a dollar floor), no model is involved, and the output says what
-  it knows and what it does not: the last day or two can still be settling in
-  Cost Explorer, and a weekly job reads as a spike every week. It makes one
+  before, a dollar floor, and a check that the day is also high for its own
+  weekday, so a weekly job is not flagged every week), no model is involved,
+  and the output says what it knows and what it does not: the last day or two
+  can still be settling in Cost Explorer, and a monthly pattern still reads as
+  a spike. It makes one
   Cost Explorer request, which AWS charges $0.01 for, and says so first. It can
   tell a webhook, and be recorded and replayed with no request at all. See
   [Spend anomalies](packages/cli/README.md#spend-anomalies).

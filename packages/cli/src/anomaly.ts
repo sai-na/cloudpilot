@@ -2,7 +2,9 @@
  * Spend anomalies: which services cost unusually much on the latest complete
  * day, judged against the days before it. The rule is fixed and has no model
  * in it: the median and the median absolute deviation (MAD) of the baseline
- * days, plus a floor so that pennies never raise an alarm.
+ * days, plus a floor so that pennies never raise an alarm, plus a check that
+ * the day is also high for its own weekday, so that a weekly job is not
+ * flagged every week.
  *
  * Pure: no AWS, no clock. The date of "today" is passed in, so the same days
  * always give the same answer.
@@ -17,6 +19,9 @@ export const MIN_BASELINE_DAYS = 7;
 
 /** With a flat baseline (MAD of zero) a day must also be this much above the median, as a fraction of it. */
 export const FLAT_RISE = 0.5;
+
+/** Fewer earlier days on the same weekday as the latest one than this, and the weekday cannot be checked. */
+export const MIN_SAME_WEEKDAY_DAYS = 2;
 
 /** The days a "if this continues" figure adds up. */
 export const PROJECTION_DAYS = 30;
@@ -52,6 +57,20 @@ export interface AnomalyRule {
   sensitivity: number;
   /** How many dollars a day above the median it must be at least. */
   minIncreaseUsd: number;
+  /** Also require the day to be above the earlier days on its own weekday by at least `minIncreaseUsd`. */
+  weekdayCheck: boolean;
+}
+
+/** The latest day against the earlier days on the same weekday (UTC). */
+export interface WeekdayComparison {
+  /** "Friday". */
+  weekday: string;
+  /** How many earlier days in the baseline fall on that weekday. */
+  days: number;
+  /** False when there were fewer than MIN_SAME_WEEKDAY_DAYS of them: the weekday could not be checked and the day was flagged on the first two tests alone. */
+  checked: boolean;
+  /** The most any of those days cost. Only when `checked`. */
+  maxUsd?: number;
 }
 
 export interface Anomaly {
@@ -69,6 +88,17 @@ export interface Anomaly {
   /** What that adds up to over 30 days, if every day cost as much as this one. Arithmetic, not a forecast. */
   monthlyIfContinuesUsd: number;
   baselineDays: number;
+  /** How the day compares with its own weekday. null for new spend, and when the check is off. */
+  sameWeekday: WeekdayComparison | null;
+}
+
+/** A day that was high against the usual day but is no higher than earlier days on its own weekday, so it was not flagged. */
+export interface WeekdayCleared {
+  service: string;
+  day: string;
+  costUsd: number;
+  medianUsd: number;
+  sameWeekday: WeekdayComparison;
 }
 
 export interface AnomalyReport {
@@ -87,9 +117,14 @@ export interface AnomalyReport {
   rule: AnomalyRule;
   /** Largest increase first. */
   anomalies: Anomaly[];
+  /** Services the weekday check held back, so that it never hides one silently. Name order. */
+  weekdayCleared: WeekdayCleared[];
   totalIncreaseUsd: number;
   totalMonthlyIfContinuesUsd: number;
 }
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const weekdayOf = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay();
 
 /** The middle value, or the mean of the two middle ones. */
 export function median(values: number[]): number {
@@ -125,31 +160,60 @@ const fromCents = (cents: number) => cents / 100;
 
 /**
  * Judge one service. Everything is in whole cents, so a figure on the screen
- * is the figure the rule used. Returns what is unusual about the day, or
- * nothing.
+ * is the figure the rule used. `same` is the baseline days that fall on the
+ * latest day's weekday. Returns what is unusual about the day, or what the
+ * weekday check held back, or nothing.
  */
-function judge(service: string, day: string, baseline: number[], latest: number, rule: AnomalyRule): Anomaly | undefined {
+function judge(
+  service: string,
+  day: string,
+  baseline: number[],
+  same: number[],
+  latest: number,
+  rule: AnomalyRule,
+): { anomaly?: Anomaly; cleared?: WeekdayCleared } {
   const usual = Math.round(median(baseline));
   const spread = Math.round(medianAbsoluteDeviation(baseline, usual));
   const increase = latest - usual;
   // The floor first: a rise of pennies is never an anomaly, however flat the baseline.
-  if (increase <= 0 || increase < toCents(rule.minIncreaseUsd)) return undefined;
+  if (increase <= 0 || increase < toCents(rule.minIncreaseUsd)) return {};
   const unusual =
     spread > 0
       ? latest > usual + rule.sensitivity * MAD_SCALE * spread
       : // A flat baseline has no spread to measure against, so the day must be clearly more than the usual one: by half again.
         latest >= usual * (1 + FLAT_RISE);
-  if (!unusual) return undefined;
+  if (!unusual) return {};
+  const kind = baseline.every((c) => c === 0) ? "new" : "spike";
+
+  // New spend has no history to have a weekday in. Otherwise the day must also stand out among its own weekday:
+  // above the largest of the earlier ones by at least the floor.
+  let sameWeekday: WeekdayComparison | null = null;
+  if (kind === "spike" && rule.weekdayCheck) {
+    const weekday = WEEKDAYS[weekdayOf(day)]!;
+    if (same.length < MIN_SAME_WEEKDAY_DAYS) {
+      sameWeekday = { weekday, days: same.length, checked: false };
+    } else {
+      const most = Math.max(...same);
+      sameWeekday = { weekday, days: same.length, checked: true, maxUsd: fromCents(most) };
+      const rise = latest - most;
+      if (rise <= 0 || rise < toCents(rule.minIncreaseUsd)) {
+        return { cleared: { service, day, costUsd: fromCents(latest), medianUsd: fromCents(usual), sameWeekday } };
+      }
+    }
+  }
   return {
-    service,
-    kind: baseline.every((c) => c === 0) ? "new" : "spike",
-    day,
-    costUsd: fromCents(latest),
-    medianUsd: fromCents(usual),
-    madUsd: fromCents(spread),
-    increaseUsd: fromCents(increase),
-    monthlyIfContinuesUsd: fromCents(increase * PROJECTION_DAYS),
-    baselineDays: baseline.length,
+    anomaly: {
+      service,
+      kind,
+      day,
+      costUsd: fromCents(latest),
+      medianUsd: fromCents(usual),
+      madUsd: fromCents(spread),
+      increaseUsd: fromCents(increase),
+      monthlyIfContinuesUsd: fromCents(increase * PROJECTION_DAYS),
+      baselineDays: baseline.length,
+      sameWeekday,
+    },
   };
 }
 
@@ -160,7 +224,7 @@ function judge(service: string, day: string, baseline: number[], latest: number,
  * a day that Cost Explorer did return cost nothing that day.
  */
 export function findAnomalies(parts: DayCost[], today: string, rule: AnomalyRule): AnomalyReport {
-  const empty = { today, latestDayEstimated: false, baselineDaysFound: 0, servicesChecked: 0, rule, anomalies: [], totalIncreaseUsd: 0, totalMonthlyIfContinuesUsd: 0 };
+  const empty = { today, latestDayEstimated: false, baselineDaysFound: 0, servicesChecked: 0, rule, anomalies: [], weekdayCleared: [], totalIncreaseUsd: 0, totalMonthlyIfContinuesUsd: 0 };
   const days = mergeDays(parts).filter((d) => d.day < today);
   const latest = days.at(-1);
   if (!latest) return { ...empty, status: "no-data" };
@@ -170,11 +234,15 @@ export function findAnomalies(parts: DayCost[], today: string, rule: AnomalyRule
   if (before.length < MIN_BASELINE_DAYS) return { ...known, status: "not-enough-history" };
 
   const services = [...new Set(days.flatMap((d) => Object.keys(d.costs)))].sort();
+  const sameDays = before.filter((d) => weekdayOf(d.day) === weekdayOf(latest.day));
   const anomalies: Anomaly[] = [];
+  const weekdayCleared: WeekdayCleared[] = [];
   for (const service of services) {
     const baseline = before.map((d) => toCents(d.costs[service] ?? 0));
-    const found = judge(service, latest.day, baseline, toCents(latest.costs[service] ?? 0), rule);
-    if (found) anomalies.push(found);
+    const same = sameDays.map((d) => toCents(d.costs[service] ?? 0));
+    const { anomaly, cleared } = judge(service, latest.day, baseline, same, toCents(latest.costs[service] ?? 0), rule);
+    if (anomaly) anomalies.push(anomaly);
+    if (cleared) weekdayCleared.push(cleared);
   }
   // Largest increase first; the name settles a tie, so the order never depends on how Cost Explorer listed the services.
   anomalies.sort((a, b) => b.increaseUsd - a.increaseUsd || (a.service < b.service ? -1 : 1));
@@ -185,12 +253,21 @@ export function findAnomalies(parts: DayCost[], today: string, rule: AnomalyRule
     baseline: { days: before.length, from: before[0]!.day, to: before.at(-1)!.day },
     servicesChecked: services.length,
     anomalies,
+    weekdayCleared,
     totalIncreaseUsd: fromCents(totalCents),
     totalMonthlyIfContinuesUsd: fromCents(totalCents * PROJECTION_DAYS),
   };
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** How a day compares with its own weekday, in words. */
+function weekdayPhrase(w: WeekdayComparison): string {
+  if (!w.checked) {
+    return `could not be checked: ${plural(w.days, `earlier ${w.weekday}`)} in the baseline, and at least ${MIN_SAME_WEEKDAY_DAYS} are needed`;
+  }
+  return `previous ${w.weekday}s: at most ${money(w.maxUsd!)} (${plural(w.days, "day")})`;
+}
 
 /** The day before `day`, as YYYY-MM-DD. */
 const dayBefore = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
@@ -213,6 +290,7 @@ export function renderAnomalies(report: AnomalyReport, context: { accountId: str
   } else {
     const { baseline } = report;
     lines.push(`Judged: ${latest}, the latest complete day, against the ${baseline!.days} days before it (${baseline!.from} to ${baseline!.to}).`);
+    if (!rule.weekdayCheck) lines.push("The weekday check is off (--no-weekday-check): a day is not compared with the earlier days on its own weekday.");
   }
   if (latest) {
     const settling = [
@@ -240,6 +318,7 @@ export function renderAnomalies(report: AnomalyReport, context: { accountId: str
           `     ${a.day}    ${money(a.costUsd)}`,
           `     usual day     ${usual}`,
           `     difference    +${money(a.increaseUsd)} a day; if this continues, about +${money(a.monthlyIfContinuesUsd)} over ${PROJECTION_DAYS} days`,
+          ...(a.sameWeekday ? [`     same weekday  ${weekdayPhrase(a.sameWeekday)}`] : []),
           "",
         );
       });
@@ -248,10 +327,23 @@ export function renderAnomalies(report: AnomalyReport, context: { accountId: str
         `The rule says a day was unusual, not why. The ${PROJECTION_DAYS}-day figure is arithmetic on one day, not a forecast.`,
       );
     }
+    if (report.weekdayCleared.length > 0) {
+      lines.push(
+        "",
+        `Not flagged: ${report.weekdayCleared.length === 1 ? "its day was" : "their days were"} high against the usual day, but no higher than earlier days on the same weekday:`,
+        ...report.weekdayCleared.map((c) => `  ${c.service}: ${money(c.costUsd)} on ${c.day}; ${weekdayPhrase(c.sameWeekday)}`),
+      );
+    }
   }
   lines.push("", context.requests === 0 ? "Cost Explorer requests made: 0 (read from the recording)." : `Cost Explorer requests made: ${context.requests} (AWS charges $${REQUEST_USD.toFixed(2)} each).`);
   return lines.join("\n");
 }
+
+/** `maxUsd` is null, not missing, when the weekday could not be checked; the whole field is null when it does not apply. */
+const weekdayJson = (w: WeekdayComparison | null) => (w ? { weekday: w.weekday, days: w.days, checked: w.checked, maxUsd: w.maxUsd ?? null } : null);
+
+/** One anomaly as JSON, in the shape `anomalies --json` and the webhook body both use. */
+export const anomalyJson = (a: Anomaly) => ({ ...a, sameWeekday: weekdayJson(a.sameWeekday) });
 
 /**
  * The result as JSON. The shape is part of the command's interface: new
@@ -272,8 +364,9 @@ export function anomaliesJson(report: AnomalyReport, context: { accountId: strin
     baseline: report.baseline ?? null,
     baselineDaysFound: report.baselineDaysFound,
     servicesChecked: report.servicesChecked,
-    rule: { ...report.rule, madScale: MAD_SCALE, flatRise: FLAT_RISE, minBaselineDays: MIN_BASELINE_DAYS, projectionDays: PROJECTION_DAYS },
-    anomalies: report.anomalies,
+    rule: { ...report.rule, madScale: MAD_SCALE, flatRise: FLAT_RISE, minBaselineDays: MIN_BASELINE_DAYS, minSameWeekdayDays: MIN_SAME_WEEKDAY_DAYS, projectionDays: PROJECTION_DAYS },
+    anomalies: report.anomalies.map(anomalyJson),
+    weekdayCleared: report.weekdayCleared.map((c) => ({ ...c, sameWeekday: weekdayJson(c.sameWeekday) })),
     totalIncreaseUsd: report.totalIncreaseUsd,
     totalMonthlyIfContinuesUsd: report.totalMonthlyIfContinuesUsd,
     note: "Cost Explorer can take a day or two to settle, so the figures for the last day or two may still change.",

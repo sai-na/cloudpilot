@@ -7,7 +7,7 @@
  * never printed, saved or put in an error message; wherever a target has to be
  * named, it is named by its host.
  */
-import { PROJECTION_DAYS, type AnomalyReport } from "./anomaly.js";
+import { anomalyJson, PROJECTION_DAYS, type AnomalyReport } from "./anomaly.js";
 import { redact } from "./recording.js";
 import { comparisonLine, money, shortId, shownFindings, words } from "./report.js";
 import type { Finding, ScanResult } from "./types.js";
@@ -135,7 +135,7 @@ function draft(notice: Notice, code: (s: string) => string): Draft {
       headline: `CloudPilot: ${plural(n, "service")} cost${n === 1 ? "s" : ""} more than usual on ${report.latestDay}, ${money(report.totalIncreaseUsd)} a day more, AWS account ${notice.accountId}`,
       intro: [
         ...banner,
-        `Each service is compared with its own usual day: the median of the ${report.baseline?.days} days before. Cost Explorer can take a day or two to settle, so these figures may still change.`,
+        `Each service is compared with its own usual day: the median of the ${report.baseline?.days} days before, and, where the weekday could be checked, higher than the earlier days on the same weekday. Cost Explorer can take a day or two to settle, so these figures may still change.`,
       ],
       items: report.anomalies.map(
         (a, i) => `${i + 1}. ${a.service}: ${money(a.costUsd)} on ${a.day}, ${a.kind === "new" ? "new spend, nothing before" : `usually ${money(a.medianUsd)}`} (+${money(a.increaseUsd)} a day)`,
@@ -219,7 +219,7 @@ export function compose(notice: Notice, target: Pick<Target, "kind">): string {
       day: report.latestDay,
       totalIncreaseUsd: report.totalIncreaseUsd,
       totalMonthlyIfContinuesUsd: report.totalMonthlyIfContinuesUsd,
-      anomalies: report.anomalies,
+      anomalies: report.anomalies.map(anomalyJson),
     });
   }
   if (notice.kind === "findings") {
