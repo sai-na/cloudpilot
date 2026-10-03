@@ -152,6 +152,20 @@ export interface Finding {
   alternative?: Fix & { monthlySavingUsd: number; description: string };
   /** 0 to 1. Lower when the supporting data is thin. */
   confidence: number;
+  /** Set when the scan was compared with an earlier one: true if that scan did not have this finding. */
+  isNew?: boolean;
+}
+
+/** How a scan differs from the one before it. */
+export interface Comparison {
+  /** When the scan it is compared with was taken. */
+  previousScannedAt: string;
+  newCount: number;
+  newMonthlyUsd: number;
+  /** Findings the earlier scan had, in regions scanned again, that are now gone. */
+  resolved: Array<{ title: string; region: string; resourceIds: string[]; monthlyCostUsd: number }>;
+  resolvedMonthlyUsd: number;
+  unchangedCount: number;
 }
 
 /** One region's inventory, prices and findings. */
@@ -172,6 +186,8 @@ export interface ScanResult {
   /** Resources left out because they are tagged cloudpilot:ignore=true. */
   skippedByTag: string[];
   warnings: string[];
+  /** Present when the scan was compared with an earlier one. */
+  comparison?: Comparison;
 }
 
 export const HOURS_PER_MONTH = 730;

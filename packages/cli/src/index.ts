@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { Command } from "commander";
 import { buildTools, forModel, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
 import { callerAccount, collect, enabledRegions, readCpu } from "./collect.js";
+import { compareScans, isScanResult } from "./compare.js";
 import { detect, mergeScans } from "./detect.js";
 import { loadEnvFile } from "./env.js";
 import { evaluate, renderEvaluation } from "./evaluate.js";
@@ -122,6 +123,28 @@ function begin(options: CommonOptions, command: "scan" | "ask", question: string
   if (json) note(banner);
   else console.log(`${banner}\n`);
   return { banner, scope: { homeRegion: session.homeRegion, region: session.region } };
+}
+
+/**
+ * The earlier scan to compare with. By default that is the last scan made
+ * from this directory, so a repeat scan says what changed without being asked.
+ */
+async function previousScan(options: { compare?: string | false; replay?: string }): Promise<ScanResult | undefined> {
+  if (options.compare === false) return undefined;
+  const explicit = typeof options.compare === "string";
+  // A replay repeats a recording exactly; it only compares when told what to compare with.
+  if (!explicit && options.replay) return undefined;
+  const path = explicit ? (options.compare as string) : LAST_SCAN;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, "utf8"));
+  } catch (err) {
+    if (explicit) throw new Error(`Cannot read ${path} to compare with: ${err instanceof Error ? err.message : err}`);
+    return undefined;
+  }
+  if (isScanResult(parsed)) return parsed;
+  if (explicit) throw new Error(`${path} is not a CloudPilot scan result (save one with --json).`);
+  return undefined;
 }
 
 /** Run a task per item, a few at a time, keeping the results in the order of the items. */
@@ -252,8 +275,17 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
   .option("--out <file>", "also write the report as Markdown")
   .option("--html <file>", "also write the report as one self-contained HTML file")
   .option("--explain", "have a model write the summary (needs a model API key; templated otherwise)")
-  .action(async (options: CommonOptions & { json?: boolean; out?: string; html?: string; explain?: boolean }) => {
-    const { result, banner, scope } = await runScan(options, "scan", undefined, Boolean(options.json));
+  .option("--compare <file>", "say what changed since this earlier scan (default: the last scan made from this directory)")
+  .option("--no-compare", "do not compare with an earlier scan")
+  .option("--only-new", "list only the findings that are new since the earlier scan")
+  .action(async (options: CommonOptions & { json?: boolean; out?: string; html?: string; explain?: boolean; compare?: string | false; onlyNew?: boolean }) => {
+    // Read the earlier scan first: this run saves its own result over it.
+    const previous = await previousScan(options);
+    const { result: scanned, banner, scope } = await runScan(options, "scan", undefined, Boolean(options.json));
+    const compared = previous ? compareScans(previous, scanned) : undefined;
+    if (previous && !compared && typeof options.compare === "string") note("The scan to compare with is of a different account; comparison skipped.");
+    const result = compared ?? scanned;
+    const view = { onlyNew: Boolean(options.onlyNew) };
 
     // Every scan ends with a summary: written by a model on request, built from the findings otherwise.
     const summary = options.explain
@@ -263,15 +295,15 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
     if (options.json) {
       console.log(JSON.stringify({ ...result, summary, ...(banner ? { replay: banner } : {}) }, null, 2));
     } else {
-      console.log(renderText(result));
+      console.log(renderText(result, view));
       console.log(`\nSummary\n\n${summary}`);
     }
     if (options.out) {
-      await writeFile(options.out, redact(renderMarkdown(result, summary, banner)));
+      await writeFile(options.out, redact(renderMarkdown(result, summary, banner, view)));
       note(`Report written to ${options.out}`);
     }
     if (options.html) {
-      await writeFile(options.html, redact(renderHtml(result, { summary, banner })));
+      await writeFile(options.html, redact(renderHtml(result, { summary, banner, ...view })));
       note(`HTML report written to ${options.html}`);
     }
     finish(result);

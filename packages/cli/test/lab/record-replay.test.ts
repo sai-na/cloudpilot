@@ -87,6 +87,22 @@ test("with no --profile the standard credential chain is used, as in CloudShell"
   assert.match(result.summary, /^Estimated waste: \$/);
 });
 
+test("a second scan from the same directory says by itself that nothing has changed", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+  const run = () =>
+    spawnSync(process.execPath, ["--import", TSX, CLI, "scan", "--profile", PROFILE, "--region", REGION], {
+      encoding: "utf8",
+      cwd,
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  assert.doesNotMatch(first.stdout, /since the last scan/i);
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Nothing has changed since the last scan \(\S+\)\./);
+});
+
 function roleArn(): string {
   const account = execFileSync("aws", ["sts", "get-caller-identity", "--profile", "cloudpilot-seed", "--query", "Account", "--output", "text"], { encoding: "utf8" }).trim();
   return `arn:aws:iam::${account}:role/cloudpilot-readonly`;

@@ -130,6 +130,24 @@ commands and the finding data itself always carry the complete ID, so a
 command can be copied and run as it stands, and text handed to a model,
 including the MCP tool results, keeps whole IDs throughout.
 
+### What changed since last time
+
+A repeat scan should not make you read every finding again. CloudPilot saves
+each scan to `.cloudpilot/last-scan.json`, and the next scan from the same
+directory compares with it without being asked:
+
+```
+10 findings, $151.53 per month of estimated waste
+Since the last scan (2026-10-02T09:00:00Z): 2 new ($59.74 a month), 1 resolved ($3.65 a month), 7 unchanged.
+```
+
+New findings are marked, and what was resolved is listed. `--only-new` lists
+just the new findings, `--compare <file>` compares with a scan saved earlier
+by `--json`, and `--no-compare` turns it off. With `--json` every finding is
+kept and carries `isNew`, with the counts under `comparison`. A finding in a
+region that was not scanned again is never reported as resolved, and scans of
+different accounts are not compared.
+
 ### Score it against the waste lab
 
 ```sh
@@ -263,6 +281,9 @@ AWS_ENDPOINT_URL=http://localhost:5050 node dist/index.js scan --region ap-south
 | `--out <file>` | `scan` only: also write a Markdown report |
 | `--json` | `scan` only: print the result as JSON |
 | `--explain` | `scan` only: have a model write the summary |
+| `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |
+| `--no-compare` | `scan` only: do not compare |
+| `--only-new` | `scan` only: list only the findings that are new since the earlier scan |
 | `--lookback-hours <n>` | Hours of CPU history used to judge idleness. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
 | `--offline` | Use only `--price-file` for prices |

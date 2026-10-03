@@ -17,6 +17,9 @@ export function allowedValues(result: ScanResult, extra?: { inventories?: Invent
   const source = JSON.stringify([result, extra?.inventories ?? null]);
   const amounts = [
     result.totalMonthlyWasteUsd,
+    ...(result.comparison
+      ? [result.comparison.newMonthlyUsd, result.comparison.resolvedMonthlyUsd, ...result.comparison.resolved.map((r) => r.monthlyCostUsd)]
+      : []),
     ...result.findings.flatMap((f) => [f.monthlyCostUsd, ...(f.alternative ? [f.alternative.monthlySavingUsd] : [])]),
     // Unit prices quoted inside cost notes, such as "$0.114/GB-month".
     ...[...source.matchAll(DOLLARS)].map((m) => Number(m[1]!.replace(/,/g, ""))),

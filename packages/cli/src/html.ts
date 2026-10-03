@@ -2,7 +2,7 @@
  * The scan as one self-contained HTML file: no fonts, images, scripts or
  * styles are fetched from anywhere, so it opens offline and prints cleanly.
  */
-import { header, money, regionsWithFindings, shortId, skippedLine } from "./report.js";
+import { comparisonLine, header, money, regionsWithFindings, shortId, shownFindings, skippedLine } from "./report.js";
 import type { Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
@@ -43,6 +43,11 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 .facts div { display: flex; gap: 0.5rem; }
 .facts dt { font-weight: 700; color: var(--ink); }
 .facts dd { margin: 0; }
+.since { margin: -1rem 0 2.25rem; font-weight: 700; }
+.resolved { margin-bottom: 2rem; }
+.resolved h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
+.resolved ul { margin: 0; padding-left: 1.1rem; }
+.new { display: inline-block; background: var(--marker); font-size: 0.8125rem; font-weight: 800; padding: 0.05em 0.5em; border-radius: 0.2em 0.6em 0.3em 0.5em; vertical-align: 0.15em; }
 .summary { border-top: 3px solid var(--ink); padding-top: 1.25rem; margin-bottom: 2.5rem; }
 .summary h2, .notes h2 { font-size: 1.375rem; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 0.6rem; }
 .summary p { margin: 0 0 0.5rem; max-width: 46rem; }
@@ -162,7 +167,7 @@ ${commands(fix.commands)}
 }
 
 /** The report as a complete HTML document. */
-export function renderHtml(result: ScanResult, options: { summary?: string; banner?: string } = {}): string {
+export function renderHtml(result: ScanResult, options: { summary?: string; banner?: string; onlyNew?: boolean } = {}): string {
   const count = result.findings.length;
   const headline =
     count === 0
@@ -174,12 +179,14 @@ export function renderHtml(result: ScanResult, options: { summary?: string; bann
       ? result.regions[0]!
       : `${result.regions.length} scanned, findings in ${regionsWithFindings(result).join(", ") || "none"}`;
 
-  const findings = result.findings
+  const since = comparisonLine(result);
+  const resolved = result.comparison?.resolved ?? [];
+  const findings = shownFindings(result, options.onlyNew)
     .map(
       (f) => `<article class="finding">
 <p class="amount"><mark>${money(f.monthlyCostUsd)}</mark><small>a month</small></p>
 <div>
-<h2>${escape(f.title)}</h2>
+<h2>${f.isNew ? '<span class="new">New</span> ' : ""}${escape(f.title)}</h2>
 <p class="where"><span class="id" title="${escape(f.resourceIds.join(", "))}">${escape(f.resourceIds.map(shortId).join(", "))}</span> in ${escape(f.region)}, ${escape(f.resourceType)}, rule confidence ${Math.round(f.confidence * 100)}%</p>
 <ul>
 ${f.evidence.map((e) => `<li>${escape(e)}</li>`).join("\n")}
@@ -216,6 +223,8 @@ ${options.banner ? `<p class="replay" role="note">${escape(options.banner)}</p>`
 <div><dt>Scanned</dt><dd>${escape(result.scannedAt)}</dd></div>
 <div><dt>Prices</dt><dd>${escape((pricesLine ?? "").replace(/^Prices: /, ""))}</dd></div>
 </dl>
+${since ? `<p class="since">${escape(since)}</p>` : ""}
+${resolved.length > 0 ? `<section class="resolved">\n<h2>Resolved since the last scan</h2>\n<ul>\n${resolved.map((r) => `<li>${escape(r.title)} (${escape(r.resourceIds.map(shortId).join(", "))}), ${money(r.monthlyCostUsd)} a month</li>`).join("\n")}\n</ul>\n</section>` : ""}
 ${options.summary ? `<section class="summary">\n<h2>Summary</h2>\n${summaryBlocks(options.summary)}\n</section>` : ""}
 ${findings}
 <section class="notes">
