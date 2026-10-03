@@ -1,10 +1,7 @@
 import OpenAI from "openai";
 import { buildTools, groundRules, MissingCredentialsError, modelRequest, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { namedModel, pickOpenAIModel, type ModelJob } from "./models.js";
 import type { ScanResult } from "./types.js";
-
-/** Tried in order when no model is named; the first one the account can use wins. */
-const MODEL_PREFERENCE = [/^gpt-6\.1/, /^gpt-6/, /^gpt-5\.5/, /^gpt-5/, /^gpt-4/];
-const NOT_A_CHAT_MODEL = /audio|realtime|image|tts|transcribe|search|embedding|moderation|codex|instruct/;
 
 /** Stop a question that keeps calling tools without ever answering. */
 const MAX_STEPS = 12;
@@ -14,17 +11,13 @@ function client(): OpenAI {
   return new OpenAI(modelRequest());
 }
 
-async function resolveModel(openai: OpenAI, options: LlmOptions): Promise<string> {
-  const named = options.model ?? process.env.CLOUDPILOT_OPENAI_MODEL;
+async function resolveModel(openai: OpenAI, options: LlmOptions, job: ModelJob): Promise<string> {
+  const named = namedModel(options, job) ?? process.env.CLOUDPILOT_OPENAI_MODEL;
   if (named) return named;
   const ids: string[] = [];
   for await (const model of openai.models.list()) ids.push(model.id);
-  const chat = ids.filter((id) => !NOT_A_CHAT_MODEL.test(id)).sort();
-  for (const wanted of MODEL_PREFERENCE) {
-    // The shortest match is the undated alias rather than a snapshot.
-    const match = chat.filter((id) => wanted.test(id)).sort((a, b) => a.length - b.length)[0];
-    if (match) return match;
-  }
+  const picked = pickOpenAIModel(ids, job);
+  if (picked) return picked;
   throw new Error("No usable OpenAI chat model found for this key. Pass --model.");
 }
 
@@ -40,7 +33,7 @@ function answerOf(response: OpenAI.Responses.Response): string {
 export async function summarize(result: ScanResult, options: LlmOptions = {}): Promise<string> {
   const openai = client();
   const response = await openai.responses.create({
-    model: await resolveModel(openai, options),
+    model: await resolveModel(openai, options, "summary"),
     instructions: groundRules(result),
     input: summaryRequest(result),
   });
@@ -50,7 +43,7 @@ export async function summarize(result: ScanResult, options: LlmOptions = {}): P
 /** Answer a free-form question about the account, letting the model look things up in the scan. */
 export async function ask(question: string, ctx: AskContext): Promise<string> {
   const openai = client();
-  const model = await resolveModel(openai, ctx.llm ?? {});
+  const model = await resolveModel(openai, ctx.llm ?? {}, "ask");
   const specs = buildTools(ctx);
   const tools: OpenAI.Responses.FunctionTool[] = specs.map((spec) => ({
     type: "function",

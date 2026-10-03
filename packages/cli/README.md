@@ -793,11 +793,38 @@ and it has no tool that can change anything.
 Three providers are supported, chosen by whichever credentials are present
 or by `--provider`:
 
-| Provider | Needs | Default model |
-|---|---|---|
-| `anthropic` | `ANTHROPIC_API_KEY` | `claude-opus-5-5` |
-| `openai` | `OPENAI_API_KEY` | the newest GPT model the key can use |
-| `bedrock` | `--bedrock-profile <aws profile>` and `npm install @anthropic-ai/bedrock-sdk` | Claude Haiku 4.5 |
+| Provider | Needs | Default model for the summary | Default model for `ask` |
+|---|---|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-opus-5-5` |
+| `openai` | `OPENAI_API_KEY` | the newest `-mini` GPT model the key can use | the newest full-size GPT model the key can use |
+| `bedrock` | `--bedrock-profile <aws profile>` and `npm install @anthropic-ai/bedrock-sdk` | Claude Haiku 4.5 | Claude Haiku 4.5 |
+
+**The model is picked by the job.** The summary that `--explain` writes is a
+short formatting job over facts the scanner already worked out, so it gets a
+small, fast model. `ask` may look things up over several turns, so it gets a
+stronger one. For OpenAI the defaults are picked from the models the key can
+list: the summary takes the newest family that has a `-mini` model, `ask` the
+newest family that has a full-size one, and a key with no `-mini` model uses
+the same model for both. Bedrock has one default, Haiku 4.5, for both jobs,
+because it is the only Bedrock model CloudPilot names and Bedrock model IDs
+depend on your account and region: name a stronger one for `ask` yourself.
+
+To choose the model yourself, from first to last:
+
+1. `--model <id>` on the command line wins for whatever that command does.
+2. `CLOUDPILOT_MODEL_SUMMARY` names the model for the `--explain` summary and
+   `CLOUDPILOT_MODEL_ASK` the one for `ask`. They can be set in a `.env` file.
+3. The defaults above.
+
+(For OpenAI, the older `CLOUDPILOT_OPENAI_MODEL` still names one model for both
+jobs, after the two variables above.) A model name is passed to the provider
+as given. One that the provider does not have, or the key cannot use, fails as
+it always has: the provider's reason is printed, and `--explain` shows the
+templated summary. The model only ever writes words: the output check and the
+templated fallback below are the same for every model, and a model never
+computes a figure. A recording stores what the model said for each job, not
+which model said it, so `--replay` is unaffected by any of this; with
+`--live-llm` the job's model is called live.
 
 CloudPilot works with no model at all. Without a key, `scan` and `eval`
 print every finding, cost and fix command; `scan --explain` says in one line
@@ -1123,7 +1150,7 @@ say so: see [Watch it](#watch-it).
 | `--price-file <path>` | Saved price table to fall back on |
 | `--offline` | Use only `--price-file` for prices |
 | `--provider <name>` | `anthropic`, `openai` or `bedrock`. Default: whichever key is set |
-| `--model <id>` | Model for `--explain` and `ask` |
+| `--model <id>` | Model to use for whatever the command does (`--explain` summary or `ask`), over `CLOUDPILOT_MODEL_SUMMARY` and `CLOUDPILOT_MODEL_ASK`. Default: a small, fast model for the summary and a stronger one for `ask`, see [Ask questions](#ask-questions-needs-a-model-api-key) |
 | `--bedrock-profile <name>` | AWS profile for Claude through Amazon Bedrock |
 | `--record <dir>` | Run live and save the run for replay. Also for `kube` and `anomalies` |
 | `--replay <dir>` | Repeat a recorded run with no network calls. Also for `kube` and `anomalies` |

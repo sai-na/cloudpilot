@@ -430,7 +430,7 @@ async function modelText(run: () => Promise<string>, allowed: Allowed, result: S
 function withModelOptions(command: Command): Command {
   return command
     .option("--provider <name>", "model provider for the AI summary and ask: anthropic, openai or bedrock (default: whichever key is set)")
-    .option("--model <id>", "model for the AI summary and ask")
+    .option("--model <id>", "model to use for whatever this command does, over CLOUDPILOT_MODEL_SUMMARY and CLOUDPILOT_MODEL_ASK (default: a small, fast model for the AI summary, a stronger one for ask)")
     .option("--bedrock-profile <name>", "use Claude through Amazon Bedrock with this AWS profile instead of an Anthropic key", process.env.CLOUDPILOT_BEDROCK_PROFILE)
     .option("--bedrock-region <region>", "Bedrock region (defaults to the home region)");
 }
