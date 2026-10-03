@@ -239,25 +239,22 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
     attempt("s3:ListAllMyBuckets", warnings, [], () => collectBuckets(s3, opts.region, warnings)),
   ]);
 
-  await Promise.all(
-    instances
+  await Promise.all([
+    ...instances
       .filter((i) => i.state === "running")
       .map(async (i) => {
         i.cpu = await attempt(`cloudwatch:GetMetricData ${i.id}`, warnings, undefined, () =>
           cpuStats(cloudwatch, i.id, opts.lookbackHours),
         );
       }),
-  );
-
-  await Promise.all(
-    rdsInstances
+    ...rdsInstances
       .filter((d) => d.status === "available")
       .map(async (d) => {
         d.connections = await attempt(`cloudwatch:GetMetricData ${d.id}`, warnings, undefined, () =>
           connectionStats(cloudwatch, d.id, opts.lookbackHours),
         );
       }),
-  );
+  ]);
 
   return {
     accountId,

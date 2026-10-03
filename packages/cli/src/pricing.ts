@@ -48,12 +48,13 @@ const single = async (...args: Parameters<typeof singleProduct>) => (await singl
 /**
  * Like `singleProduct`, but a price the Price List does not have (a size that
  * does not exist, a type not sold in the region) is simply absent. That
- * leaves a finding unreported rather than ending the scan. A failed request
- * still throws.
+ * leaves a finding unreported rather than ending the scan. A failed request,
+ * or filters that match more than one product, still throws.
  */
-async function optionalProduct(client: PricingClient, serviceCode: string, attrs: Record<string, string>) {
+async function optionalProduct(client: PricingClient, what: string, serviceCode: string, attrs: Record<string, string>) {
   const found = await products(client, serviceCode, attrs);
-  return found.length === 1 ? found[0] : undefined;
+  if (found.length > 1) throw new Error(`price lookup for ${what} returned ${found.length} products, expected 1`);
+  return found[0];
 }
 
 /** "4" and "16 GiB" as numbers, or undefined when the Price List gives something else. */
@@ -122,10 +123,10 @@ export async function fetchPrices(inventory: Inventory, profile?: string, option
         return [type, product] as const;
       }),
     ),
-    Promise.all(smallerTypes.map(async (type) => [type, await optionalProduct(client, "AmazonEC2", ec2Instance(regionCode, type))] as const)),
+    Promise.all(smallerTypes.map(async (type) => [type, await optionalProduct(client, `EC2 ${type}`, "AmazonEC2", ec2Instance(regionCode, type))] as const)),
     Promise.all(
       [...dbHours].map(async ([key, d]) => {
-        const product = await optionalProduct(client, "AmazonRDS", {
+        const product = await optionalProduct(client, `RDS ${key}`, "AmazonRDS", {
           regionCode,
           instanceType: d.instanceClass,
           databaseEngine: RDS_PRICED_ENGINES[d.engine]!,
@@ -137,7 +138,7 @@ export async function fetchPrices(inventory: Inventory, profile?: string, option
     ),
     Promise.all(
       [...dbStorage].map(async ([key, d]) => {
-        const product = await optionalProduct(client, "AmazonRDS", {
+        const product = await optionalProduct(client, `RDS storage ${key}`, "AmazonRDS", {
           regionCode,
           productFamily: "Database Storage",
           databaseEngine: RDS_PRICED_ENGINES[d.engine]!,
