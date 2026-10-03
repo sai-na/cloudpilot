@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "sessions": [
+    {
+      "id": "kube",
+      "command": "kube",
+      "namespace": null,
+      "prometheus": null,
+      "lookbackHours": 1,
+      "prices": {
+        "source": "opencost-defaults",
+        "cpuHourUsd": 0.031611,
+        "memoryGibHourUsd": 0.004237,
+        "storageGibMonthUsd": 0.04
+      },
+      "context": "kind-cloudpilot-lab",
+      "namespaces": [
+        "cloudpilot",
+        "default",
+        "local-path-storage",
+        "monitoring",
+        "shop"
+      ],
+      "recordedAt": "2026-10-03T19:49:30.186Z"
+    }
+  ]
+}

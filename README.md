@@ -12,6 +12,13 @@ credentials. It reads every region enabled for the account and ends with an
 itemised list: what is wasted, the evidence, what it costs per month, the fix
 command, and what about that fix cannot be undone.
 
+![CloudPilot scanning an AWS account and a Kubernetes cluster, then scoring the cluster scan against an answer key](docs/demo.gif)
+
+The capture is a replay of recorded scans of our own test labs, which is why
+each command shows `REPLAY MODE`. It is made by [`demo/capture.py`](demo/capture.py)
+from recordings in this repository, and a test fails if it stops matching what
+the commands print.
+
 ## What it finds
 
 In an AWS account:
@@ -116,7 +123,7 @@ says what is new, what was resolved and what is unchanged.
 | [`k8s-lab/`](k8s-lab) | The Kubernetes waste lab: a local cluster with seeded waste and its answer key |
 | [`deploy/`](deploy) | Running it unattended: a CloudFormation template for the daily report, which scans the account on a schedule and emails what is new, and a Kubernetes manifest that has a cluster watch itself |
 | [`Dockerfile`](Dockerfile), [`scripts/docker-smoke.sh`](scripts/docker-smoke.sh) | A Docker image of the command with `kubectl` included, to build yourself, and the offline test that checks it: see [Run it in Docker](packages/cli/README.md#run-it-in-docker) |
-| [`demo/`](demo) | Demo runbook and the record and replay scripts |
+| [`demo/`](demo) | Demo runbook, the record and replay scripts, a recorded scan of the Kubernetes lab, and the script that makes the capture above |
 | [`site/`](site) | The landing page |
 
 ## Licence
