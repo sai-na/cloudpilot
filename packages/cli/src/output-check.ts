@@ -20,8 +20,13 @@ const DOLLARS = /\$\s?(\d[\d,]*(?:\.\d+)?)/g;
  * nor a name ending in one of these kinds (non-deployment/x) is read as one.
  */
 const OBJECT = /(?<![\w.-])(?:([a-z0-9](?:[-a-z0-9]*[a-z0-9])?)\/)?(deployment|statefulset|daemonset|persistentvolumeclaim|persistentvolume)\/([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)(?![\w/-])/g;
-/** Address in a URL, which can look like an object (docs/deployment/rolling) and is not one. */
-const URL = /\b[a-z][a-z0-9+.-]*:\/\/\S+/gi;
+/**
+ * Address in a URL, which can look like an object (docs/deployment/rolling) and
+ * is not one. Stopped at a quote or backslash as well as whitespace: the scan
+ * data is read as JSON, where one unbounded match would swallow every field
+ * after the API server's address.
+ */
+const URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`\\]*/gi;
 /**
  * Where a command is pointed: --namespace=shop, --context kind-lab, and -n shop
  * on a line that runs kubectl: elsewhere "-n" is just as likely to be prose.
@@ -92,6 +97,11 @@ export function allowedValues(result: ScanResult, extra?: { inventories?: Invent
       ...objectsIn(source.replace(/\\[nrt"]/g, " ")),
       ...result.findings.flatMap((f) =>
         f.resourceIds.flatMap((id) => objectsIn(id).map((o) => ({ ...o, namespace: CLUSTER_SCOPED.has(o.kind) ? undefined : f.region }))),
+      ),
+      // A comparison names what the previous scan found and this one no longer does,
+      // with its namespace, so the model may name it that way too.
+      ...(result.comparison?.resolved ?? []).flatMap((r) =>
+        r.resourceIds.flatMap((id) => objectsIn(id).map((o) => ({ ...o, namespace: CLUSTER_SCOPED.has(o.kind) ? undefined : r.region }))),
       ),
       ...(extra?.cluster?.workloads ?? []).map((w) => {
         const kind = w.kind.toLowerCase();

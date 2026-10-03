@@ -187,4 +187,7 @@ test("what a comparison resolved is still the scan's to name", () => {
   assert.ok(compared.comparison!.resolved.length > 0);
   assert.deepEqual(unsupportedValues("deployment/reports is resolved: $24.43 a month less.", allowedValues(compared)), []);
   assert.deepEqual(unsupportedValues("deployment/reports is resolved.", allowedValues(next)), ["deployment/reports"]);
+  // The rules ask for the namespace, and a resolved entry carries it, so the qualified form is the scan's too.
+  assert.deepEqual(unsupportedValues("shop/deployment/reports is resolved.", allowedValues(compared)), []);
+  assert.deepEqual(unsupportedValues("payments/deployment/reports is resolved.", allowedValues(compared)), ["payments/deployment/reports"]);
 });

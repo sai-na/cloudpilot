@@ -297,8 +297,8 @@ back.
 `kube` and `ask --kube` record and replay the same way, with
 `--record <dir>` and `--replay <dir>`. A cluster recording holds every answer
 the Kubernetes API gave to the scan's reads (and the cluster's name and API
-server address), plus the model's events. A replay starts `kubectl` for
-no `kubectl` at all: it needs no `kubectl`, no kubeconfig and no network, the clock is
+server address), plus the model's events. A replay starts no `kubectl` at
+all: it needs no `kubectl`, no kubeconfig and no network, the clock is
 pinned to the recording time, and the first line of output is a banner of the
 same kind, naming the cluster instead of the account: `REPLAY MODE: recorded
 <time> from cluster <context>, 4 namespaces. No live calls.` A read the
