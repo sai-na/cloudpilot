@@ -349,7 +349,8 @@ docker run --rm \
 The container user is uid 1000, so on Linux the mounted files must be
 readable by it, and a directory mounted at `/work` must be writable by it
 (`chown 1000 cloudpilot-out`, or run with `--user "$(id -u):$(id -g)"`).
-Otherwise the scan runs and then fails to write the report.
+Otherwise the scan runs and then fails to write the report, and the
+baseline a repeat scan compares with is skipped quietly.
 
 Files the command writes (`--html`, `--out`, and `.cloudpilot/last-scan.json`,
 which a repeat scan compares with) land in `/work` inside the container and
