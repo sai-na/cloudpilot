@@ -7,7 +7,7 @@ import { labelClient } from "./recording.js";
 import { RDS_PRICED_ENGINES, RDS_PRICED_STORAGE, rdsHourKey, rdsStorageKey, type Inventory, type PriceBook } from "./types.js";
 
 /** The Price List Query API is only served from a few regions. */
-const PRICING_ENDPOINT_REGION = "us-east-1";
+export const PRICING_ENDPOINT_REGION = "us-east-1";
 
 interface Product {
   usagetype: string;

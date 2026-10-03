@@ -64,6 +64,11 @@ says what is new, what was resolved and what is unchanged.
 
 ## Also in the box
 
+- **A check before the first scan.** `cloudpilot init` says whether a scan
+  will work from where you are: who the credentials are, which of its reads
+  they are allowed, and whether the cluster can be read. Where access is
+  refused it prints the commands for you to run. It creates and changes
+  nothing.
 - **What changed since last time.** A repeat scan compares with the last one
   made from the same directory and says what is new, what was resolved and
   what is unchanged, so nobody re-reads every finding.

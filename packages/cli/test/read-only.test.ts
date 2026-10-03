@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = ["src/collect.ts", "src/pricing.ts"].map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
+const source = ["src/collect.ts", "src/pricing.ts", "src/preflight.ts"].map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
 
 /** Every AWS operation the code can call: `new XCommand(` and `paginateX(`. */
 const called = [

@@ -15,6 +15,7 @@ import { collectCluster, kubectlReader, parsePrometheusRef, type ClusterInventor
 import { cpuQuantity, detectCluster, memoryQuantity, OPENCOST_DEFAULTS } from "./kube-detect.js";
 import { serveMcp } from "./mcp.js";
 import { allowedValues, unsupportedValues, type Allowed } from "./output-check.js";
+import { awsProbes, KUBECTL_TIMEOUT_MS, preflight, renderPreflight, type PreflightOptions } from "./preflight.js";
 import { fetchPrices, isEmpty, loadPriceFile, noPrices } from "./pricing.js";
 import {
   enableRedaction,
@@ -30,6 +31,7 @@ import {
   startRecord,
   startReplay,
 } from "./recording.js";
+import { READ_ONLY_POLICY } from "./policy.js";
 import { header, money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
 import type { ClusterPrices, Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
 
@@ -72,6 +74,9 @@ const llmOptions = (options: CommonOptions, homeRegion: string) => ({
   bedrockRegion: options.bedrockRegion ?? homeRegion,
 });
 
+/** The region the account-level lookups go to when none is named. */
+const defaultRegion = () => process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1";
+
 /** Progress and warnings go to stderr so stdout stays clean for --json. */
 const note = (message: string) => process.stderr.write(`${message}\n`);
 
@@ -90,7 +95,7 @@ function begin(options: CommonOptions, command: "scan" | "ask", question: string
 
   if (!options.replay) {
     const scope: Scope = {
-      homeRegion: options.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1",
+      homeRegion: options.region ?? defaultRegion(),
       region: options.region ?? null,
     };
     if (options.record) {
@@ -478,6 +483,33 @@ program
     const result = compared ?? scanned;
     const view: ReportOptions = { onlyNew: Boolean(options.onlyNew), noComparison: noComparisonReason(options, previous, compared) };
     await present(result, templatedSummary(result, { shortenIds: true }), view, options);
+  });
+
+program
+  .command("init")
+  .description("Check that a scan will work from here and say what is missing: credentials, read access, kubectl, Prometheus (creates and changes nothing)")
+  .option("--profile <name>", "AWS profile to read with (default: the standard AWS credential chain)", process.env.AWS_PROFILE)
+  .option("--region <region>", "try the AWS reads in this region (default: the region a scan starts from)")
+  .option("--context <name>", "kubectl context to check (default: the current one)")
+  .option("--prometheus <namespace/service:port>", "the Prometheus holding usage history (default: found among the cluster's services)")
+  .option("--json", "print the result as JSON")
+  .option("--print-policy", "print the read-only IAM policy a scan needs, as JSON, and stop")
+  .action(async (options: { profile?: string; region?: string; context?: string; prometheus?: string; json?: boolean; printPolicy?: boolean }) => {
+    if (options.printPolicy) {
+      console.log(JSON.stringify(READ_ONLY_POLICY, null, 2));
+      return;
+    }
+    startLive({ redact: false });
+    const checking: PreflightOptions = {
+      region: options.region ?? defaultRegion(),
+      regionGiven: Boolean(options.region),
+      profile: options.profile,
+      context: options.context,
+      prometheus: options.prometheus ? parsePrometheusRef(options.prometheus) : undefined,
+    };
+    const result = await preflight(checking, { aws: awsProbes(checking), kube: kubectlReader(options.context, KUBECTL_TIMEOUT_MS) });
+    console.log(options.json ? JSON.stringify(result, null, 2) : renderPreflight(result, checking));
+    process.exitCode = result.ready ? 0 : 1;
   });
 
 withCommonOptions(program.command("eval").description("Scan, then score the findings against a waste-lab answer key"))

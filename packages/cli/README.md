@@ -61,6 +61,58 @@ reported as a skipped check instead of ending the scan.
 With `--explain` or `ask`, the findings are also sent to the model provider
 whose API key you set. Without those, nothing leaves AWS and your terminal.
 
+### Check first with `init`
+
+```sh
+npx @meruapps/cloudpilot init
+```
+
+`init` says whether a scan will work from where you are, so you do not find
+out halfway through one. It reports:
+
+- **Who your AWS credentials are**: account and ARN, or that none were found
+  and how to supply them (CloudShell, `--profile`, environment variables).
+- **Which reads are allowed**: for each read in the table above, the cheapest
+  real call of it in one region (`--region`, otherwise where a scan starts:
+  `AWS_REGION`, `AWS_DEFAULT_REGION`, then `us-east-1`). Each read is reported
+  as allowed, denied, failed or not tested, and nothing stops at the first
+  denial. A read AWS refused is denied; a read that errored or did not answer
+  in time is failed, which is not a refusal and asks nothing of IAM. A read
+  that needs something to try on (a bucket, a launch template, an incomplete
+  upload) is tried on the first one found in that region, and reported as not
+  tested when there is none.
+- **The cluster**, when `kubectl` is on the PATH and has a current context (or
+  `--context`): whether each list the cluster scan makes is allowed (a
+  `kubectl get --raw` with `limit=1`), whether a Prometheus is found (or named
+  with `--prometheus`) and answers a query, and how many hours of container
+  history it holds, looking back at most a week. Without `kubectl` or a
+  context, the cluster is skipped in one line that says why.
+- **What to run next**: the `scan` and `kube` commands that will work.
+
+`init` creates and changes nothing. Where a read was refused it prints what to
+apply and leaves it to you: for AWS, the commands that write the read-only
+policy to a file (`cloudpilot init --print-policy`), create it and attach it
+to the credentials' user or role, marked as commands for you to run; for a
+cluster, a pointer to `docs/cloudpilot-kube-readonly.yaml` in the repository
+or to `--prometheus`. A read that only failed asks for none of that: no policy
+commands are printed for it, and a cluster list that did not answer says to
+check that the cluster can be reached from here and to run `init` again.
+The AWS policy is carried in the package, so
+`--print-policy` works wherever CloudPilot was installed; it is the same
+document as `docs/cloudpilot-readonly-policy.json`, and a test fails if the
+two differ.
+
+Every AWS read it makes is one in the table above, and a test fails if it makes
+one that is not, or one that the policy does not allow. Its `kubectl` calls are
+`get --raw` and `config view --minify`, and a test fails if they are anything
+else. The Prometheus queries go through the same service proxy a scan uses.
+
+`--json` prints the result as JSON. The exit code is 0 when at least one of AWS
+and Kubernetes can be scanned (AWS: the credentials work and at least one read
+is allowed; Kubernetes: namespaces and pods can be listed), and 1 when neither
+can. A denied or failed read does not change it: a scan runs and reports that
+read as a skipped check.
+
 ## What it finds
 
 | Pattern | How it is detected | Proposed fix |
@@ -430,16 +482,18 @@ present. It needs Docker and is not part of `npm test`.
 
 These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
-[Kubernetes](#kubernetes).
+[Kubernetes](#kubernetes). `init` takes `--profile`, `--region`, `--context`,
+`--prometheus`, `--json` and `--print-policy`: see
+[Check first with `init`](#check-first-with-init).
 
 | Option | Meaning |
 |---|---|
 | `--profile <name>` | AWS profile to read with. Defaults to `AWS_PROFILE`, then the standard credential chain |
-| `--region <region>` | Scan only this region |
+| `--region <region>` | Scan only this region. With `init`: the region its AWS reads are tried in |
 | `--all-regions` | Scan every region enabled for the account. The default when `--region` is not given |
 | `--html <file>` | `scan` only: also write a self-contained HTML report |
 | `--out <file>` | `scan` only: also write the report to a file, as Markdown, or as plain text when the name ends in `.txt` |
-| `--json` | `scan` only: print the result as JSON |
+| `--json` | `scan` and `init` only: print the result as JSON |
 | `--explain` | `scan` only: have a model write the summary |
 | `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |
 | `--no-compare` | `scan` only: do not compare |
@@ -488,8 +542,9 @@ itself (`kube-system`, `kube-public`, `kube-node-lease`).
 ### What it needs
 
 - **`kubectl`**, which also brings whatever sign-in your cluster uses. Every
-  read is `kubectl get --raw`, which can only GET. A test fails if the code
-  asks kubectl for anything else.
+  cluster read is `kubectl get --raw`, which can only GET; the only other call
+  is `kubectl config view --minify`, to learn the current context. A test fails
+  if the code asks kubectl for anything else.
 - **Prometheus with the kubelet's container metrics**
   (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`),
   which kube-prometheus-stack and most setups collect. It is found among the
@@ -614,6 +669,8 @@ ground rules and tools, with `src/claude.ts` and `src/openai.ts` as providers.
 The cluster side is the same split: `src/kube.ts` holds every read through
 kubectl and Prometheus, `src/kube-detect.ts` the rules over it.
 `src/compare.ts` is a pure function from two scans to what changed.
+`src/preflight.ts` holds the `init` checks as functions over injected probes,
+with the real AWS probes beside them.
 
 ## Licence
 
