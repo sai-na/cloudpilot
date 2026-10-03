@@ -1,4 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -12,35 +14,87 @@ const BLOCK_NETWORK = resolve(here, "block-network.cjs");
 /** The TypeScript loader by absolute URL, so the CLI can run from any directory. */
 export const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 
+interface CliOptions {
+  blockNetwork?: boolean;
+  env?: Record<string, string>;
+  cwd?: string;
+}
+
+/** How the CLI is started: no credentials of any kind, in an empty directory unless one is given. */
+function invocation(args: string[], options: CliOptions) {
+  const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+  return {
+    cwd,
+    argv: [...(options.blockNetwork ? ["--require", BLOCK_NETWORK] : []), "--import", TSX, CLI, ...args],
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+      NO_COLOR: "1",
+      AWS_CONFIG_FILE: "/dev/null",
+      AWS_SHARED_CREDENTIALS_FILE: "/dev/null",
+      AWS_EC2_METADATA_DISABLED: "true",
+      // An unreachable proxy, in case anything honours it.
+      HTTPS_PROXY: "http://127.0.0.1:9",
+      HTTP_PROXY: "http://127.0.0.1:9",
+      ...options.env,
+    },
+  };
+}
+
 /**
  * Run the CLI in an empty directory (or the one given) with no credentials of
  * any kind: no model keys, no AWS profile, no .env. Optionally with every
  * socket blocked.
  */
-export function cli(args: string[], options: { blockNetwork?: boolean; env?: Record<string, string>; cwd?: string } = {}) {
-  const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
-  const run = spawnSync(
-    process.execPath,
-    [...(options.blockNetwork ? ["--require", BLOCK_NETWORK] : []), "--import", TSX, CLI, ...args],
-    {
-      cwd,
-      encoding: "utf8",
-      env: {
-        PATH: process.env.PATH ?? "",
-        HOME: process.env.HOME ?? "",
-        NO_COLOR: "1",
-        AWS_CONFIG_FILE: "/dev/null",
-        AWS_SHARED_CREDENTIALS_FILE: "/dev/null",
-        AWS_EC2_METADATA_DISABLED: "true",
-        // An unreachable proxy, in case anything honours it.
-        HTTPS_PROXY: "http://127.0.0.1:9",
-        HTTP_PROXY: "http://127.0.0.1:9",
-        ...options.env,
-      },
-    },
-  );
+export function cli(args: string[], options: CliOptions = {}) {
+  const { cwd, argv, env } = invocation(args, options);
+  const run = spawnSync(process.execPath, argv, { cwd, encoding: "utf8", env });
   return { status: run.status, stdout: run.stdout, stderr: run.stderr, cwd };
 }
+
+/** The same without blocking the test's own event loop, so a stand-in server in this process can answer the CLI. */
+export function cliAsync(args: string[], options: CliOptions = {}) {
+  const { cwd, argv, env } = invocation(args, options);
+  return new Promise<{ status: number | null; stdout: string; stderr: string; cwd: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, argv, { cwd, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr, cwd }));
+  });
+}
+
+/**
+ * A stand-in for OpenAI's Responses endpoint. `outputs` is what each request
+ * is answered with, in turn; every request is kept. `env` points a process
+ * under test at it, with a key that is good for nothing else.
+ */
+export async function fakeOpenAI(outputs: object[][]) {
+  const requests: any[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      requests.push(JSON.parse(body));
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ id: `resp_${requests.length}`, object: "response", status: "completed", model: "test", output: outputs[requests.length - 1] ?? [] }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    requests,
+    env: { OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`, NO_PROXY: "127.0.0.1" },
+    close: () => server.close(),
+  };
+}
+
+/** What a model that writes this text answers with. */
+export const says = (text: string) => [{ type: "message", id: "m1", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] }];
+/** What a model that asks for these lookups answers with. */
+export const looksUp = (...names: string[]) => names.map((name, i) => ({ type: "function_call", id: `fc_${i}`, call_id: `c${i}`, name, arguments: "{}", status: "completed" }));
 
 /** Every file of a recording as text, with stored response bodies decoded from base64. */
 export function recordingText(dir: string): string {

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaTool } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { fromIni } from "@aws-sdk/credential-providers";
-import { buildTools, GROUND_RULES, MissingCredentialsError, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { buildTools, groundRules, MissingCredentialsError, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
 import type { ScanResult } from "./types.js";
 
 export const DEFAULT_MODEL = "claude-opus-5-5";
@@ -63,7 +63,7 @@ export async function summarize(result: ScanResult, options: LlmOptions = {}): P
   const { messages, params } = await llm(options);
   const message = await messages.create({
     ...params,
-    system: GROUND_RULES,
+    system: groundRules(result),
     messages: [{ role: "user", content: summaryRequest(result) }],
   });
   return textOf(message);
@@ -76,7 +76,7 @@ export async function ask(question: string, ctx: AskContext): Promise<string> {
   const { messages, params } = await llm(ctx.llm ?? {});
   const runner = messages.toolRunner({
     ...params,
-    system: GROUND_RULES,
+    system: groundRules(ctx.result),
     tools,
     max_iterations: 12,
     messages: [{ role: "user", content: question }],

@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { buildTools, GROUND_RULES, MissingCredentialsError, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { buildTools, groundRules, MissingCredentialsError, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
 import type { ScanResult } from "./types.js";
 
 /** Tried in order when no model is named; the first one the account can use wins. */
@@ -41,7 +41,7 @@ export async function summarize(result: ScanResult, options: LlmOptions = {}): P
   const openai = client();
   const response = await openai.responses.create({
     model: await resolveModel(openai, options),
-    instructions: GROUND_RULES,
+    instructions: groundRules(result),
     input: summaryRequest(result),
   });
   return answerOf(response);
@@ -60,7 +60,7 @@ export async function ask(question: string, ctx: AskContext): Promise<string> {
     strict: false,
   }));
 
-  let response = await openai.responses.create({ model, instructions: GROUND_RULES, input: question, tools });
+  let response = await openai.responses.create({ model, instructions: groundRules(ctx.result), input: question, tools });
   for (let step = 0; step < MAX_STEPS; step++) {
     const calls = response.output.filter((item) => item.type === "function_call");
     if (calls.length === 0) return answerOf(response);
@@ -80,7 +80,7 @@ export async function ask(question: string, ctx: AskContext): Promise<string> {
     // The API keeps the conversation so far; only the tool results are sent back.
     response = await openai.responses.create({
       model,
-      instructions: GROUND_RULES,
+      instructions: groundRules(ctx.result),
       previous_response_id: response.id,
       input: outputs,
       tools,
