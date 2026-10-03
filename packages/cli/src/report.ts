@@ -20,7 +20,7 @@ function styleText(style: keyof typeof ANSI, text: string): string {
  * characters, cut down for a heading. Fix commands always carry the whole ID.
  * The limit sits above the longest bucket name (63), which is never cut.
  */
-export const shortId = (id: string) => (id.length > 64 ? `${id.slice(0, 16)}…${id.slice(-6)}` : id);
+export const shortId = (id: string) => (id.length > 64 ? `${id.slice(0, 16)}...${id.slice(-6)}` : id);
 
 /** "ap-south-1" for one region, "17 regions" for several. */
 export const regionLabel = (regions: string[]) => (regions.length === 1 ? regions[0]! : `${regions.length} regions`);
@@ -140,8 +140,11 @@ export const KIND: Record<Pattern, string> = {
 /**
  * A summary built from the findings alone, with no model involved. Shown when
  * no model is available, or when a model's text fails the output check.
+ * `shortenIds` cuts very long IDs down, for a summary a person will read;
+ * callers that pass the text to a model leave it off and get whole IDs.
  */
-export function templatedSummary(result: ScanResult): string {
+export function templatedSummary(result: ScanResult, options: { shortenIds?: boolean } = {}): string {
+  const label = (ids: string[]) => (options.shortenIds ? ids.map(shortId) : ids).join(", ");
   if (result.findings.length === 0) {
     return [`No waste found in ${regionLabel(result.regions)}.`, ...(skippedLine(result) ? [skippedLine(result)!] : [])].join("\n");
   }
@@ -174,12 +177,12 @@ export function templatedSummary(result: ScanResult): string {
   }
 
   const top = result.findings[0]!;
-  lines.push("", `Largest single finding: ${top.title} (${top.resourceIds.join(", ")}), ${money(top.monthlyCostUsd)} per month.`);
+  lines.push("", `Largest single finding: ${top.title} (${label(top.resourceIds)}), ${money(top.monthlyCostUsd)} per month.`);
   const safest = result.findings
     .flatMap((f) => (f.alternative ? [{ ids: f.resourceIds, saving: f.alternative.monthlySavingUsd, what: f.alternative.description }] : []))
     .sort((a, b) => b.saving - a.saving)[0];
   if (safest) {
-    lines.push(`Lowest-risk saving: ${safest.what} (${safest.ids.join(", ")}), ${money(safest.saving)} per month, reversible.`);
+    lines.push(`Lowest-risk saving: ${safest.what} (${label(safest.ids)}), ${money(safest.saving)} per month, reversible.`);
   }
   if (groups.has("orphaned-snapshot") || groups.has("unused-ami")) {
     lines.push("Snapshot and AMI costs are upper bounds based on provisioned size.");
