@@ -417,11 +417,31 @@ test("a round over fewer regions keeps the rest of the baseline, so a wider roun
   assert.deepEqual(narrow.sent, [], "nothing is new and nothing is resolved, so nothing is said");
   const kept = narrow.saved.at(-1)!;
   assert.deepEqual(kept.findings.map((f) => f.resourceIds[0]).sort(), ["vol-0aaaaaaaaaaaaaaaa", "vol-0dddddddddddddddd"]);
+  assert.deepEqual(kept.regions, ["ap-south-1", "us-east-1"], "the baseline stands for everywhere it has an answer for");
 
   // And the next round over both regions finds nothing new, instead of re-announcing us-east-1.
   const again = rig([at([a, far], { regions: ["ap-south-1", "us-east-1"] })], { baseline: kept });
   await again.run();
   assert.deepEqual(again.sent, []);
+});
+
+test("after a narrowed round, a finding new in a region the baseline already answered for is not called newly covered", async () => {
+  const far = finding("vol-0dddddddddddddddd", 3, { region: "us-east-1" });
+  const wide = at([a, far], { regions: ["ap-south-1", "us-east-1"] });
+  const narrow = rig([at([a], { regions: ["ap-south-1"] })], { baseline: wide });
+  await narrow.run();
+  const kept = narrow.saved.at(-1)!;
+
+  // Wide again, with one genuinely new us-east-1 finding: new, but not in a region the baseline had no answer for.
+  const extra = finding("vol-0ffffffffffffffff", 7, { region: "us-east-1" });
+  const again = rig([at([a, far, extra], { regions: ["ap-south-1", "us-east-1"] })], { baseline: kept });
+  await again.run();
+  assert.deepEqual(
+    again.sent.map((m) => m.body.findings.map((f: { resourceIds: string[] }) => f.resourceIds[0])),
+    [["vol-0ffffffffffffffff"]],
+  );
+  assert.equal(again.sent[0]!.body.comparison.newInRegionsNotScannedBefore, 0);
+  assert.doesNotMatch(again.out.join("\n"), /region the last scan did not cover/);
 });
 
 // The interval

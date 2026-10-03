@@ -60,16 +60,19 @@ function readFully(scan: ScanResult): (region: string) => boolean {
  * the scan itself, plus what the earlier one had in places this one did not
  * read in full. Without that, a check that fails once and works again - or a
  * run narrowed to fewer regions - would make every finding behind it look new
- * the next time it is read.
+ * the next time it is read. Its regions are everywhere the two of them have an
+ * answer for between them, which is what the next comparison is against, so a
+ * narrowed round does not leave the next wider one calling a region uncovered.
  */
 export function carryForward(previous: ScanResult | undefined, current: ScanResult): ScanResult {
   if (!previous || previous.accountId !== current.accountId) return current;
   const readAgain = readFully(current);
   const have = new Set(current.findings.map(keyOf));
   const kept = previous.findings.filter((f) => !readAgain(f.region) && !have.has(keyOf(f)));
-  if (kept.length === 0) return current;
+  const regions = [...new Set([...current.regions, ...previous.regions])].sort();
+  if (kept.length === 0) return { ...current, regions };
   const findings = [...current.findings, ...kept];
-  return { ...current, findings, totalMonthlyWasteUsd: findings.reduce((sum, f) => sum + f.monthlyCostUsd, 0) };
+  return { ...current, regions, findings, totalMonthlyWasteUsd: findings.reduce((sum, f) => sum + f.monthlyCostUsd, 0) };
 }
 
 /**
