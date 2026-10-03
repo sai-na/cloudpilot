@@ -99,6 +99,8 @@ export function allowedValues(result: ScanResult, extra?: { inventories?: Invent
       ? [result.comparison.newMonthlyUsd, result.comparison.resolvedMonthlyUsd, ...result.comparison.resolved.map((r) => r.monthlyCostUsd)]
       : []),
     ...result.findings.flatMap((f) => [f.monthlyCostUsd, ...(f.alternative ? [f.alternative.monthlySavingUsd] : [])]),
+    // An advisory's one figure is the scan's to name too, though it is not waste and is in no total.
+    ...(result.advisories ?? []).flatMap((a) => (a.estimatedMonthlyUsd !== undefined ? [a.estimatedMonthlyUsd] : [])),
     ...(result.bill?.totalUsd !== undefined ? [result.bill.totalUsd] : []),
     // Unit prices quoted inside cost notes, such as "$0.114/GB-month".
     ...[...source.matchAll(DOLLARS)].map((m) => Number(m[1]!.replace(/,/g, ""))),
@@ -126,6 +128,10 @@ export function allowedValues(result: ScanResult, extra?: { inventories?: Invent
       ...objectsIn(source.replace(/\\[nrt"]/g, " ")),
       ...result.findings.flatMap((f) =>
         f.resourceIds.flatMap((id) => objectsIn(id).map((o) => ({ ...o, namespace: CLUSTER_SCOPED.has(o.kind) ? undefined : f.region }))),
+      ),
+      // An advisory names its object with the namespace it is in, as a finding does with its region.
+      ...(result.advisories ?? []).flatMap((a) =>
+        objectsIn(a.resource).map((o) => ({ ...o, namespace: CLUSTER_SCOPED.has(o.kind) ? undefined : a.namespace })),
       ),
       // A comparison names what the previous scan found and this one no longer does,
       // with its namespace, so the model may name it that way too.
