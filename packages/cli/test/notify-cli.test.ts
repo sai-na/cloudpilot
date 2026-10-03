@@ -27,7 +27,14 @@ const fs = require("fs");
 const fixture = JSON.parse(fs.readFileSync(process.env.KUBE_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 const rest = args[0] === "--context" ? args.slice(2) : args;
-if (rest.join(" ") === "config view --minify -o json" && process.env.KUBE_NO_CONTEXT) {
+// KUBE_NO_KUBECONFIG is a pod: no kubeconfig, so no context to name or to use (see helpers.ts).
+if (process.env.KUBE_NO_KUBECONFIG && args[0] === "--context") {
+  process.stderr.write("error: cannot locate context " + args[1]);
+  process.exitCode = 1;
+} else if (process.env.KUBE_NO_KUBECONFIG && rest.join(" ") === "config view --minify -o json") {
+  process.stderr.write("error: current-context must exist in order to minify");
+  process.exitCode = 1;
+} else if (rest.join(" ") === "config view --minify -o json" && process.env.KUBE_NO_CONTEXT) {
   process.stdout.write(JSON.stringify({ contexts: [], clusters: [] }));
 } else if (rest.join(" ") === "config view --minify -o json") {
   process.stdout.write(JSON.stringify({ contexts: [{ name: fixture.identity.context }], clusters: [{ cluster: { server: fixture.identity.server } }] }));
@@ -317,6 +324,76 @@ test("watch --kube --max-runs 1: first report, then silence, then only what is n
     assert.equal(JSON.parse(readFileSync(baseline, "utf8")).findings.length, 5, "and now it has been reported");
     assert.ok(!everything(k.cwd).includes(SECRET));
   });
+});
+
+/** What a process in a pod sees: no kubeconfig, and the variables the kubelet sets so that kubectl finds the API server. */
+const POD = { KUBE_NO_KUBECONFIG: "1", KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" };
+
+test("watch --kube inside a cluster: the name it was given is the cluster, in every round, in the message and in the baseline", async () => {
+  const k = lab();
+  const baseline = k.file("watch-kube-prod-eu.json");
+  await withHook(async (server) => {
+    const args = ["watch", "--kube", "--cluster-name", "prod-eu", "--every", "1h", "--max-runs", "1", "--lookback-hours", "1", "--notify", server.url];
+    const first = await k.run(args, POD);
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stderr, /^Watching cluster prod-eu every 1h, read-only\./m);
+    assert.match(first.stderr, /^Reading cluster prod-eu from inside it, as this pod's service account \(read-only\)\.\.\.$/m);
+    assert.deepEqual(events(server), ["first-report"]);
+    assert.match(bodies(server)[0].text, /^CloudPilot: first report, 5 findings, \$50\.64 a month, cluster prod-eu\n/);
+    assert.match(first.stdout, /kubectl set resources deployment\/reports -n shop --context prod-eu -c worker/);
+    assert.ok(existsSync(baseline));
+
+    // A restart in the same directory carries on from the baseline: nothing new, nothing sent.
+    const quiet = await k.run(args, POD);
+    assert.equal(quiet.status, 0, quiet.stderr);
+    assert.equal(server.requests.length, 1);
+  });
+});
+
+test("watch --kube inside a cluster with no name: the webhook is told why, before any read, and the run fails", async () => {
+  const k = lab();
+  await withHook(async (server) => {
+    const run = await k.run(["watch", "--kube", "--every", "1h", "--max-runs", "1", "--lookback-hours", "1", "--notify", server.url], POD);
+    assert.equal(run.status, 1);
+    assert.deepEqual(events(server), ["check-failed"]);
+    assert.match(bodies(server)[0].error, /Name the cluster with --cluster-name <name> \(or CLOUDPILOT_CLUSTER_NAME\)/);
+    assert.equal(existsSync(k.file("watch-kube-prod-eu.json")), false);
+    assert.doesNotMatch(run.stderr + run.stdout, /Reading cluster/);
+  });
+});
+
+test("watch --kube inside a cluster: a failure before the cluster can be read still says which cluster it was", async () => {
+  const k = lab();
+  await withHook(async (server) => {
+    // A pod whose image has no kubectl: the watch cannot even find out what it is reading, which is a failed check like any other.
+    const noKubectl = { ...POD, PATH: dirname(process.execPath) };
+    const run = await k.run(["watch", "--kube", "--cluster-name", "prod-eu", "--every", "1h", "--max-runs", "1", "--lookback-hours", "1", "--notify", server.url], noKubectl);
+    assert.equal(run.status, 1);
+    assert.deepEqual(events(server), ["check-failed"]);
+    // In a pod there is no current context to name, so the one message that breaks the silence has to carry the name the cluster was given.
+    assert.equal(bodies(server)[0].subject, "cluster prod-eu");
+    assert.doesNotMatch(bodies(server)[0].text, /the current context/);
+    assert.match(bodies(server)[0].error, /kubectl was not found on your PATH/);
+  });
+});
+
+test("outside a cluster, a failure before the read never claims the cluster CLOUDPILOT_CLUSTER_NAME names", async () => {
+  const k = lab();
+  await withHook(async (server) => {
+    // A laptop with the variable left in a shell profile: kubectl would have read its own current context and ignored the name entirely.
+    const brokenKubectl = { PATH: dirname(process.execPath), CLOUDPILOT_CLUSTER_NAME: "prod-eu" };
+    const run = await k.run(["kube", "--lookback-hours", "1", "--notify", server.url], brokenKubectl);
+    assert.equal(run.status, 1);
+    assert.deepEqual(events(server), ["check-failed"]);
+    assert.equal(bodies(server)[0].subject, "cluster (the current context)");
+    assert.ok(!JSON.stringify(bodies(server)[0]).includes("prod-eu"), "a cluster that was never going to be read is not named");
+  });
+});
+
+test("watch: --cluster-name is for a cluster, so it is refused without --kube", async () => {
+  const run = await lab().run(["watch", "--cluster-name", "prod-eu", "--max-runs", "1"]);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /--cluster-name only applies with --kube\./);
 });
 
 test("watch: a webhook that refuses keeps the findings new, fails the run, and the next round with a working one reports them", async () => {

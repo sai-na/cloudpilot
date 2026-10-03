@@ -1,0 +1,168 @@
+# CloudPilot watching the cluster it runs in. It scans every few hours, with
+# read-only access, and tells a webhook only when something new appears.
+#
+# Everything it creates is in this file. CloudPilot itself only reads: its
+# access is the least that `cloudpilot kube` needs, the same as
+# docs/cloudpilot-kube-readonly.yaml, and a test fails if the two differ. If
+# you have applied that file already, applying this one changes none of it.
+#
+# Before applying, three things are yours to fill in, each marked EDIT:
+#   1. the image: it is not published anywhere, so you build it and put it in
+#      a registry your cluster pulls from (see deploy/README.md);
+#   2. the name of this cluster: the kubectl context name your team uses for it;
+#   3. the namespace and name of your Prometheus service, in the Role and RoleBinding.
+#
+#   kubectl apply -f kube-watch.yaml
+#
+# The webhook URL is not in this file. Create it as a Secret yourself; the pod
+# waits for it, and starts as soon as it exists:
+#
+#   kubectl -n cloudpilot create secret generic cloudpilot-webhook \
+#     --from-literal=url='https://hooks.slack.com/services/...'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudpilot
+  labels:
+    # The pod below meets the strictest Pod Security Standard, so the cluster can hold the namespace to it.
+    pod-security.kubernetes.io/enforce: restricted
+    # Held to that standard as Kubernetes v1.37 defines it, the version it was run on: without this, a
+    # cluster upgrade that adds a control to the standard could stop the pod being admitted, and a watch
+    # that cannot start is indistinguishable from one with nothing new to say.
+    pod-security.kubernetes.io/enforce-version: v1.37
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudpilot
+  namespace: cloudpilot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudpilot-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "persistentvolumeclaims", "persistentvolumes"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cloudpilot-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cloudpilot-readonly
+subjects:
+  - kind: ServiceAccount
+    name: cloudpilot
+    namespace: cloudpilot
+---
+# Usage history: GET requests to one Prometheus service, through the API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudpilot-prometheus
+  namespace: monitoring # EDIT: the namespace your Prometheus service is in
+rules:
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: ["prometheus:9090"] # EDIT: <service name>:<port>
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudpilot-prometheus
+  namespace: monitoring # EDIT: the same namespace as above
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudpilot-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: cloudpilot
+    namespace: cloudpilot
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudpilot-watch
+  namespace: cloudpilot
+  labels:
+    app.kubernetes.io/name: cloudpilot-watch
+    app.kubernetes.io/part-of: cloudpilot
+spec:
+  # One watcher: two would each send the same message.
+  replicas: 1
+  # A new pod starts only once the old one has stopped, so the two never overlap.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudpilot-watch
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudpilot-watch
+        app.kubernetes.io/part-of: cloudpilot
+    spec:
+      serviceAccountName: cloudpilot
+      # CloudPilot reads the API server with this service account's token.
+      automountServiceAccountToken: true
+      # The pod does not need a variable per Service in its namespace.
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/os: linux
+      securityContext:
+        runAsNonRoot: true
+        # The image's user is named, not numbered, and the kubelet can only check a number.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cloudpilot
+          image: REPLACE-WITH-YOUR-CLOUDPILOT-IMAGE # EDIT: not a real image name, so nothing is pulled until you set yours
+          args: ["watch", "--kube", "--every", "6h"] # EDIT: how often to scan, from 15m to 7d
+          env:
+            - name: CLOUDPILOT_CLUSTER_NAME
+              # EDIT: the kubectl context name your team uses for this cluster on their own machines.
+              # The fix commands CloudPilot prints carry `--context <this name>`, so that a
+              # pasted command cannot reach a different cluster. This placeholder is refused.
+              value: "<your-kubectl-context-name>"
+            - name: CLOUDPILOT_NOTIFY
+              valueFrom:
+                secretKeyRef:
+                  name: cloudpilot-webhook
+                  key: url
+          # What it asks for is what it was measured to use (see deploy/README.md): a scanner
+          # that over-requested would be the first thing it reported. The memory limit is room
+          # for a larger cluster's lists, not a promise to use it; there is no CPU limit, so a
+          # scan is not slowed down.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 80Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          # The only place it writes: the previous scan, so the next round can say what is new.
+          workingDir: /work
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: work
+          emptyDir:
+            sizeLimit: 64Mi

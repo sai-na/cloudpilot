@@ -44,7 +44,7 @@ import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import { now } from "./clock.js";
 import { clientConfig } from "./collect.js";
 import { confidenceFor, hours } from "./kube-detect.js";
-import { KubectlNotFoundError, list, prometheusCandidates, prometheusLabel, query, type KubeReader, type PrometheusRef } from "./kube.js";
+import { ClusterNameRequiredError, KubectlNotFoundError, list, prometheusCandidates, prometheusLabel, query, type KubeReader, type PrometheusRef } from "./kube.js";
 import { PRICING_ENDPOINT_REGION } from "./pricing.js";
 import { labelClient } from "./recording.js";
 
@@ -300,6 +300,8 @@ export interface KubeReport {
   skipped?: string;
   context?: string;
   server?: string;
+  /** The cluster was read from inside it, through the pod's service account, and `context` is the name it was given. */
+  inCluster?: boolean;
   checks: KubeListCheck[];
   prometheus?: PrometheusCheck;
 }
@@ -318,6 +320,8 @@ export interface PreflightOptions {
   regionGiven: boolean;
   profile?: string;
   context?: string;
+  /** --cluster-name: what to call the cluster this is running inside, where there is no context. */
+  clusterName?: string;
   prometheus?: PrometheusRef;
   now?: Date;
 }
@@ -480,12 +484,13 @@ async function checkPrometheus(reader: KubeReader, options: PreflightOptions, se
 }
 
 export async function checkKubernetes(reader: KubeReader, options: PreflightOptions): Promise<KubeReport> {
-  let identity: { context: string; server?: string };
+  let identity: Awaited<ReturnType<KubeReader["identity"]>>;
   try {
     identity = await reader.identity();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof KubectlNotFoundError) return { status: "skipped", skipped: "kubectl is not on the PATH", checks: [] };
+    if (err instanceof ClusterNameRequiredError) return { status: "skipped", skipped: "running inside a cluster with no kubeconfig (name the cluster with --cluster-name)", checks: [] };
     if (/current-context|no current context/i.test(message)) return { status: "skipped", skipped: "kubectl has no current context (choose one with --context)", checks: [] };
     return { status: "skipped", skipped: `kubectl could not read its configuration: ${kubeFailure(err)}`, checks: [] };
   }
@@ -502,7 +507,7 @@ export async function checkKubernetes(reader: KubeReader, options: PreflightOpti
   );
   const allowed = (resource: string) => checks.find((c) => c.resource === resource)?.status === "allowed";
   const canScan = [...KUBE_REQUIRED].every((resource) => allowed(resource));
-  const base = { context: identity.context, ...(identity.server ? { server: identity.server } : {}), checks };
+  const base = { context: identity.context, ...(identity.server ? { server: identity.server } : {}), ...(identity.inCluster ? { inCluster: true } : {}), checks };
   if (!canScan) return { ...base, status: "not-ready" };
 
   const prometheus = await checkPrometheus(reader, options, allowed("services"));
@@ -522,7 +527,9 @@ function nextCommands(aws: AwsReport, kubernetes: KubeReport, options: Preflight
   }
   if (kubernetes.status === "ready" || kubernetes.status === "limited") {
     const given = options.prometheus ? ` --prometheus ${prometheusLabel(options.prometheus)}` : "";
-    next.push(`cloudpilot kube${options.context ? ` --context ${options.context}` : ""}${given}`);
+    // Read from inside a cluster there is no context to name, and the check worked only because the cluster was named: the command must carry that name too.
+    const named = kubernetes.inCluster && options.clusterName ? ` --cluster-name ${options.clusterName}` : "";
+    next.push(`cloudpilot kube${options.context ? ` --context ${options.context}` : named}${given}`);
   }
   return next;
 }

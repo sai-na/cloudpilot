@@ -320,7 +320,10 @@ function withKubectl() {
   return {
     cwd,
     calls: kubectl.calls,
-    run: (args: string[]) => cli(["kube", "--lookback-hours", "1", ...args], { blockNetwork: true, cwd, env: kubectl.env }),
+    started: kubectl.started,
+    run: (args: string[], env: Record<string, string> = {}) => cli(["kube", "--lookback-hours", "1", ...args], { blockNetwork: true, cwd, env: { ...kubectl.env, ...env } }),
+    /** The same, as a process inside a pod: no kubeconfig, no context, and kubectl reads through the pod's service account. */
+    inPod: (args: string[], env: Record<string, string> = {}) => cli(["kube", "--lookback-hours", "1", ...args], { blockNetwork: true, cwd, env: { ...kubectl.pod, ...env } }),
   };
 }
 
@@ -417,4 +420,113 @@ test("a kubectl that never answers is stopped at the timeout init gives it, and 
   } finally {
     process.env.PATH = path;
   }
+});
+
+// Inside a cluster: a pod has no kubeconfig, so the cluster is named by the person who deploys it.
+
+test("inside a cluster with no kubeconfig, the scan reads through the pod and the cluster is known by the name it was given", () => {
+  const pod = withKubectl();
+  const run = pod.inPod(["--cluster-name", "kind-cloudpilot-lab", "--answer-key", ANSWER_KEY]);
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  assert.match(run.stderr, /^Reading cluster kind-cloudpilot-lab from inside it, as this pod's service account \(read-only\)\.\.\.$/m);
+  assert.match(run.stdout, /Found 5\/5, cost within 1% 5\/5, fix command matches 5\/5 \(5\/5 exact\)\./);
+
+  // No context is ever passed (a pod has none to be told), and kubectl is still only ever asked to read.
+  for (const call of pod.calls()) {
+    assert.notEqual(call[0], "--context", `kubectl ${call.join(" ")}`);
+    assert.ok(call.slice(0, 2).join(" ") === "get --raw" || call.join(" ") === "config view --minify -o json", `kubectl ${call.join(" ")}`);
+  }
+  assert.ok(pod.calls().length > 10, "and it did read the cluster");
+});
+
+test("the name given is the context in the commands it prints and in the baseline it keeps", () => {
+  const pod = withKubectl();
+  const run = pod.inPod(["--cluster-name", "arn:aws:eks:eu-west-1:123456789012:cluster/prod", "--json"]);
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.cluster.context, "arn:aws:eks:eu-west-1:123456789012:cluster/prod");
+  assert.equal(result.findings.length, 5);
+  for (const f of result.findings) for (const command of f.fix.commands) assert.match(command, / --context arn:aws:eks:eu-west-1:123456789012:cluster\/prod( |$)/);
+  assert.ok(existsSync(join(pod.cwd, ".cloudpilot/last-kube-scan-arn_aws_eks_eu-west-1_123456789012_cluster_prod.json")));
+});
+
+test("CLOUDPILOT_CLUSTER_NAME names the cluster too, and the option wins over it", () => {
+  const fromEnv = withKubectl().inPod([], { CLOUDPILOT_CLUSTER_NAME: "prod-eu" });
+  assert.equal(fromEnv.status, 0, fromEnv.stderr);
+  assert.match(fromEnv.stdout, /^Cluster prod-eu, /m);
+  assert.match(fromEnv.stdout, /kubectl set resources deployment\/reports -n shop --context prod-eu -c worker/);
+
+  const both = withKubectl().inPod(["--cluster-name", "prod-us"], { CLOUDPILOT_CLUSTER_NAME: "prod-eu" });
+  assert.equal(both.status, 0, both.stderr);
+  assert.match(both.stdout, /^Cluster prod-us, /m);
+
+  // An empty variable, as a manifest can leave it, is no name at all.
+  const empty = withKubectl();
+  const run = empty.inPod([], { CLOUDPILOT_CLUSTER_NAME: "  " });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /--cluster-name/);
+  assert.deepEqual(empty.calls().map((c) => c.join(" ")), ["config view --minify -o json"]);
+});
+
+test("inside a cluster with no name, it stops and says what to do before reading anything", () => {
+  const pod = withKubectl();
+  const run = pod.inPod([]);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /CloudPilot is running inside a cluster, where there is no kubeconfig and so no context name\./);
+  assert.match(run.stderr, /--cluster-name <name> \(or CLOUDPILOT_CLUSTER_NAME\): the kubectl context name your team uses for it on their own machines\./);
+  assert.match(run.stderr, /carry --context <name>, so that a pasted command cannot reach a different cluster\./);
+  assert.equal(run.stdout, "");
+  assert.deepEqual(pod.calls().map((c) => c.join(" ")), ["config view --minify -o json"], "only the local configuration was looked at; no list was read");
+  assert.equal(existsSync(join(pod.cwd, ".cloudpilot")), false);
+});
+
+test("a name that a shell would not pass on as one word is refused", () => {
+  for (const name of ["prod eu", "prod;rm", "$(whoami)", "a'b", "-x", "prod\"", "a|b"]) {
+    const pod = withKubectl();
+    const run = pod.inPod(["--cluster-name", name]);
+    assert.equal(run.status, 1, name);
+    assert.match(run.stderr, /cannot be a cluster name: use the kubectl context name your team uses for it/, name);
+    assert.equal(pod.started(), false, `${name}: kubectl was not even started`);
+  }
+});
+
+test("outside a cluster nothing changes: a context is used as before, the name is not, and with none kubectl's own message stands", () => {
+  const lab = withKubectl();
+  const named = lab.run(["--cluster-name", "something-else"]);
+  assert.equal(named.status, 0, named.stderr);
+  assert.match(named.stderr, /Reading cluster kind-cloudpilot-lab through kubectl \(read-only\)\.\.\./);
+  assert.match(named.stdout, /--context kind-cloudpilot-lab/);
+  assert.doesNotMatch(named.stdout + named.stderr, /something-else|from inside it/);
+
+  // No kubeconfig and not in a cluster: a name does not make this a pod.
+  const nowhere = withKubectl();
+  const run = nowhere.run(["--cluster-name", "prod-eu"], { KUBE_NO_KUBECONFIG: "1" });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /current-context must exist in order to minify/);
+  assert.deepEqual(nowhere.calls().map((c) => c.join(" ")), ["config view --minify -o json"]);
+});
+
+test("a context and a cluster name together are refused, and with a context a pod still asks kubectl for that context", () => {
+  const both = withKubectl().inPod(["--context", "kind-cloudpilot-lab", "--cluster-name", "prod-eu"]);
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, /--cluster-name names a cluster read through the pod's own service account, so it cannot be used with --context\./);
+
+  // Naming a context is the same request as ever: kubectl is asked for it, and here has none by that name.
+  const pod = withKubectl();
+  const run = pod.inPod(["--context", "kind-cloudpilot-lab"], { CLOUDPILOT_CLUSTER_NAME: "prod-eu" });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /cannot locate context kind-cloudpilot-lab/);
+});
+
+test("init, inside a cluster with no name, says what the cluster check needs instead of what kubectl could not find", () => {
+  const kubectl = fakeKubectl(FIXTURE);
+  const run = cli(["init", "--json"], { blockNetwork: true, env: kubectl.pod });
+  const report = JSON.parse(run.stdout);
+  assert.equal(report.kubernetes.status, "skipped");
+  assert.match(report.kubernetes.skipped, /running inside a cluster with no kubeconfig \(name the cluster with --cluster-name\)/);
+
+  const named = cli(["init", "--json", "--cluster-name", "prod-eu"], { blockNetwork: true, env: kubectl.pod });
+  const kube = JSON.parse(named.stdout).kubernetes;
+  assert.equal(kube.context, "prod-eu");
+  assert.equal(kube.server, "https://10.96.0.1:443");
 });

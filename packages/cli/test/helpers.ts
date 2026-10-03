@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -132,7 +132,15 @@ fs.appendFileSync(process.env.KUBE_LOG, JSON.stringify(args) + "\\n");
 // Where a test asks, keep the environment this was started with: what the scanner hands to a program it starts.
 if (process.env.KUBE_ENV_LOG) fs.appendFileSync(process.env.KUBE_ENV_LOG, JSON.stringify(process.env) + "\\n");
 const rest = args[0] === "--context" ? args.slice(2) : args;
-if (rest.join(" ") === "config view --minify -o json") {
+// KUBE_NO_KUBECONFIG: kubectl with no kubeconfig at all, as in a pod. It has no context to name, and none to be told to use.
+// What makes it a pod is the environment KUBERNETES_SERVICE_HOST sets up, which the test passes in; the reads then go through the pod's service account.
+if (process.env.KUBE_NO_KUBECONFIG && args[0] === "--context") {
+  process.stderr.write("error: cannot locate context " + args[1]);
+  process.exitCode = 1;
+} else if (process.env.KUBE_NO_KUBECONFIG && rest.join(" ") === "config view --minify -o json") {
+  process.stderr.write("error: current-context must exist in order to minify");
+  process.exitCode = 1;
+} else if (rest.join(" ") === "config view --minify -o json") {
   process.stdout.write(JSON.stringify({ contexts: [{ name: fixture.identity.context }], clusters: [{ cluster: { server: fixture.identity.server } }] }));
 } else if (rest.length === 3 && rest[0] === "get" && rest[1] === "--raw" && rest[2] in fixture.responses) {
   process.stdout.write(JSON.stringify(fixture.responses[rest[2]]));
@@ -148,7 +156,7 @@ if (rest.join(" ") === "config view --minify -o json") {
 /**
  * A kubectl that serves a recorded cluster (see test/kube-lab/record-fixture.ts)
  * and keeps a log of everything it was asked. Put `env` in the environment of
- * the process under test.
+ * the process under test, or `pod` to have it behave as it does inside a cluster.
  */
 export function fakeKubectl(fixture: string) {
   const dir = mkdtempSync(join(tmpdir(), "cloudpilot-kubectl-"));
@@ -157,8 +165,13 @@ export function fakeKubectl(fixture: string) {
   writeFileSync(join(bin, "kubectl"), KUBECTL_STAND_IN);
   chmodSync(join(bin, "kubectl"), 0o755);
   const log = join(dir, "kubectl.log");
+  const env = { PATH: `${bin}:${dirname(process.execPath)}`, KUBE_FIXTURE: fixture, KUBE_LOG: log };
   return {
-    env: { PATH: `${bin}:${dirname(process.execPath)}`, KUBE_FIXTURE: fixture, KUBE_LOG: log },
+    env,
+    /** What a process in a pod sees: no kubeconfig, and the variables the kubelet sets so that kubectl finds the API server. */
+    pod: { ...env, KUBE_NO_KUBECONFIG: "1", KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" },
+    /** Whether kubectl was started at all. `calls` fails when it was not. */
+    started: () => existsSync(log),
     calls: (): string[][] => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)),
   };
 }

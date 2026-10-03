@@ -13,7 +13,7 @@ import { loadEnvFile } from "./env.js";
 import { evaluate, renderEvaluation } from "./evaluate.js";
 import { renderHtml } from "./html.js";
 import { now } from "./clock.js";
-import { collectCluster, kubectlReader, parsePrometheusRef, type ClusterInventory, type KubeReader } from "./kube.js";
+import { collectCluster, inCluster, kubectlReader, parseClusterName, parsePrometheusRef, type ClusterInventory, type KubeReader } from "./kube.js";
 import { detectCluster, OPENCOST_DEFAULTS } from "./kube-detect.js";
 import { serveMcp } from "./mcp.js";
 import { deliver, freshFindings, httpSender, notifyUrls, parseTargets, subjectOf, type Notice, type Target } from "./notify.js";
@@ -192,8 +192,16 @@ async function notifying<T>(targets: Target[], subject: () => string, run: () =>
   }
 }
 
-/** What a cluster check is about before its context is known: whatever was asked for. */
-const contextSubject = (context: string | undefined) => `cluster ${context ?? "(the current context)"}`;
+/**
+ * What a cluster check is about before its context is known: whatever was
+ * asked for. Inside a cluster there is no context to name, so the name given
+ * for the cluster stands in for one: a failure before the first read still
+ * says which cluster could not be read. Anywhere else that name is going to be
+ * ignored, and naming a cluster that was never going to be read would be worse
+ * than saying only which cluster kubectl would have chosen.
+ */
+const contextSubject = (options: { context?: string; clusterName?: string }) =>
+  `cluster ${options.context || (inCluster() ? clusterNameGiven(options) : undefined) || "(the current context)"}`;
 
 /** What a replay of this kind of run is called when the recording has none. */
 const RECORDED_AS: Record<SessionMeta["command"], string> = { scan: "scan", ask: "ask", kube: "cluster scan", "kube-ask": "cluster question", anomalies: "spend anomalies check" };
@@ -478,6 +486,7 @@ async function present(result: ScanResult, summary: string, view: ReportOptions,
 
 interface KubeOptions extends OutputOptions {
   context?: string;
+  clusterName?: string;
   namespace?: string;
   prometheus?: string;
   lookbackHours: string;
@@ -524,10 +533,24 @@ function clusterPrices(options: KubeOptions): ClusterPrices {
   };
 }
 
+const CLUSTER_NAME_HELP =
+  "when run inside the cluster with no kubeconfig: what to call it (or CLOUDPILOT_CLUSTER_NAME). Use the kubectl context name your team uses for it on their own machines, because the fix commands carry --context <name> so that a pasted command cannot reach a different cluster. Ignored when kubectl has a context";
+
+/** The name given for a cluster with no context, as it was written: --cluster-name, else CLOUDPILOT_CLUSTER_NAME. */
+const clusterNameGiven = (options: { clusterName?: string }) => options.clusterName ?? (process.env.CLOUDPILOT_CLUSTER_NAME?.trim() || undefined);
+
+/** The name a cluster with no context is known by: --cluster-name, else CLOUDPILOT_CLUSTER_NAME. Unused when kubectl has a context. */
+function clusterNameOf(options: { context?: string; clusterName?: string }): string | undefined {
+  if (options.clusterName !== undefined && options.context) throw new Error("--cluster-name names a cluster read through the pod's own service account, so it cannot be used with --context.");
+  const given = clusterNameGiven(options);
+  return given ? parseClusterName(given) : undefined;
+}
+
 /** What the kube command and `ask --kube` share about where a cluster is and what its units cost. */
 function withClusterOptions(command: Command): Command {
   return command
     .option("--context <name>", "kubectl context to read (default: the current one)")
+    .option("--cluster-name <name>", CLUSTER_NAME_HELP)
     .option("--namespace <name>", "read only this namespace (default: every namespace except the cluster's own)")
     .option("--prometheus <namespace/service:port>", "the Prometheus holding usage history (default: found among the cluster's services)")
     .option("--cpu-hour-usd <n>", "what one vCPU costs per hour on your nodes (default: OpenCost's 0.031611)")
@@ -578,7 +601,7 @@ function beginCluster(options: KubeOptions, command: "kube" | "kube-ask", questi
     } else {
       startLive({ redact: false });
     }
-    return { reader: kubeReader(() => kubectlReader(options.context)), scan };
+    return { reader: kubeReader(() => kubectlReader(options.context, undefined, clusterNameOf(options))), scan };
   }
 
   const { session } = replaySession(options.replay, command, question, Boolean(options.liveLlm));
@@ -598,6 +621,10 @@ function beginCluster(options: KubeOptions, command: "kube" | "kube-ask", questi
   return { banner, reader: kubeReader(() => kubectlReader()), scan: replayed };
 }
 
+/** The line that says a cluster is being read, and how kubectl gets in. */
+const readingCluster = (context: string, inCluster?: boolean) =>
+  inCluster ? `Reading cluster ${context} from inside it, as this pod's service account (read-only)...` : `Reading cluster ${context} through kubectl (read-only)...`;
+
 /** Read a cluster live, or from a recording, and apply the rules. */
 async function runKube(
   options: KubeOptions,
@@ -610,13 +637,13 @@ async function runKube(
   onContext: (context: string) => void = () => {},
 ) {
   const run = beginCluster(options, command, question, lookbackGiven, json);
-  const { context } = await run.reader.identity();
+  const { context, inCluster } = await run.reader.identity();
   onContext(context);
   // One saved scan per cluster, so scanning a second cluster never replaces the first one's baseline.
   const saved = clusterFile("last-kube-scan", context);
   const previous = command === "kube" ? await previousScan(options, saved) : undefined;
 
-  note(mode() === "replay" ? `Reading cluster ${context} from the recording (no kubectl)...` : `Reading cluster ${context} through kubectl (read-only)...`);
+  note(mode() === "replay" ? `Reading cluster ${context} from the recording (no kubectl)...` : readingCluster(context, inCluster));
   const { inventory, result } = await scanCluster(run.reader, run.scan);
   // A replay that could not find a read has not repeated the run, however the scan treated the gap.
   const miss = replayMiss();
@@ -713,7 +740,7 @@ withRecordingOptions(
     let known: string | undefined;
     const { banner, inventory, result: scanned, previous, saved } = await notifying(
       targets,
-      () => (known ? `cluster ${known}` : contextSubject(options.context)),
+      () => (known ? `cluster ${known}` : contextSubject(options)),
       () => runKube({ ...options, notifying: targets.length > 0 }, "kube", undefined, lookbackGiven, Boolean(options.json), targets.length === 0, (context) => (known = context)),
     );
 
@@ -860,10 +887,10 @@ interface WatchCommandOptions extends Omit<CommonOptions, "lookbackHours">, Omit
 
 /** Options that only mean something for one of the two things that can be watched. */
 const AWS_ONLY = ["region", "allRegions", "priceFile", "offline", "replay", "redactAccount"] as const;
-const KUBE_ONLY = ["context", "namespace", "prometheus", "cpuHourUsd", "memoryGibHourUsd", "storageGibMonthUsd"] as const;
+const KUBE_ONLY = ["context", "clusterName", "namespace", "prometheus", "cpuHourUsd", "memoryGibHourUsd", "storageGibMonthUsd"] as const;
 const FLAG: Record<string, string> = {
   region: "--region", allRegions: "--all-regions", priceFile: "--price-file", offline: "--offline", replay: "--replay", redactAccount: "--redact-account",
-  context: "--context", namespace: "--namespace", prometheus: "--prometheus", cpuHourUsd: "--cpu-hour-usd", memoryGibHourUsd: "--memory-gib-hour-usd", storageGibMonthUsd: "--storage-gib-month-usd",
+  context: "--context", clusterName: "--cluster-name", namespace: "--namespace", prometheus: "--prometheus", cpuHourUsd: "--cpu-hour-usd", memoryGibHourUsd: "--memory-gib-hour-usd", storageGibMonthUsd: "--storage-gib-month-usd",
 };
 
 program
@@ -883,6 +910,7 @@ program
   .option("--replay <dir>", "AWS: repeat a recorded run from <dir> with no AWS calls (for tests and demos)")
   .option("--redact-account", `AWS: show the account ID as ${REDACTED_ACCOUNT} in output and messages`)
   .option("--context <name>", "cluster: kubectl context to read (default: the current one, fixed at start)")
+  .option("--cluster-name <name>", `cluster: ${CLUSTER_NAME_HELP}`)
   .option("--namespace <name>", "cluster: read only this namespace")
   .option("--prometheus <namespace/service:port>", "cluster: the Prometheus holding usage history (default: found among the cluster's services)")
   .option("--cpu-hour-usd <n>", "cluster: what one vCPU costs per hour on your nodes")
@@ -904,17 +932,26 @@ program
     let scan: () => Promise<{ result: ScanResult; banner?: string }>;
     if (options.kube) {
       startLive({ redact: false });
-      const lookbackHours = amount(options.lookbackHours ?? "168", "--lookback-hours");
-      if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
-      const prices = clusterPrices(options as KubeOptions);
       // The context in force now, kept for every round: a later `kubectl config use-context` must not move the watch to another cluster.
       // A watch that cannot even start must say so: it is not going to keep trying.
-      const { context } = await notifying(targets, () => contextSubject(options.context), () => kubectlReader(options.context).identity());
-      const reader = kubectlReader(context);
+      const { context, inCluster, clusterName, lookbackHours, prices } = await notifying(
+        targets,
+        () => contextSubject(options),
+        async () => {
+          const lookbackHours = amount(options.lookbackHours ?? "168", "--lookback-hours");
+          if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
+          const prices = clusterPrices(options as KubeOptions);
+          const clusterName = clusterNameOf(options);
+          const identity = await kubectlReader(options.context, undefined, clusterName).identity();
+          return { ...identity, clusterName, lookbackHours, prices };
+        },
+      );
+      // Inside a cluster there is no context to pin: kubectl uses the pod's service account every round.
+      const reader = kubectlReader(inCluster ? undefined : context, undefined, clusterName);
       subject = `cluster ${context}`;
       baselinePath = clusterFile("watch-kube", context);
       scan = async () => {
-        note(`Reading cluster ${context} through kubectl (read-only)...`);
+        note(readingCluster(context, inCluster));
         return { result: (await scanCluster(reader, { namespace: options.namespace, prometheus: options.prometheus, lookbackHours, prices })).result };
       };
     } else {
@@ -963,10 +1000,11 @@ program
   .option("--profile <name>", "AWS profile to read with (default: the standard AWS credential chain)", process.env.AWS_PROFILE)
   .option("--region <region>", "try the AWS reads in this region (default: the region a scan starts from)")
   .option("--context <name>", "kubectl context to check (default: the current one)")
+  .option("--cluster-name <name>", CLUSTER_NAME_HELP)
   .option("--prometheus <namespace/service:port>", "the Prometheus holding usage history (default: found among the cluster's services)")
   .option("--json", "print the result as JSON")
   .option("--print-policy", "print the read-only IAM policy a scan needs, as JSON, and stop")
-  .action(async (options: { profile?: string; region?: string; context?: string; prometheus?: string; json?: boolean; printPolicy?: boolean }) => {
+  .action(async (options: { profile?: string; region?: string; context?: string; clusterName?: string; prometheus?: string; json?: boolean; printPolicy?: boolean }) => {
     if (options.printPolicy) {
       console.log(JSON.stringify(READ_ONLY_POLICY, null, 2));
       return;
@@ -977,9 +1015,10 @@ program
       regionGiven: Boolean(options.region),
       profile: options.profile,
       context: options.context,
+      clusterName: options.clusterName,
       prometheus: options.prometheus ? parsePrometheusRef(options.prometheus) : undefined,
     };
-    const result = await preflight(checking, { aws: awsProbes(checking), kube: kubectlReader(options.context, KUBECTL_TIMEOUT_MS) });
+    const result = await preflight(checking, { aws: awsProbes(checking), kube: kubectlReader(options.context, KUBECTL_TIMEOUT_MS, clusterNameOf(options)) });
     console.log(options.json ? JSON.stringify(result, null, 2) : renderPreflight(result, checking));
     process.exitCode = result.ready ? 0 : 1;
   });
@@ -1005,7 +1044,7 @@ withClusterOptions(withCommonOptions(program.command("ask").description("Ask a q
     for (const [flag, name] of [["--region", "region"], ["--all-regions", "allRegions"], ["--profile", "profile"], ["--price-file", "priceFile"], ["--offline", "offline"], ["--redact-account", "redactAccount"]] as const) {
       if (cluster && given(name)) throw new Error(`${flag} is for an AWS account and does nothing with --kube.`);
     }
-    for (const [flag, name] of [["--context", "context"], ["--namespace", "namespace"], ["--prometheus", "prometheus"], ["--cpu-hour-usd", "cpuHourUsd"], ["--memory-gib-hour-usd", "memoryGibHourUsd"], ["--storage-gib-month-usd", "storageGibMonthUsd"]] as const) {
+    for (const [flag, name] of [["--context", "context"], ["--cluster-name", "clusterName"], ["--namespace", "namespace"], ["--prometheus", "prometheus"], ["--cpu-hour-usd", "cpuHourUsd"], ["--memory-gib-hour-usd", "memoryGibHourUsd"], ["--storage-gib-month-usd", "storageGibMonthUsd"]] as const) {
       if (!cluster && given(name)) throw new Error(`${flag} is for a cluster: add --kube.`);
     }
     // Without a model there is nothing to ask: say so before reading anything from AWS or the cluster.
@@ -1111,7 +1150,7 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
       const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
       const readCluster = (args: Record<string, unknown>) => {
         const hours = Number(args.lookback_hours);
-        const pending = scanCluster(kubectlReader(text(args.context)), {
+        const pending = scanCluster(kubectlReader(text(args.context), undefined, clusterNameOf({ context: text(args.context) })), {
           namespace: text(args.namespace),
           prometheus: text(args.prometheus),
           lookbackHours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 24 * 90) : 168,

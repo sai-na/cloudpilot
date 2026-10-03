@@ -5,7 +5,8 @@
 # The image holds the built command, its production dependencies and kubectl
 # (which `cloudpilot kube` needs). It runs as a non-root user and holds no
 # credentials: pass them in when you run it. See "Run it in Docker" in
-# packages/cli/README.md.
+# packages/cli/README.md. In a cluster it reads with the pod's service account:
+# see deploy/kube-watch.yaml.
 
 ARG NODE_IMAGE=node:22.19.0-alpine3.22
 

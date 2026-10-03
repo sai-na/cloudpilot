@@ -12,8 +12,8 @@ import { execFile } from "node:child_process";
 export interface KubeReader {
   /** GET one path on the API server and parse the JSON it answers with. */
   get(path: string): Promise<any>;
-  /** The kubectl context being read, and the server behind it. */
-  identity(): Promise<{ context: string; server?: string }>;
+  /** The kubectl context being read, and the server behind it. Inside a cluster with no kubeconfig, `context` is the name the cluster was given and `inCluster` is true. */
+  identity(): Promise<{ context: string; server?: string; inCluster?: boolean }>;
 }
 
 /** kubectl is not installed, or not on the PATH. */
@@ -24,8 +24,46 @@ export class KubectlNotFoundError extends Error {
   }
 }
 
-/** Reads through the kubectl on the PATH. It has no way to write. With a timeout, a call that has not answered by then is stopped. */
-export function kubectlReader(context?: string, timeoutMs?: number): KubeReader {
+/** Running in a cluster, with no kubeconfig context to name it, and told no name for it. */
+export class ClusterNameRequiredError extends Error {
+  constructor() {
+    super(
+      "CloudPilot is running inside a cluster, where there is no kubeconfig and so no context name. " +
+        "Name the cluster with --cluster-name <name> (or CLOUDPILOT_CLUSTER_NAME): the kubectl context name your team uses for it on their own machines. " +
+        "The fix commands CloudPilot prints carry --context <name>, so that a pasted command cannot reach a different cluster.",
+    );
+    this.name = "ClusterNameRequiredError";
+  }
+}
+
+/**
+ * Every pod is told where its API server is. kubectl reads the same two
+ * variables, and the pod's service account, when it has no kubeconfig. This is
+ * the one test for "running in a cluster", and it decides whether a name given
+ * for the cluster is used at all: everything that speaks about a cluster
+ * before it has been read asks here rather than guessing.
+ */
+export const inCluster = () => Boolean(process.env.KUBERNETES_SERVICE_HOST && process.env.KUBERNETES_SERVICE_PORT);
+
+/**
+ * The name given to a cluster that has no context. It goes into `--context`
+ * in commands people paste, so it must be one word a shell passes on as it is:
+ * context names such as an EKS ARN or a GKE name are fine, quotes and spaces are not.
+ */
+export function parseClusterName(text: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/@=+,-]*$/.test(text) || text.length > 253) {
+    throw new Error(`"${text}" cannot be a cluster name: use the kubectl context name your team uses for it, which has no spaces, quotes or shell characters in it.`);
+  }
+  return text;
+}
+
+/**
+ * Reads through the kubectl on the PATH. It has no way to write. With a
+ * timeout, a call that has not answered by then is stopped. With no context
+ * and no kubeconfig context to find, inside a cluster, kubectl uses the pod's
+ * service account and the cluster is known by `clusterName`.
+ */
+export function kubectlReader(context?: string, timeoutMs?: number, clusterName?: string): KubeReader {
   const scoped = context ? ["--context", context] : [];
   const run = (args: string[]) =>
     new Promise<string>((resolve, reject) => {
@@ -39,10 +77,20 @@ export function kubectlReader(context?: string, timeoutMs?: number): KubeReader 
   return {
     get: async (path) => JSON.parse(await run(["get", "--raw", path])),
     identity: async () => {
-      const view = JSON.parse(await run(["config", "view", "--minify", "-o", "json"]));
+      // A pod has no kubeconfig, and `config view --minify` then fails for want of a current context.
+      const podLike = !context && inCluster();
+      let view: any = {};
+      try {
+        view = JSON.parse(await run(["config", "view", "--minify", "-o", "json"]));
+      } catch (err) {
+        if (!podLike || !/current-context/i.test(err instanceof Error ? err.message : String(err))) throw err;
+      }
       const name = view.contexts?.[0]?.name ?? view["current-context"];
-      if (!name) throw new Error("kubectl has no current context. Choose one with --context.");
-      return { context: String(name), server: view.clusters?.[0]?.cluster?.server };
+      if (name) return { context: String(name), server: view.clusters?.[0]?.cluster?.server };
+      if (!podLike) throw new Error("kubectl has no current context. Choose one with --context.");
+      if (!clusterName) throw new ClusterNameRequiredError();
+      const host = process.env.KUBERNETES_SERVICE_HOST!;
+      return { context: clusterName, server: `https://${host.includes(":") ? `[${host}]` : host}:${process.env.KUBERNETES_SERVICE_PORT}`, inCluster: true };
     },
   };
 }
