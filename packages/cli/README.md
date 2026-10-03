@@ -251,7 +251,7 @@ From a source checkout, the command is `node` with
 | `get_prices` | The unit prices used |
 | `get_cpu_history` | Live CloudWatch CPU figures for one instance |
 | `scan_cluster` | A scan of a Kubernetes cluster through `kubectl`: what was read and at what prices, the summary, and every finding. Takes an optional `context`, `namespace`, `prometheus` and `lookback_hours` |
-| `get_cluster_workloads` | Every workload the latest cluster scan read, flagged or not: replicas, and each container's requests, peak use, hours of history, and whether it was killed for running out of memory |
+| `get_cluster_workloads` | Which cluster, namespaces, Prometheus and lookback the latest cluster scan covered, and every workload it read, flagged or not: replicas, and each container's requests, peak use, hours of history, and whether it was killed for running out of memory |
 
 Every tool is marked read-only. The account tools make the same AWS calls
 as the list above and nothing else, and the cluster tools only run

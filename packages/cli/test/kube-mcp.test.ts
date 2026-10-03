@@ -65,8 +65,8 @@ test("scan_cluster says what it read and at what prices, then gives the summary 
 });
 
 test("get_cluster_workloads shows what was not flagged, and why", async () => {
-  const workloads = JSON.parse(text(await client.callTool({ name: "get_cluster_workloads", arguments: {} })));
-  const named = (name: string) => workloads.find((w: { name: string }) => w.name === name);
+  const read = JSON.parse(text(await client.callTool({ name: "get_cluster_workloads", arguments: {} })));
+  const named = (name: string) => read.workloads.find((w: { name: string }) => w.name === name);
   // Sized right: it uses the CPU and memory it requests.
   const web = named("web").containers[0];
   assert.deepEqual([web.cpuRequest, web.memoryRequest, web.memoryPeak, web.killedForMemory], ["100m", "64Mi", "49Mi", false]);
@@ -81,6 +81,24 @@ test("a cluster that cannot be read is an error result the model can act on", as
   const result = await client.callTool({ name: "scan_cluster", arguments: { lookback_hours: 1, namespace: "not-recorded" } });
   assert.equal(result.isError, true);
   assert.match(text(result), /NotFound/);
+});
+
+test("a namespace that is not a Kubernetes name is refused before anything is read", async () => {
+  const before = kubectl.calls().length;
+  const result = await client.callTool({ name: "scan_cluster", arguments: { namespace: 'shop"} or on(1) other{' } });
+  assert.equal(result.isError, true);
+  assert.match(text(result), /is not a Kubernetes namespace name/);
+  assert.equal(kubectl.calls().length, before, "nothing was read for a namespace that cannot name one");
+});
+
+test("the workloads carry the identity of the scan they came from, not of a scan that failed", async () => {
+  // The scan above failed and left the earlier one in place: the payload must say which cluster and namespaces it describes.
+  const read = JSON.parse(text(await client.callTool({ name: "get_cluster_workloads", arguments: {} })));
+  assert.equal(read.context, "kind-cloudpilot-lab");
+  assert.deepEqual(read.namespaces, ["default", "local-path-storage", "monitoring", "shop"]);
+  assert.equal(read.prometheus, "monitoring/prometheus:9090");
+  assert.equal(read.lookbackHours, 1);
+  assert.match(read.collectedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test("through the MCP server too, kubectl is only ever asked to read", () => {

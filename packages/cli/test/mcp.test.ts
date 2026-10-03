@@ -36,6 +36,12 @@ test("the handshake names the server and tells the model how to use it", () => {
   const instructions = client.getInstructions() ?? "";
   assert.match(instructions, /read-only/);
   assert.match(instructions, /cannot change anything/);
+  // A recording holds an account only: a replaying server must not promise a tool it does not offer.
+  assert.doesNotMatch(instructions, /scan_cluster|get_cluster_workloads/);
+});
+
+test("a replaying server refuses a cluster scan rather than pretending to run one", async () => {
+  await assert.rejects(() => client.callTool({ name: "scan_cluster", arguments: {} }), /Unknown tool: scan_cluster/);
 });
 
 test("it offers five tools, every one marked read-only", async () => {

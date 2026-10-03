@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { Command } from "commander";
-import { buildTools, forModel, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
+import { buildTools, forModel, MCP_CLUSTER_INSTRUCTIONS, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
 import { callerAccount, collect, enabledRegions, readCpu } from "./collect.js";
 import { compareScans, isScanResult } from "./compare.js";
@@ -366,26 +366,38 @@ async function scanCluster(options: ClusterScanOptions): Promise<{ inventory: Cl
   return { inventory, result: detectCluster(inventory, options.prices) };
 }
 
-/** A cluster's workloads as a model should read them: requests and peaks in the units a manifest uses. */
+/**
+ * A cluster's workloads as a model should read them: requests and peaks in the
+ * units a manifest uses, under the identity of the scan they come from, so a
+ * model never reads one cluster's workloads as another's.
+ */
 function workloadsForModel(inventory: ClusterInventory) {
   const optional = <T>(value: T | undefined, format: (v: T) => string) => (value === undefined ? null : format(value));
-  return inventory.workloads.map((w) => ({
-    namespace: w.namespace,
-    kind: w.kind,
-    name: w.name,
-    replicas: w.replicas,
-    skippedByLabel: w.ignored,
-    containers: w.containers.map((c) => ({
-      name: c.name,
-      cpuRequest: optional(c.cpuRequestCores, cpuQuantity),
-      // Peaks are rounded up to a whole millicore or mebibyte, so they never read as less than they were.
-      cpuPeak: optional(c.cpuPeakCores, (cores) => cpuQuantity(Math.ceil(cores * 1000 - 1e-9) / 1000)),
-      memoryRequest: optional(c.memoryRequestBytes, memoryQuantity),
-      memoryPeak: optional(c.memoryPeakBytes, (bytes) => memoryQuantity(Math.ceil(bytes / 2 ** 20 - 1e-9) * 2 ** 20)),
-      historyHours: c.historyHours === undefined ? null : Number(c.historyHours.toFixed(1)),
-      killedForMemory: c.oomKilled,
+  return {
+    context: inventory.context,
+    namespaces: inventory.namespaces,
+    prometheus: inventory.prometheus ?? null,
+    lookbackHours: inventory.lookbackHours,
+    collectedAt: inventory.collectedAt,
+    workloads: inventory.workloads.map((w) => ({
+      namespace: w.namespace,
+      kind: w.kind,
+      name: w.name,
+      replicas: w.replicas,
+      skippedByLabel: w.ignored,
+      containers: w.containers.map((c) => ({
+        name: c.name,
+        cpuRequest: optional(c.cpuRequestCores, cpuQuantity),
+        // Peaks are rounded up to a whole millicore or mebibyte, so they never read as less than they were.
+        cpuPeak: optional(c.cpuPeakCores, (cores) => cpuQuantity(Math.ceil(cores * 1000 - 1e-9) / 1000)),
+        memoryRequest: optional(c.memoryRequestBytes, memoryQuantity),
+        memoryPeak: optional(c.memoryPeakBytes, (bytes) => memoryQuantity(Math.ceil(bytes / 2 ** 20 - 1e-9) * 2 ** 20)),
+        // Three figures rather than one decimal: a container with minutes of history must not read as having none.
+        historyHours: c.historyHours === undefined ? null : Number(c.historyHours.toPrecision(3)),
+        killedForMemory: c.oomKilled,
+      })),
     })),
-  }));
+  };
 }
 
 const program = new Command()
@@ -562,21 +574,31 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
     ];
 
     // Clusters. A recording holds an AWS account only, so a replaying server has no cluster to offer.
-    if (!options.replay) {
+    const offersCluster = !options.replay;
+    if (offersCluster) {
       type ClusterScan = Awaited<ReturnType<typeof scanCluster>>;
       let cluster: ClusterScan | undefined;
+      let scanning: Promise<ClusterScan> | undefined;
       const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
-      const readCluster = async (args: Record<string, unknown>) => {
+      const readCluster = (args: Record<string, unknown>) => {
         const hours = Number(args.lookback_hours);
-        cluster = await scanCluster({
+        const pending = scanCluster({
           context: text(args.context),
           namespace: text(args.namespace),
           prometheus: text(args.prometheus),
           lookbackHours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 24 * 90) : 168,
           prices: OPENCOST_DEFAULTS,
-        });
-        return cluster;
+        }).then((scanned) => (cluster = scanned));
+        // A failed scan leaves nothing behind to hand the next caller.
+        const settled = () => {
+          if (scanning === pending) scanning = undefined;
+        };
+        scanning = pending;
+        pending.then(settled, settled);
+        return pending;
       };
+      // Calls arrive concurrently: a scan already under way is the scan to read, never a second one.
+      const currentCluster = async () => cluster ?? (await (scanning ?? readCluster({})));
       tools.push(
         {
           name: "scan_cluster",
@@ -600,14 +622,16 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
         {
           name: "get_cluster_workloads",
           description:
-            "Return every Deployment, StatefulSet and DaemonSet the latest cluster scan read, including those NOT flagged: replicas, and for each container its CPU and memory request, its peak use over the history Prometheus holds, how many hours of history that is, and whether it has been killed for running out of memory. Use it to answer what a workload asks for and uses, or why one was not flagged. Runs scan_cluster with its defaults first if no cluster has been scanned yet.",
+            "Return the kubectl context, namespaces, Prometheus, lookback and time of the latest cluster scan, and every Deployment, StatefulSet and DaemonSet it read, including those NOT flagged: replicas, and for each container its CPU and memory request, its peak use over the history Prometheus holds, how many hours of history that is, and whether it has been killed for running out of memory. Use it to answer what a workload asks for and uses, or why one was not flagged. Runs scan_cluster with its defaults first if no cluster has been scanned yet.",
           inputSchema: { type: "object", properties: {}, additionalProperties: false },
-          run: async () => JSON.stringify(workloadsForModel((cluster ?? (await readCluster({}))).inventory)),
+          run: async () => JSON.stringify(workloadsForModel((await currentCluster()).inventory)),
         },
       );
     }
 
-    await serveMcp({ name: "cloudpilot", version: VERSION, instructions: MCP_INSTRUCTIONS, tools });
+    // The instructions name only the tools this server offers: a replaying one must not promise a cluster scan.
+    const instructions = offersCluster ? `${MCP_INSTRUCTIONS}\n${MCP_CLUSTER_INSTRUCTIONS}` : MCP_INSTRUCTIONS;
+    await serveMcp({ name: "cloudpilot", version: VERSION, instructions, tools });
     // The client has gone; do not let idle AWS connections keep the process alive.
     process.exit(0);
   });

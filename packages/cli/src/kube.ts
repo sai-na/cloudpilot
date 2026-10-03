@@ -170,10 +170,33 @@ export interface PrometheusRef {
 
 export const prometheusLabel = (p: PrometheusRef) => `${p.namespace}/${p.service}:${p.port}`;
 
+/**
+ * Kubernetes names a namespace or a service with a DNS-1123 label. Names are
+ * put into API server paths and into PromQL label matchers, so one holding a
+ * slash or a quote would change which path is read or which series a query
+ * selects: refuse it instead.
+ */
+const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+function dnsLabel(what: string, value: string): string {
+  if (!DNS_LABEL.test(value) || value.length > 63) {
+    throw new Error(`"${value}" is not a Kubernetes ${what} name: lower-case letters, digits and dashes, up to 63 characters.`);
+  }
+  return value;
+}
+
+/** A service port as the API server's proxy path takes it: a number, or a named port. */
+function servicePort(value: string): string {
+  const number = /^[0-9]+$/.test(value) ? Number(value) : undefined;
+  const bad = number === undefined ? !DNS_LABEL.test(value) || value.length > 15 : number < 1 || number > 65535;
+  if (bad) throw new Error(`"${value}" is not a service port: a number from 1 to 65535, or a port name.`);
+  return value;
+}
+
 export function parsePrometheusRef(text: string): PrometheusRef {
   const match = /^([^/\s]+)\/([^:\s]+):([^\s]+)$/.exec(text);
   if (!match) throw new Error(`--prometheus takes namespace/service:port, for example monitoring/prometheus:9090. Got "${text}".`);
-  return { namespace: match[1]!, service: match[2]!, port: match[3]! };
+  return { namespace: dnsLabel("namespace", match[1]!), service: dnsLabel("service", match[2]!), port: servicePort(match[3]!) };
 }
 
 /** Services that look like a Prometheus server, likeliest first. */
@@ -215,9 +238,10 @@ export interface CollectClusterOptions {
 /** Read the cluster's workloads, volumes and usage history. Nothing here can change the cluster. */
 export async function collectCluster(reader: KubeReader, options: CollectClusterOptions): Promise<ClusterInventory> {
   const now = options.now ?? new Date();
+  const namespace = options.namespace === undefined ? undefined : dnsLabel("namespace", options.namespace);
   const { context, server } = await reader.identity();
   const warnings: string[] = [];
-  const scoped = (group: string, resource: string) => (options.namespace ? `${group}/namespaces/${options.namespace}/${resource}` : `${group}/${resource}`);
+  const scoped = (group: string, resource: string) => (namespace ? `${group}/namespaces/${namespace}/${resource}` : `${group}/${resource}`);
   const attempt = async (what: string, path: string): Promise<any[]> => {
     try {
       return await list(reader, path);
@@ -227,8 +251,8 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
     }
   };
 
-  const namespaces = options.namespace
-    ? [options.namespace]
+  const namespaces = namespace
+    ? [namespace]
     : (await list(reader, "/api/v1/namespaces")).map((n) => String(n.metadata.name)).filter((n) => !SYSTEM_NAMESPACES.has(n)).sort();
   const wanted = new Set(namespaces);
 
@@ -301,7 +325,7 @@ export async function collectCluster(reader: KubeReader, options: CollectCluster
 
   const prometheus = await readUsage(reader, {
     given: options.prometheus,
-    namespace: options.namespace,
+    namespace,
     lookbackHours: options.lookbackHours,
     now,
     workloads: [...workloads.values()],
