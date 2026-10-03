@@ -629,11 +629,12 @@ docker run --rm cloudpilot scan --help
 ```
 
 The image holds the built command, its production dependencies and `kubectl`
-v1.37.1, on Node 22 (Alpine). It runs as a non-root user (uid 1000) and holds
-no credentials. It does not hold the AWS CLI. The `kubectl` download is
-checked in the build against a SHA-256 written in the `Dockerfile`. Building
-needs network and BuildKit (the default in current Docker), for `linux/amd64`
-or `linux/arm64`.
+v1.37.1, on Node 22 (Alpine), with CloudPilot's own licence at `/app/LICENSE`
+and the two font licence texts in `/app/licenses` beside them. It runs as a
+non-root user (uid 1000) and holds no credentials. It does not hold the AWS
+CLI. The `kubectl` download is checked in the build against a SHA-256 written
+in the `Dockerfile`. Building needs network and BuildKit (the default in
+current Docker), for `linux/amd64` or `linux/arm64`.
 
 The command is PID 1 in the container, where Node does not act on Ctrl-C or
 `docker stop` on its own. Add `--init` to stop a long scan straight away:
@@ -887,16 +888,21 @@ what failed:
 - the namespace or context a command names (`-n`, `--namespace`, `--context`);
 - a CPU quantity in millicores (`300m`) or a memory quantity in binary units
   (`512Mi`, `1Gi`), written as the scan writes it, so `1Gi` may not become
-  `1024Mi`.
+  `1024Mi`;
+- a percentage written near a word about spending (`bill`, `spend`), which has
+  to be one the scan data states itself, such as the headroom a suggested
+  request carries. A cluster scan reads no bill, so it can never say what
+  share of one the waste is.
 
 What it deliberately leaves alone, because it would flag ordinary words:
 short forms such as `deploy/web`, `pvc/data` and `sts/db`, a plural, a name
 with no kind in front of it, URLs, a kind written after a kind
 (`deployment/statefulset`), and `-n` on a line that does not run `kubectl`.
 It does not check container names, whole CPUs or plain byte counts,
-replica counts or percentages, or whether the model's reasoning is sound. A
-quantity such as `5m` is read as millicores even where someone meant minutes.
-Tests run all of this with a stand-in model, never a real one.
+replica counts, a percentage nowhere near a word about spending, or whether
+the model's reasoning is sound. A quantity such as `5m` is read as millicores
+even where someone meant minutes. Tests run all of this with a stand-in
+model, never a real one.
 
 `kube --record <dir>` and `--replay <dir>`, and `ask --kube` with the same two
 flags, are described under [Record and replay](#record-and-replay).
@@ -1005,10 +1011,9 @@ The rules are checked against a seeded cluster: see
   `cloudpilot/ignore=true`.
 - Kubernetes: a past pod is matched to its workload by name, so two workloads
   named alike in one namespace (`api` and `api-v2`) can, rarely, share history.
-- Kubernetes: the output check for model text covers dollar amounts, objects
-  named as `kind/name`, the namespace and context a command names, and CPU and
-  memory quantities. It is a guard against invented values, not proof that
-  what a model says about them is right: see
+- Kubernetes: the output check for model text is a guard against invented
+  values, not proof that what a model says about them is right. What it covers
+  is listed under
   [Explain, ask, record and replay](#explain-ask-record-and-replay).
 - Kubernetes: limits are not changed, and a workload kept in sync by Helm,
   Argo CD or Flux must be changed at its source. The finding says so.
