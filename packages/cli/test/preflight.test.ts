@@ -97,7 +97,7 @@ test("every read allowed: ready, nothing to fix, and each read is tried on what 
   assert.ok(!seen.some(([operation]) => operation === CHARGED));
   assert.deepEqual(
     report.checks.filter((c) => c.operation === CHARGED).map((c) => [c.status, c.detail]),
-    [["not-tested", "AWS charges $0.01 for each request, so init does not try it; only scan --bill makes it"]],
+    [["not-tested", "AWS charges $0.01 for each request, so init does not try it; only scan --bill and anomalies make it"]],
   );
   assert.match(tried.DescribeTags!.loadBalancerArn!, /loadbalancer\/app\/web/);
   assert.match(tried.DescribeTargetHealth!.targetGroupArn!, /targetgroup\/web/);
@@ -125,7 +125,7 @@ test("a denied read never ends the check; the rest are still tried and the fix i
       ["DescribeVolumes", "denied", "UnauthorizedOperation"],
       ["GetMetricData", "denied", "UnauthorizedOperation"],
       ["GetProducts", "denied", "AccessDeniedException"],
-      [CHARGED, "not-tested", "AWS charges $0.01 for each request, so init does not try it; only scan --bill makes it"],
+      [CHARGED, "not-tested", "AWS charges $0.01 for each request, so init does not try it; only scan --bill and anomalies make it"],
     ],
   );
   assert.deepEqual(report.fix, [

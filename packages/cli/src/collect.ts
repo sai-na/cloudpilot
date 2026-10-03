@@ -1,5 +1,5 @@
 import { CloudWatchClient, GetMetricDataCommand } from "@aws-sdk/client-cloudwatch";
-import { CostExplorerClient, GetCostAndUsageCommand, type GetCostAndUsageCommandInput } from "@aws-sdk/client-cost-explorer";
+import { CostExplorerClient, GetCostAndUsageCommand, type GetCostAndUsageCommandInput, type GetCostAndUsageCommandOutput } from "@aws-sdk/client-cost-explorer";
 import {
   DescribeAddressesCommand,
   DescribeImagesCommand,
@@ -35,6 +35,7 @@ import {
 import { paginateDescribeDBInstances, RDSClient } from "@aws-sdk/client-rds";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import { fromIni } from "@aws-sdk/credential-providers";
+import { mergeDays, type DayCost } from "./anomaly.js";
 import { now } from "./clock.js";
 import { awsRequestHandler, labelClient, mode, ReplayMissError } from "./recording.js";
 import type {
@@ -699,4 +700,76 @@ export async function readBill(opts: { profile?: string }): Promise<Bill> {
     if (err instanceof ReplayMissError) throw err;
     return { month, unavailable: `${errorName(err)}${err instanceof Error ? ` - ${err.message}` : ""}` };
   }
+}
+
+/** Cost Explorer pages a long answer; more pages than this is not a month of services, and each page is charged. */
+const MAX_COST_PAGES = 10;
+
+/**
+ * The one Cost Explorer request spend anomalies make: daily unblended cost per
+ * service for the `days` complete days before today (UTC). The end date is
+ * exclusive, so the day in progress is not asked for. Credits, refunds and
+ * tax are left out: a credit running out or the month's tax landing on the
+ * first would otherwise read as a service costing more.
+ */
+export function anomalyQuery(at: Date, days: number): { start: string; end: string; input: GetCostAndUsageCommandInput } {
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const end = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  const start = new Date(end.getTime() - days * 86_400_000);
+  return {
+    start: day(start),
+    end: day(end),
+    input: {
+      TimePeriod: { Start: day(start), End: day(end) },
+      Granularity: "DAILY",
+      Metrics: ["UnblendedCost"],
+      GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }],
+      Filter: { Not: { Dimensions: { Key: "RECORD_TYPE", Values: ["Credit", "Refund", "Tax"] } } },
+    },
+  };
+}
+
+/**
+ * What each service cost on each of the last `days` days, from Cost Explorer.
+ * One request, which AWS charges $0.01 for; more only when AWS splits the
+ * answer into pages (NextPageToken), and the number made is returned. Unlike
+ * the bill this is the whole command, so every way it can fail (no
+ * permission, Cost Explorer not enabled, a currency that is not dollars, an
+ * amount that is not a number) is an error that says why, never a figure.
+ */
+export async function readDailyCosts(opts: { profile?: string; days: number }): Promise<{ days: DayCost[]; requests: number }> {
+  const { input } = anomalyQuery(now(), opts.days);
+  // Cost Explorer is one global endpoint, served from us-east-1.
+  const client = labelClient(new CostExplorerClient(clientConfig({ region: "us-east-1", profile: opts.profile })), "CostExplorer");
+  const parts: DayCost[] = [];
+  let requests = 0;
+  let token: string | undefined;
+  do {
+    if (requests === MAX_COST_PAGES) throw new Error(`Cost Explorer kept paging after ${MAX_COST_PAGES} requests, so CloudPilot stopped rather than be charged for more.`);
+    let res: GetCostAndUsageCommandOutput;
+    try {
+      res = await client.send(new GetCostAndUsageCommand({ ...input, ...(token ? { NextPageToken: token } : {}) }));
+    } catch (err) {
+      // A request missing from a replay is a hard stop, never a skipped check.
+      if (err instanceof ReplayMissError) throw err;
+      throw new Error(`Cost Explorer could not be read: ${errorName(err)}${err instanceof Error ? ` - ${err.message}` : ""}`);
+    }
+    requests += 1;
+    for (const result of res.ResultsByTime ?? []) {
+      const day = result.TimePeriod?.Start;
+      if (!day) throw new Error("Cost Explorer returned a day with no date.");
+      const costs: Record<string, number> = {};
+      for (const group of result.Groups ?? []) {
+        const service = group.Keys?.[0] ?? "(no service)";
+        const cost = group.Metrics?.UnblendedCost;
+        if (cost?.Unit !== "USD") throw new Error(`Cost Explorer reports ${service} in ${cost?.Unit ?? "an unknown currency"}, and CloudPilot compares dollars only.`);
+        const usd = Number(cost.Amount);
+        if (!Number.isFinite(usd)) throw new Error(`Cost Explorer returned an amount for ${service} on ${day} that is not a number.`);
+        costs[service] = (costs[service] ?? 0) + usd;
+      }
+      parts.push({ day, costs, ...(result.Estimated ? { estimated: true } : {}) });
+    }
+    token = res.NextPageToken || undefined;
+  } while (token);
+  return { days: mergeDays(parts), requests };
 }

@@ -51,13 +51,15 @@ interface SessionBase {
 
 /** A run against an AWS account. Its answers are in aws.json. */
 export interface AccountSession extends SessionBase {
-  command: "scan" | "ask";
+  command: "scan" | "ask" | "anomalies";
   /** Region the account lookups were sent to. */
   homeRegion: string;
   /** The one region asked for, or null when every enabled region was scanned. */
   region: string | null;
-  /** The regions that were actually scanned. */
+  /** The regions that were actually scanned. None for anomalies, which reads Cost Explorer alone. */
   regions: string[];
+  /** Anomalies only: the days of cost that were read, so a replay asks for the same ones. */
+  days?: number;
 }
 
 /** A run against a Kubernetes cluster. Its answers are in kube.json. */
@@ -165,7 +167,7 @@ export function loadManifest(dir: string): Manifest {
 }
 
 export const sessionIdFor = (command: SessionMeta["command"], question?: string) =>
-  command === "scan" || command === "kube" ? command : `${command === "ask" ? "ask" : "kube-ask"}-${createHash("sha256").update(question ?? "").digest("hex").slice(0, 12)}`;
+  command === "scan" || command === "kube" || command === "anomalies" ? command : `${command === "ask" ? "ask" : "kube-ask"}-${createHash("sha256").update(question ?? "").digest("hex").slice(0, 12)}`;
 
 /** Replace the account ID in text, when redaction is on and the ID is known. */
 export function redact(text: string): string {

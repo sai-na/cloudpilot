@@ -110,7 +110,7 @@ const READS = [
     service: "CostExplorer",
     operation: "GetCostAndUsage",
     permission: "ce:GetCostAndUsage",
-    charged: "AWS charges $0.01 for each request, so init does not try it; only scan --bill makes it",
+    charged: "AWS charges $0.01 for each request, so init does not try it; only scan --bill and anomalies make it",
   },
 ] as const satisfies readonly AwsRead[];
 

@@ -5,7 +5,8 @@ import { dirname } from "node:path";
 import { Command } from "commander";
 import { buildTools, clusterWorkloads, forModel, MCP_CLUSTER_INSTRUCTIONS, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
-import { callerAccount, collect, enabledRegions, mapLimit, readBill, readCpu } from "./collect.js";
+import { anomaliesJson, CHARGE_NOTICE, DEFAULT_DAYS, DEFAULT_MIN_INCREASE_USD, DEFAULT_SENSITIVITY, findAnomalies, MAX_DAYS, MIN_DAYS, renderAnomalies, REPLAY_CHARGE_NOTICE, type AnomalyReport, type AnomalyRule } from "./anomaly.js";
+import { callerAccount, collect, enabledRegions, mapLimit, readBill, readCpu, readDailyCosts } from "./collect.js";
 import { compareScans, isScanResult } from "./compare.js";
 import { detect, mergeScans, withBill } from "./detect.js";
 import { loadEnvFile } from "./env.js";
@@ -195,7 +196,7 @@ async function notifying<T>(targets: Target[], subject: () => string, run: () =>
 const contextSubject = (context: string | undefined) => `cluster ${context ?? "(the current context)"}`;
 
 /** What a replay of this kind of run is called when the recording has none. */
-const RECORDED_AS: Record<SessionMeta["command"], string> = { scan: "scan", ask: "ask", kube: "cluster scan", "kube-ask": "cluster question" };
+const RECORDED_AS: Record<SessionMeta["command"], string> = { scan: "scan", ask: "ask", kube: "cluster scan", "kube-ask": "cluster question", anomalies: "spend anomalies check" };
 
 /**
  * The recorded session a replay repeats. A question the recording does not
@@ -735,6 +736,118 @@ withRecordingOptions(
     if (targets.length > 0 && (await notifyOnce(targets, findingsNotice(result, Boolean(compared), banner)))) await saveBaseline(saved, scanned, {});
     await uploadOnce(destination, () => scanJson(result, summary, banner));
     finishCluster(inventory);
+  });
+
+interface AnomaliesOptions {
+  profile?: string;
+  days?: string;
+  sensitivity: string;
+  minIncrease: string;
+  json?: boolean;
+  notify?: string[];
+  record?: string;
+  replay?: string;
+  redactAccount?: boolean;
+  /** Set once the notify targets are settled, so a replay's banner can say it still sends them. */
+  notifying?: boolean;
+}
+
+/** The rule's two settings, and the days asked for if any, settled before anything is read, so a typo costs no request. */
+function anomalySettings(options: AnomaliesOptions): { rule: AnomalyRule; days?: number } {
+  const sensitivity = Number(options.sensitivity);
+  if (options.sensitivity.trim() === "" || !Number.isFinite(sensitivity) || sensitivity <= 0) throw new Error(`--sensitivity takes a number above zero. Got "${options.sensitivity}".`);
+  const days = options.days === undefined ? undefined : Number(options.days);
+  if (days !== undefined && (!/^\d+$/.test(options.days!.trim()) || days < MIN_DAYS || days > MAX_DAYS)) {
+    throw new Error(`--days takes a whole number from ${MIN_DAYS} to ${MAX_DAYS}. Got "${options.days}".`);
+  }
+  return { rule: { sensitivity, minIncreaseUsd: amount(options.minIncrease, "--min-increase") }, days };
+}
+
+/**
+ * Read the daily cost per service, live or from a recording, and apply the
+ * rule. The charge is said before the request is made. A replay reads the
+ * days it was recorded with unless told otherwise, and says it makes no request.
+ */
+async function runAnomalies(options: AnomaliesOptions, rule: AnomalyRule, daysGiven: number | undefined) {
+  if (options.record && options.replay) throw new Error("Use --record or --replay, not both.");
+  const json = Boolean(options.json);
+  const redactAccount = Boolean(options.redactAccount);
+  let homeRegion = defaultRegion();
+  let days = daysGiven ?? DEFAULT_DAYS;
+  let banner: string | undefined;
+
+  if (!options.replay) {
+    if (options.record) startRecord(options.record, { id: sessionIdFor("anomalies"), command: "anomalies", homeRegion, region: null, days }, { redact: redactAccount });
+    else startLive({ redact: redactAccount });
+  } else {
+    const { manifest, session } = replaySession(options.replay, "anomalies", undefined, false);
+    if (session.command !== "anomalies") throw new Error(`${options.replay} holds no recorded ${RECORDED_AS.anomalies}. Record one with --record first.`);
+    if (!manifest.accountId) throw new Error(`${options.replay} holds no recorded account. Record one with --record first.`);
+    startReplay(options.replay, session, { redact: redactAccount, liveLlm: false });
+    enableRedaction(manifest.accountId);
+    homeRegion = session.homeRegion;
+    days = daysGiven ?? session.days ?? DEFAULT_DAYS;
+    banner = `REPLAY MODE: recorded ${session.recordedAt} from account ${redactAccount ? REDACTED_ACCOUNT : manifest.accountId}, the last ${days} days of cost. ${replayTail("AWS", options)}`;
+    announce(banner, json);
+  }
+
+  const profile = options.profile;
+  const accountId = await callerAccount({ region: homeRegion, profile });
+  enableRedaction(accountId);
+  // Said before the request, and first on stdout in a text run; --json keeps stdout for the JSON.
+  const charge = mode() === "replay" ? REPLAY_CHARGE_NOTICE : CHARGE_NOTICE;
+  if (json) note(charge);
+  else console.log(`${charge}\n`);
+
+  const read = await readDailyCosts({ profile, days });
+  const requests = mode() === "replay" ? 0 : read.requests;
+  const report = findAnomalies(read.days, now().toISOString().slice(0, 10), rule);
+  return { report, accountId, days, requests, banner };
+}
+
+/** In record mode, write the capture once the run has finished. */
+function finishAnomalies(accountId: string): void {
+  if (mode() === "record") note(`Recorded to ${saveRecording({ accountId, regions: [] })}`);
+}
+
+/** The message for a run that found something, and nothing for one that did not: silence means nothing was unusual. */
+const anomaliesNotice = (report: AnomalyReport, accountId: string, banner?: string): Notice | undefined =>
+  report.anomalies.length > 0 ? { kind: "anomalies", report, accountId, banner } : undefined;
+
+program
+  .command("anomalies")
+  .description(
+    `Find services that cost unusually much on the latest complete day, from daily Cost Explorer data. AWS charges $0.01 for each Cost Explorer request, and this makes one. A fixed rule (median and median absolute deviation) finds them; no model is involved`,
+  )
+  .option("--days <n>", `days of cost to read, ${MIN_DAYS} to ${MAX_DAYS}; the latest complete day is compared with the days before it (default ${DEFAULT_DAYS}; with --replay, the days recorded)`)
+  .option("--sensitivity <k>", `flag a day above the median plus k times 1.4826 times the median absolute deviation (default ${DEFAULT_SENSITIVITY})`, String(DEFAULT_SENSITIVITY))
+  .option("--min-increase <dollars>", `never flag a day that is less than this many dollars above the median (default ${DEFAULT_MIN_INCREASE_USD.toFixed(2)})`, DEFAULT_MIN_INCREASE_USD.toFixed(2))
+  .option("--json", "print the result as JSON instead of a report")
+  .option("--profile <name>", "AWS profile to read with (default: the standard AWS credential chain)", process.env.AWS_PROFILE)
+  .option("--notify <url>", NOTIFY_HELP.replace("what is new", "which services cost more than usual, only when there is one"), collectUrls)
+  .option("--record <dir>", "run live and save everything needed to replay this run into <dir>")
+  .option("--replay <dir>", "repeat a recorded run from <dir> with no network calls and no charge")
+  .option("--redact-account", `show the account ID as ${REDACTED_ACCOUNT} in output and recordings`)
+  .action(async (options: AnomaliesOptions) => {
+    const { rule, days } = anomalySettings(options);
+    const targets = notifyTargets(options.notify);
+    let ran: Awaited<ReturnType<typeof runAnomalies>>;
+    try {
+      ran = await runAnomalies({ ...options, notifying: targets.length > 0 }, rule, days);
+    } catch (err) {
+      // A check that failed is a message of its own, so that silence only ever means nothing was unusual.
+      await notifyFailed(targets, "your AWS account", err);
+      throw err;
+    }
+    const { report, accountId, banner } = ran;
+    const context = { accountId, days: ran.days, requests: ran.requests };
+    console.log(options.json ? JSON.stringify(anomaliesJson(report, { ...context, replay: banner }), null, 2) : renderAnomalies(report, context));
+    if (targets.length > 0) {
+      const notice = anomaliesNotice(report, accountId, banner);
+      if (notice) await notifyOnce(targets, notice);
+      else note(report.status === "ok" ? `Nothing unusual, so nothing was sent to ${hostsOf(targets)}.` : `Nothing could be judged, so nothing was sent to ${hostsOf(targets)}.`);
+    }
+    finishAnomalies(accountId);
   });
 
 interface WatchCommandOptions extends Omit<CommonOptions, "lookbackHours">, Omit<KubeOptions, "lookbackHours" | "compare" | "onlyNew" | "answerKey" | "json" | "out" | "html"> {
