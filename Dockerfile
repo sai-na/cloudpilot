@@ -50,6 +50,8 @@ LABEL org.opencontainers.image.title="CloudPilot" \
 WORKDIR /app
 # The command reads ../package.json for its version, so keep this layout.
 COPY packages/cli/package.json packages/cli/LICENSE ./
+# The report embeds two typefaces; their licence texts travel with them.
+COPY packages/cli/licenses ./licenses
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=kubectl /kubectl /usr/local/bin/kubectl
