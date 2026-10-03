@@ -179,6 +179,36 @@ export interface AuditEntry {
   wayBack: string;
 }
 
+const OUTCOMES: Outcome[] = ["applied", "failed", "declined", "refused"];
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** True when a line of the audit log is an entry this version can read. */
+export function isAuditEntry(value: unknown): value is AuditEntry {
+  const v = value as Partial<AuditEntry> | null;
+  const f = v?.finding as Partial<AuditEntry["finding"]> | undefined;
+  return Boolean(
+    v &&
+      typeof v.at === "string" &&
+      typeof v.user === "string" &&
+      (v.scope === "account" || v.scope === "cluster") &&
+      typeof v.target === "string" &&
+      typeof v.scannedAt === "string" &&
+      f &&
+      typeof f.pattern === "string" &&
+      typeof f.region === "string" &&
+      isStringList(f.resourceIds) &&
+      typeof f.title === "string" &&
+      typeof f.monthlyCostUsd === "number" &&
+      (v.which === "fix" || v.which === "alternative") &&
+      typeof v.risk === "string" &&
+      OUTCOMES.includes(v.outcome as Outcome) &&
+      (v.reason === undefined || typeof v.reason === "string") &&
+      Array.isArray(v.commands) &&
+      v.commands.every((c) => c && typeof c.command === "string" && (c.exitCode === undefined || typeof c.exitCode === "number")) &&
+      typeof v.wayBack === "string",
+  );
+}
+
 export interface Runner {
   run(program: string, args: string[]): Promise<{ exitCode: number; output: string }>;
 }

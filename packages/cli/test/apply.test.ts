@@ -280,16 +280,27 @@ test("cloudpilot apply runs the named fix through the real program's arguments a
   assert.equal(JSON.parse(ws.run(["audit", "--json"]).stdout).length, 2);
 });
 
-test("a half-written line in the audit log costs that line, not the whole record", () => {
+test("a line of the audit log that cannot be read costs that line, not the whole record", () => {
   const ws = saved();
   assert.equal(ws.run(["apply", VOLUME, "--yes"]).status, 0);
-  appendFileSync(join(ws.cwd, ".cloudpilot/audit.jsonl"), '{"at":"2026-10-03T12:00:0\n');
+  // Half a line from a killed process, and a line that is JSON but not an entry.
+  appendFileSync(join(ws.cwd, ".cloudpilot/audit.jsonl"), '{"at":"2026-10-03T12:00:0\n{"at":"2026-10-03T12:00:00Z","outcome":"applied"}\n');
 
   const audit = ws.run(["audit"]);
   assert.equal(audit.status, 0, audit.stderr);
   assert.match(audit.stdout, new RegExp(`APPLIED {3}${VOLUME}`));
-  assert.match(audit.stderr, /1 line of \.cloudpilot\/audit\.jsonl could not be read and is not shown above\./);
+  assert.match(audit.stderr, /2 lines of \.cloudpilot\/audit\.jsonl could not be read and are not shown above\./);
   assert.equal(JSON.parse(ws.run(["audit", "--json"]).stdout).length, 1);
+});
+
+test("an audit log that exists but cannot be read is said to be unreadable, not empty", () => {
+  const ws = saved();
+  mkdirSync(join(ws.cwd, ".cloudpilot/audit.jsonl"), { recursive: true });
+
+  const audit = ws.run(["audit"]);
+  assert.equal(audit.status, 1);
+  assert.doesNotMatch(audit.stdout, /No fix has been run/);
+  assert.match(audit.stderr, /\.cloudpilot\/audit\.jsonl is there but could not be read \(EISDIR\)\./);
 });
 
 test("run unattended, the command refuses a permanent fix and a fix nobody approved, and runs nothing", () => {

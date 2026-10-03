@@ -8,7 +8,7 @@ import { Command } from "commander";
 import { buildTools, forModel, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
 import { callerAccount, collect, enabledRegions, readCpu } from "./collect.js";
-import { apply, ApplyError, plan, programRunner, renderAudit, type AuditEntry } from "./apply.js";
+import { apply, ApplyError, isAuditEntry, plan, programRunner, renderAudit, type AuditEntry } from "./apply.js";
 import { compareScans, isScanResult } from "./compare.js";
 import { detect, mergeScans } from "./detect.js";
 import { loadEnvFile } from "./env.js";
@@ -459,17 +459,33 @@ async function savedScans(from?: string): Promise<ScanResult[]> {
   return scans;
 }
 
+/** Who to record as having asked for a fix. A uid with no passwd entry still gets a name. */
+function whoAmI(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return process.env.USER || process.env.LOGNAME || `uid ${process.getuid?.() ?? "unknown"}`;
+  }
+}
+
 /** The audit log, losing only the lines that cannot be read rather than the whole record. */
 async function readAudit(): Promise<{ entries: AuditEntry[]; unreadable: number }> {
-  const text = await readFile(AUDIT_LOG, "utf8").catch(() => "");
+  const text = await readFile(AUDIT_LOG, "utf8").catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return "";
+    throw new ApplyError(`${AUDIT_LOG} is there but could not be read (${err.code ?? err.message}). That file is the record of what apply has run, so this is not an empty record.`);
+  });
   const entries: AuditEntry[] = [];
   let unreadable = 0;
   for (const line of text.split("\n").filter(Boolean)) {
+    let parsed: unknown;
     try {
-      entries.push(JSON.parse(line) as AuditEntry);
+      parsed = JSON.parse(line);
     } catch {
       unreadable++;
+      continue;
     }
+    if (isAuditEntry(parsed)) entries.push(parsed);
+    else unreadable++;
   }
   return { entries, unreadable };
 }
@@ -503,7 +519,7 @@ program
           await mkdir(dirname(AUDIT_LOG), { recursive: true });
           await appendFile(AUDIT_LOG, `${JSON.stringify(entry)}\n`);
         },
-        user: userInfo().username,
+        user: whoAmI(),
         now: () => new Date(),
       });
       if (!options.dryRun) note(`\nRecorded in ${AUDIT_LOG}. See it with: cloudpilot audit`);
