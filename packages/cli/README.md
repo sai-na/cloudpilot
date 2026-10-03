@@ -419,10 +419,15 @@ before the next one, so rounds never overlap.
   held last time is kept whenever this round did not read that region in full,
   whether a check there failed or the round never looked, so it is not
   reported as new when that region is read again.
+- **Uploads:** with `--upload`, every round that completed is uploaded, with
+  something new or not (see [Keep the history](#keep-the-history)). A failed
+  upload is said once on stderr and not again while it keeps failing the same
+  way, and when uploading works again that is said once. It never changes what
+  has been reported or sent.
 - **Stopping:** Ctrl+C or SIGTERM ends it cleanly, between rounds or in the
   middle of one. `--max-runs <n>` ends it after `n` rounds. The exit status is
-  1 if the last round failed or its message was not delivered, and 0 otherwise,
-  and always 0 when it was stopped by a signal.
+  1 if the last round failed, its message was not delivered or its upload
+  failed, and 0 otherwise, and always 0 when it was stopped by a signal.
 - **How often:** `--every` takes a number and a unit (`30m`, `6h`, `1d`), and
   defaults to `6h`. It is refused below 15 minutes and above 7 days. A round
   reads every region (or asks Prometheus for days of history for every
@@ -437,7 +442,104 @@ and `--kube` with `--context`, `--namespace`, `--prometheus`, `--lookback-hours`
 `--cpu-hour-usd`, `--memory-gib-hour-usd` and `--storage-gib-month-usd` for the
 cluster. With `--kube` the kubectl context in force when it starts is the one
 read in every round. It makes the same read-only calls as `scan` and `kube`;
-the only new outbound requests are the POSTs to your `--notify` URLs.
+the only new outbound requests are the POSTs to your `--notify` URLs and, with
+`--upload`, to the one address you gave.
+
+### Keep the history
+
+`--upload` sends each scan's result to CloudPilot's hosted service, so a team
+has history (what is new, what was resolved, over weeks) without piping output
+to curl. It is optional: CloudPilot sends nothing anywhere unless you give it
+this option.
+
+```sh
+# the token the service made for you, from its settings (it is shown once)
+export CLOUDPILOT_UPLOAD_TOKEN=<the token>
+npx @meruapps/cloudpilot scan --upload https://your-cloudpilot-address/api/ingest
+npx @meruapps/cloudpilot kube --upload https://your-cloudpilot-address/api/ingest
+npx @meruapps/cloudpilot watch --every 6h --upload https://your-cloudpilot-address/api/ingest
+```
+
+The address is the service's upload endpoint, `/api/ingest` on its address
+(`your-cloudpilot-address` is a placeholder). Anything but `https` is refused,
+except `http` to `127.0.0.1` or `localhost`, which is for trying it on your own
+machine. An address with a user name or password in it is refused too.
+
+**The token is a secret**, since whoever has it can add scans to your history.
+It is read only from the environment variable `CLOUDPILOT_UPLOAD_TOKEN` (which
+can also be set in a `.env` file), and there is no flag for it, on purpose: a
+flag ends up in your shell history and in the process list of the machine,
+where any user on it can read it. CloudPilot never prints it, and never writes
+it to a saved scan, a report or a recording. Where it must name the address it
+shows the host only, and anything the service says back is shown with the
+token and the address taken out. Once the token is read, it is removed from
+CloudPilot's own environment, so `kubectl` and the other programs a scan
+starts do not inherit it. What it cannot control: the service you name sees
+the token, and anything on your machine that can read the environment of the
+process or your `.env` file can too.
+
+**What is sent.** One HTTPS POST to your address, with `Authorization: Bearer
+<token>`, whose body is the JSON that `--json` prints for that run: the
+account ID, or the cluster's context; the regions, or namespaces; when the scan
+was taken; the price source; and every finding with its title, rule name,
+resource type and IDs, evidence, monthly cost and how it was worked out, fix
+commands with their risk and way back, and confidence. Also the total, the
+names of resources skipped by the ignore tag, and the warnings, which are the
+error text of checks that could not run and can name the role that was
+refused. For a cluster, its API server address, its Prometheus and the unit
+prices. Because it is exactly what `--json` prints, it also carries the
+comparison with the last scan, the `isNew` marks, the bill figures if you asked
+for `--bill`, and the summary (written by a model if you asked for `--explain`).
+The service works out for itself what is new and what was
+resolved, from the sequence of scans. The service receives no AWS or cluster
+credentials: CloudPilot never sends any, and the only secret in the request is
+the upload token, which is the service's own. Nothing is sent anywhere but the
+address you gave, and a redirect is treated as a failure instead of being
+followed, so the token never goes where you did not point it.
+
+**When it uploads.** Every run, not only a run with something new: the service
+needs each scan to work out what is new and what was resolved. `--only-new`,
+`--no-compare` and `--notify` change what is printed or sent to your team, not
+what is uploaded. Under `watch`, every round that completed is uploaded; a
+round whose check failed has no result and uploads nothing. An upload comes
+after the report is printed, and one that fails changes nothing else: the
+saved scan and what `--notify` has told your team move as they would without
+it.
+
+**What the service answers, and what CloudPilot says.** One line on stderr for
+each, never the body of the answer:
+
+| Answer | What CloudPilot says | Exit status |
+|---|---|---|
+| `201` stored | `Uploaded the scan to <host>: stored (3 new, 1 came back, 2 resolved, 8 unchanged).` The counts are shown when the service gives them | 0 |
+| `200` this exact scan was already stored | `Uploaded the scan to <host>: this exact scan was already stored, so nothing changed.` | 0 |
+| `401` token missing, wrong or revoked | the token in `CLOUDPILOT_UPLOAD_TOKEN` was not accepted; make a new one in the service's settings and set the variable again | 1 |
+| `409` older than the latest stored | a later scan of this account or cluster is already stored; check the clock of this machine | 1 |
+| `413` too large | the scan is larger than the service accepts; scan a smaller part at a time, with `--region` or `--namespace` | 1 |
+| `422` not a scan result | the service does not take this as a scan result, with the first thing it found wrong; update CloudPilot, and report it if it still happens | 1 |
+| anything else | the status, and for a redirect, a server error or an address that does not answer like the service, what to check | 1 |
+
+Every failure line starts `Could not upload the scan to <host>:`. A failed
+upload does not hide the report: the report is printed, then the failure is
+said, and a `scan` or `kube` run ends with status 1, so a cron job or CI step
+cannot take a missing scan for a stored one. Under `watch` it is said once,
+and not again while the upload keeps failing the same way.
+
+**Time-outs and retries.** Each attempt gets 20 seconds to answer, so a service
+that hangs cannot hold the scan for more than about 42 seconds. An attempt that
+gets no answer, or a server error (`5xx`), is tried once more after two seconds,
+and never more than once. The retry sends the same scan, which the service
+stores once however often it is sent. An answer that says what is wrong with
+the request (`401`, `409`, `413`, `422`) is not retried.
+
+**What it refuses, and why.** All of these stop the run before anything is read:
+
+- `--upload` with `--replay`: a recording is not the account as it is now, and
+  uploading it would put old findings into the history as if they were current.
+- `--upload` with `--redact-account`: the stand-in account ID is the same for
+  every account, so the history would merge different accounts into one.
+- `kube --upload` with `--answer-key`: that run scores a lab and keeps no scan.
+- `--upload` with no `CLOUDPILOT_UPLOAD_TOKEN`, so a typo costs no scan.
 
 ### Score it against the waste lab
 
@@ -769,6 +871,7 @@ say so: see [Watch it](#watch-it).
 | `--no-compare` | `scan` only: do not compare |
 | `--only-new` | `scan` only: list only the findings that are new since the earlier scan |
 | `--notify <url>` | `scan`, `kube` and `watch`: send what is new to this Slack, Discord or other https webhook. Repeatable; or `CLOUDPILOT_NOTIFY`, comma-separated. See [Tell your team what is new](#tell-your-team-what-is-new) |
+| `--upload <url>` | `scan`, `kube` and `watch`: send each scan's full result as JSON to this https address, the hosted service's upload endpoint. The token is read only from `CLOUDPILOT_UPLOAD_TOKEN`, never from a flag. Not with `--replay`, `--redact-account` or `kube --answer-key`. See [Keep the history](#keep-the-history) |
 | `--every <interval>` | `watch` only: the wait between rounds, `15m` to `7d`. Default `6h` |
 | `--max-runs <n>` | `watch` only: stop after this many rounds. Default: until stopped |
 | `--kube` | `watch` and `ask`: work on the cluster kubectl points at instead of the AWS account. With `ask` it takes `--context`, `--namespace`, `--prometheus`, `--lookback-hours` (default 168, not 24) and the price options, and refuses `--region`, `--all-regions`, `--profile`, `--price-file`, `--offline` and `--redact-account` |
@@ -852,8 +955,10 @@ fewer or smaller nodes, which a node autoscaler does for you.
 
 ### The rest works the same
 
-`--json`, `--out`, `--html`, `--compare`, `--no-compare`, `--only-new` and
-`--notify` behave as they do for `scan`, and `watch --kube` repeats the scan.
+`--json`, `--out`, `--html`, `--compare`, `--no-compare`, `--only-new`,
+`--notify` and `--upload` behave as they do for `scan`, and `watch --kube`
+repeats the scan. `kube --upload` is refused with `--answer-key`, which scores
+a lab instead of keeping a scan: see [Keep the history](#keep-the-history).
 The last scan is kept per cluster
 (`.cloudpilot/last-kube-scan-<context>.json`; `ask --kube` leaves one too, and
 a replay never does), so a repeat scan says what is new without touching the
@@ -1031,6 +1136,13 @@ The rules are checked against a seeded cluster: see
 - Notifications: with several URLs, a message that one of them refused is
   retried for that one only by `watch`. A one-shot `scan` leaves the findings
   new, so the next run sends the message to every URL again.
+- Uploads: a scan that could not be uploaded is not kept and sent later. The
+  next run uploads its own result, so the service has no scan for the gap.
+- Uploads: only the address you give is used. CloudPilot does not look the
+  service up, and does not follow a redirect.
+- Uploads: `--upload` has only been run against a stand-in for the service on
+  the same machine, which answers as the service's documentation says it does.
+  It has not been run against a deployed service.
 
 ## Development
 

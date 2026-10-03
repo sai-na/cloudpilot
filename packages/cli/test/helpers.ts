@@ -129,6 +129,8 @@ const fs = require("fs");
 const fixture = JSON.parse(fs.readFileSync(process.env.KUBE_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.KUBE_LOG, JSON.stringify(args) + "\\n");
+// Where a test asks, keep the environment this was started with: what the scanner hands to a program it starts.
+if (process.env.KUBE_ENV_LOG) fs.appendFileSync(process.env.KUBE_ENV_LOG, JSON.stringify(process.env) + "\\n");
 const rest = args[0] === "--context" ? args.slice(2) : args;
 if (rest.join(" ") === "config view --minify -o json") {
   process.stdout.write(JSON.stringify({ contexts: [{ name: fixture.identity.context }], clusters: [{ cluster: { server: fixture.identity.server } }] }));

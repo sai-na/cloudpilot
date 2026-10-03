@@ -12,8 +12,9 @@
  */
 import { carryForward, compareScans, keyOf } from "./compare.js";
 import { deliver, freshFindings, subjectOf, type Notice, type Sender, type Target } from "./notify.js";
-import { money, renderText } from "./report.js";
+import { money, renderText, templatedSummary } from "./report.js";
 import type { ScanResult } from "./types.js";
+import { scanJson, type Outcome } from "./upload.js";
 
 const MINUTE = 60_000;
 const UNITS: Record<string, number> = { s: 1000, m: MINUTE, h: 60 * MINUTE, d: 24 * 60 * MINUTE };
@@ -79,6 +80,8 @@ export interface WatchDeps {
   /** What has been reported so far, kept between runs. */
   baseline: { load(): Promise<ScanResult | undefined>; save(result: ScanResult): Promise<void> };
   send: Sender;
+  /** Uploads one round's scan, as the JSON text of what `scan --json` would print. Unset: nothing is uploaded. Resolves with what came of it; it must not throw. */
+  upload?(body: string, signal: AbortSignal): Promise<Outcome>;
   clock(): Date;
   /** Resolves after `ms`, or as soon as the signal aborts. */
   sleep(ms: number, signal: AbortSignal): Promise<void>;
@@ -97,7 +100,7 @@ export interface WatchOptions {
 
 export interface WatchEnd {
   rounds: number;
-  /** 1 when the last round failed, or a message is still undelivered; 0 otherwise, and always 0 when stopped by the user. */
+  /** 1 when the last round failed, or a message is still undelivered, or the last upload failed; 0 otherwise, and always 0 when stopped by the user. */
   exitCode: number;
   stopped: boolean;
 }
@@ -138,6 +141,8 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
   /** The message in flight, and the targets that already have it. */
   let pending: { key: string; done: Set<number> } | undefined;
   let undelivered = false;
+  /** How the last upload failed, so the same failure is said once. Unset while uploads work. */
+  let uploadFailure: string | undefined;
   let saveWarned = false;
   let rounds = 0;
 
@@ -173,6 +178,21 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
     }
   };
 
+  /** Every round that completed is uploaded, with or without anything new: the service works out what is new from the sequence. Failures are said on stderr and never stop the round. */
+  const uploadRound = async (result: ScanResult, banner: string | undefined, at: string) => {
+    if (!deps.upload) return;
+    const outcome = await abortable(deps.upload(JSON.stringify(scanJson(result, templatedSummary(result, { shortenIds: true }), banner)), signal), signal);
+    if (outcome.ok) {
+      if (uploadFailure !== undefined) deps.out(`${at}  Uploading works again.`);
+      uploadFailure = undefined;
+      deps.out(outcome.line);
+      return;
+    }
+    // Said once. The same failure again is not said again; a different one is.
+    if (uploadFailure !== outcome.key) deps.err(outcome.line);
+    uploadFailure = outcome.key;
+  };
+
   const goodRound = async ({ result: scanned, banner }: RoundScan, at: string) => {
     const compared = baseline ? compareScans(baseline, scanned) : undefined;
     // Nothing to compare with (the first round, or a baseline of another account): every finding is new.
@@ -188,6 +208,7 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
       const since = compared?.comparison?.previousScannedAt;
       deps.out(`${at}  Nothing new since ${since}: ${scanned.findings.length} finding${scanned.findings.length === 1 ? "" : "s"}, ${money(scanned.totalMonthlyWasteUsd)} a month.`);
     }
+    await uploadRound(result, banner, at);
 
     let notice: Notice | undefined;
     let key = "";
@@ -234,5 +255,5 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
 
   const stopped = signal.aborted;
   if (stopped && undelivered) deps.err("Stopped with a message not yet delivered. Its findings are still new, so the next run reports them.");
-  return { rounds, exitCode: !stopped && (outage || undelivered) ? 1 : 0, stopped };
+  return { rounds, exitCode: !stopped && (outage || undelivered || uploadFailure !== undefined) ? 1 : 0, stopped };
 }

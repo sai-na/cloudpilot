@@ -40,12 +40,15 @@ import {
 import { READ_ONLY_POLICY } from "./policy.js";
 import { header, money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
 import type { ClusterPrices, Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
+import { httpUploader, parseDestination, scanJson, TOKEN_VARIABLE, upload, type Destination } from "./upload.js";
 import { DEFAULT_EVERY, parseEvery, parseMaxRuns, reasonOf, sleep, watch } from "./watch.js";
 
 const LAST_SCAN = ".cloudpilot/last-scan.json";
 
 const NOTIFY_HELP =
   "tell this Slack, Discord or other https webhook what is new (repeatable; or CLOUDPILOT_NOTIFY, comma-separated). The URL is a secret and is never printed";
+
+const UPLOAD_HELP = `send each scan's full result as JSON to this https address, the hosted service's upload endpoint. The token for it is read only from ${TOKEN_VARIABLE}, never from a flag, because a flag ends up in shell history and in the process list`;
 
 /** Regions read at the same time. Enough to finish an account in seconds without tripping API throttles. */
 const REGIONS_AT_ONCE = 6;
@@ -123,6 +126,40 @@ async function notifyOnce(targets: Target[], notice: Notice | undefined): Promis
   }
   note(`Sent to ${hostsOf(targets)}.`);
   return true;
+}
+
+interface UploadGuard {
+  upload?: string;
+  replay?: string;
+  redactAccount?: boolean;
+  answerKey?: string;
+}
+
+/**
+ * Where --upload sends scans, settled before anything is read. What would put
+ * the wrong thing into the hosted history is refused here, and says why.
+ */
+function uploadDestination(options: UploadGuard): Destination | undefined {
+  if (options.upload === undefined) return undefined;
+  if (options.replay) throw new Error("--upload cannot be used with --replay: a recording is not the account as it is now, and uploading it would put old findings into the hosted history as if they were current.");
+  if (options.redactAccount) throw new Error("--upload cannot be used with --redact-account: the stand-in account ID is the same for every account, so the hosted history would merge different accounts into one.");
+  if (options.answerKey) throw new Error("--upload cannot be used with --answer-key: that run scores a lab against its answer key and keeps no scan, and a lab is not a cluster whose history is worth keeping.");
+  const destination = parseDestination(options.upload, process.env[TOKEN_VARIABLE]);
+  // Held in memory from here on: kubectl and the AWS credential helpers a scan starts must not inherit it.
+  delete process.env[TOKEN_VARIABLE];
+  return destination;
+}
+
+/**
+ * Upload the result of a scan that runs once, and say what came of it on
+ * stderr. A failure also sets the exit code, after the report has been printed,
+ * so a cron job or CI step cannot take a missing scan for a stored one.
+ */
+async function uploadOnce(destination: Destination | undefined, body: () => object): Promise<void> {
+  if (!destination) return;
+  const outcome = await upload(destination, JSON.stringify(body()), { send: httpUploader, pause: sleep }, new AbortController().signal);
+  note(outcome.line);
+  if (!outcome.ok) process.exitCode = 1;
 }
 
 /** What a one-shot scan owes its targets: the new findings, or the full report when there was nothing to compare with. */
@@ -421,7 +458,7 @@ interface OutputOptions {
 /** Print the report, and write the files that were asked for. */
 async function present(result: ScanResult, summary: string, view: ReportOptions, options: OutputOptions, banner?: string): Promise<void> {
   if (options.json) {
-    console.log(JSON.stringify({ ...result, summary, ...(banner ? { replay: banner } : {}) }, null, 2));
+    console.log(JSON.stringify(scanJson(result, summary, banner), null, 2));
   } else {
     console.log(renderText(result, view));
     console.log(`\nSummary\n\n${summary}`);
@@ -452,6 +489,7 @@ interface KubeOptions extends OutputOptions {
   notify?: string[];
   /** Set once the notify targets are settled, so a replay's banner can say it still sends them. */
   notifying?: boolean;
+  upload?: string;
   explain?: boolean;
   model?: string;
   provider?: Provider;
@@ -607,8 +645,10 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
   .option("--no-compare", "do not compare with an earlier scan")
   .option("--only-new", "list only the findings that are new since the earlier scan")
   .option("--notify <url>", NOTIFY_HELP, collectUrls)
+  .option("--upload <url>", UPLOAD_HELP)
   .option("--bill", "also read last month's total spend from Cost Explorer and say what share of it the waste is. AWS charges $0.01 for this one request, so it is never made unless you ask")
-  .action(async (options: CommonOptions & { json?: boolean; out?: string; html?: string; explain?: boolean; compare?: string | false; onlyNew?: boolean; notify?: string[] }) => {
+  .action(async (options: CommonOptions & { json?: boolean; out?: string; html?: string; explain?: boolean; compare?: string | false; onlyNew?: boolean; notify?: string[]; upload?: string }) => {
+    const destination = uploadDestination(options);
     const targets = notifyTargets(options.notify);
     if (targets.length > 0 && options.compare === false) throw new Error("--notify needs the comparison to know what is new, so it cannot be used with --no-compare.");
     // Read the earlier scan first: this run saves its own result over it.
@@ -635,6 +675,7 @@ withCommonOptions(program.command("scan", { isDefault: true }).description("Scan
     await present(result, summary, view, options, banner);
     // A message that was not delivered leaves the findings new: the saved scan stays as it was, so the next run says them again.
     if (targets.length > 0 && (await notifyOnce(targets, findingsNotice(result, Boolean(compared), banner)))) await saveBaseline(LAST_SCAN, scanned, options);
+    await uploadOnce(destination, () => scanJson(result, summary, banner));
     finish(result);
   });
 
@@ -657,7 +698,9 @@ withRecordingOptions(
   .option("--only-new", "list only the findings that are new since the earlier scan")
   .option("--answer-key <path>", "score the findings against a lab's answer key instead of printing the report")
   .option("--notify <url>", NOTIFY_HELP, collectUrls)
+  .option("--upload <url>", UPLOAD_HELP)
   .action(async (options: KubeOptions, command: Command) => {
+    const destination = uploadDestination(options);
     const targets = notifyTargets(options.notify);
     if (targets.length > 0 && (options.compare === false || options.answerKey)) {
       throw new Error(`--notify needs the comparison to know what is new, so it cannot be used with ${options.answerKey ? "--answer-key" : "--no-compare"}.`);
@@ -690,6 +733,7 @@ withRecordingOptions(
       : templatedSummary(result, { shortenIds: true });
     await present(result, summary, view, options, banner);
     if (targets.length > 0 && (await notifyOnce(targets, findingsNotice(result, Boolean(compared), banner)))) await saveBaseline(saved, scanned, {});
+    await uploadOnce(destination, () => scanJson(result, summary, banner));
     finishCluster(inventory);
   });
 
@@ -714,6 +758,7 @@ program
   .option("--every <interval>", "wait this long between rounds, from 15m to 7d: 30m, 6h, 1d", DEFAULT_EVERY)
   .option("--max-runs <n>", "stop after this many rounds (default: until stopped)")
   .option("--notify <url>", NOTIFY_HELP, collectUrls)
+  .option("--upload <url>", UPLOAD_HELP)
   .option("--kube", "watch the cluster kubectl points at instead of the AWS account")
   .option("--profile <name>", "AWS profile to read with (default: the standard AWS credential chain)", process.env.AWS_PROFILE)
   .option("--region <region>", "AWS: scan only this region")
@@ -736,6 +781,8 @@ program
     for (const key of options.kube ? AWS_ONLY : KUBE_ONLY) {
       if (options[key as keyof WatchCommandOptions] !== undefined) throw new Error(`${FLAG[key]} only applies ${options.kube ? "to the AWS account, not with --kube" : "with --kube"}.`);
     }
+
+    const destination = uploadDestination(options);
 
     // What differs between watching the account and the cluster: how one round is read, and where what was reported is kept.
     let subject: string;
@@ -768,7 +815,7 @@ program
 
     const stop = new AbortController();
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stop.abort());
-    note(`Watching ${subject} every ${options.every}, read-only. ${targets.length > 0 ? `Messages go to ${hostsOf(targets)}.` : "No --notify target: results are printed here only."} Ctrl+C stops it.`);
+    note(`Watching ${subject} every ${options.every}, read-only. ${targets.length > 0 ? `Messages go to ${hostsOf(targets)}.` : "No --notify target: results are printed here only."}${destination ? ` Every round is uploaded to ${destination.host}.` : ""} Ctrl+C stops it.`);
 
     const end = await watch(
       { everyMs, maxRuns, targets, subject },
@@ -783,6 +830,7 @@ program
           },
         },
         send: httpSender,
+        ...(destination ? { upload: (body: string, signal: AbortSignal) => upload(destination, body, { send: httpUploader, pause: sleep }, signal) } : {}),
         clock: () => new Date(),
         sleep,
         out: (line) => console.log(line),
