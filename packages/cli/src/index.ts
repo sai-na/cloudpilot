@@ -1,11 +1,14 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { userInfo } from "node:os";
+import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { buildTools, forModel, MCP_INSTRUCTIONS, MissingCredentialsError, type Provider, type ToolSpec } from "./advisor.js";
 import { ask, describeApiError, resolveProvider, summarize } from "./assistant.js";
 import { callerAccount, collect, enabledRegions, readCpu } from "./collect.js";
+import { apply, ApplyError, plan, programRunner, renderAudit, type AuditEntry } from "./apply.js";
 import { compareScans, isScanResult } from "./compare.js";
 import { detect, mergeScans } from "./detect.js";
 import { loadEnvFile } from "./env.js";
@@ -430,6 +433,83 @@ program
     const result = compared ?? scanned;
     const view: ReportOptions = { onlyNew: Boolean(options.onlyNew), noComparison: noComparisonReason(options, previous, compared) };
     await present(result, templatedSummary(result, { shortenIds: true }), view, options);
+  });
+
+const AUDIT_LOG = ".cloudpilot/audit.jsonl";
+
+/** Every scan saved in this directory: the account's, and one per cluster. */
+async function savedScans(from?: string): Promise<ScanResult[]> {
+  const read = async (path: string): Promise<ScanResult | undefined> => {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+      return isScanResult(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  if (from) {
+    const scan = await read(from);
+    if (!scan) throw new ApplyError(`${from} is not a CloudPilot scan result (save one with --json).`);
+    return [scan];
+  }
+  const names = await readdir(dirname(LAST_SCAN)).catch(() => [] as string[]);
+  const files = names.filter((name) => name === "last-scan.json" || /^last-kube-scan-.*\.json$/.test(name)).sort();
+  const scans = (await Promise.all(files.map((name) => read(join(dirname(LAST_SCAN), name))))).filter((scan): scan is ScanResult => Boolean(scan));
+  if (scans.length === 0) throw new ApplyError("There is no saved scan in this directory to take a fix from. Run a scan here first.");
+  return scans;
+}
+
+async function readAudit(): Promise<AuditEntry[]> {
+  const text = await readFile(AUDIT_LOG, "utf8").catch(() => "");
+  return text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as AuditEntry);
+}
+
+program
+  .command("apply")
+  .description("Run the fix for the resources you name, after showing it and asking. The only command that can change anything")
+  .argument("<resource...>", "resource IDs exactly as the report shows them, e.g. vol-0123456789abcdef0 or deployment/api")
+  .option("--from <file>", "take the fixes from this scan result (default: the scans saved in this directory)")
+  .option("--allow-permanent", "choose the fix that cannot be undone; it still needs the resource ID typed back at a terminal")
+  .option("--yes", "run fixes that can be undone without asking (never applies to permanent fixes)")
+  .option("--dry-run", "show what would run and stop")
+  .option("--max-age-hours <n>", "refuse a scan older than this", "24")
+  .option("--profile <name>", "AWS profile the aws commands run with (default: the standard AWS credential chain)")
+  .action(async (resources: string[], options: { from?: string; allowPermanent?: boolean; yes?: boolean; dryRun?: boolean; maxAgeHours: string; profile?: string }) => {
+    const plans = plan(await savedScans(options.from), resources, {
+      allowPermanent: options.allowPermanent,
+      maxAgeHours: amount(options.maxAgeHours, "--max-age-hours"),
+      now: new Date(),
+    });
+    // Asking needs a person at a terminal on both ends.
+    const terminal = process.stdin.isTTY && process.stdout.isTTY ? createInterface({ input: process.stdin, output: process.stdout }) : undefined;
+    try {
+      const outcomes = await apply(plans, {
+        runner: programRunner(options.profile ? { ...process.env, AWS_PROFILE: options.profile } : process.env),
+        ask: terminal ? (question) => terminal.question(question) : undefined,
+        yes: options.yes,
+        dryRun: options.dryRun,
+        say: (line) => console.log(line),
+        record: async (entry) => {
+          await mkdir(dirname(AUDIT_LOG), { recursive: true });
+          await appendFile(AUDIT_LOG, `${JSON.stringify(entry)}\n`);
+        },
+        user: userInfo().username,
+        now: () => new Date(),
+      });
+      if (!options.dryRun) note(`\nRecorded in ${AUDIT_LOG}. See it with: cloudpilot audit`);
+      if (outcomes.some((o) => o === "failed" || o === "refused")) process.exitCode = 1;
+    } finally {
+      terminal?.close();
+    }
+  });
+
+program
+  .command("audit")
+  .description("Show every fix that apply ran, was told not to run, or refused to run from this directory")
+  .option("--json", "print the entries as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const entries = await readAudit();
+    console.log(options.json ? JSON.stringify(entries, null, 2) : renderAudit(entries));
   });
 
 withCommonOptions(program.command("eval").description("Scan, then score the findings against a waste-lab answer key"))

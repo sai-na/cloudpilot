@@ -126,7 +126,7 @@ has a tick box; the saving of everything ticked and the script that would do
 it are always on screen and change as you tick. Fixes that can be undone
 start ticked, permanent ones never do, and a finding with two ways to fix it
 takes one of them at most. One button copies the script, which is commands
-and comments only: CloudPilot still runs nothing.
+and comments only: the report runs nothing.
 
 A resource ID is shortened where it is only a label: the finding line in the
 terminal, the `Resource` column of the Markdown table, the heading in HTML
@@ -169,6 +169,46 @@ To have this done every day without running anything, see the daily report in
 schedule in your own account and emails the file when something is new. An
 `--out` name ending in `.txt` gets the terminal report as plain text; any
 other name gets Markdown.
+
+### Run a fix you approved
+
+A scan never runs anything. If you want CloudPilot to run a fix for you,
+name the resource:
+
+```sh
+cloudpilot apply vol-0123456789abcdef0
+cloudpilot apply deployment/api
+```
+
+It finds the finding in the scans saved in this directory (the account's and
+each cluster's), shows the commands and the way back, and asks before it runs
+them. The commands go to your own `aws` or `kubectl`, with your own
+credentials; the read-only access a scan uses is not enough for them, and
+CloudPilot asks for no more than you already have.
+
+What it will and will not do:
+
+- **Fixes that can be undone come first.** Where a finding has a gentler
+  alternative (convert a volume instead of deleting it), that is what runs.
+- **A permanent fix needs asking for.** Pass `--allow-permanent`, and then
+  type the resource ID back at the prompt. It is never run unattended,
+  whatever else is passed.
+- **Only CloudPilot's own kinds of command.** It runs the commands a scan
+  printed, as a list of arguments and never through a shell. A saved scan
+  that has been edited to hold anything else is refused.
+- **Nothing stale.** A scan older than 24 hours (`--max-age-hours`) is
+  refused: scan again first.
+- **It stops at the first failure,** and leaves everything after it alone.
+- **`--yes`** runs fixes that can be undone without asking, for scripts.
+  Without it and without a terminal, nothing runs. **`--dry-run`** shows the
+  commands and stops.
+
+Every fix it ran, was told not to run or refused to run is appended to
+`.cloudpilot/audit.jsonl`: who, when, which finding, each command with its
+exit code, and the way back. `cloudpilot audit` prints it.
+
+The MCP server has no tool that runs a fix, so an AI client cannot apply
+anything through it.
 
 ### Score it against the waste lab
 
@@ -320,6 +360,17 @@ reads `--lookback-hours` with its own meaning and default: see
 | `--replay <dir>` | Repeat a recorded run with no network calls |
 | `--live-llm` | With `--replay`: AWS from the recording, model called live |
 | `--redact-account` | Show the account ID as `123456789012` |
+
+`apply` takes its own options:
+
+| Option | Meaning |
+|---|---|
+| `--from <file>` | Take the fixes from this scan result instead of the scans saved in this directory |
+| `--allow-permanent` | Choose the fix that cannot be undone; it still needs the resource ID typed back at a terminal |
+| `--yes` | Run fixes that can be undone without asking. Never applies to permanent fixes |
+| `--dry-run` | Show what would run and stop |
+| `--max-age-hours <n>` | Refuse a scan older than this (default 24) |
+| `--profile <name>` | AWS profile the `aws` commands run with |
 
 The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
 and `--redact-account` runs.
