@@ -93,6 +93,15 @@ says what is new, what was resolved and what is unchanged.
   network, behind a `REPLAY MODE` banner.
 - **Ignore tag.** Resources tagged `cloudpilot:ignore=true` are skipped, and
   the report says how many.
+- **Spend anomalies.** `cloudpilot anomalies` says which services cost
+  unusually much on the latest complete day, from daily Cost Explorer data. A
+  fixed rule finds them (the median and median absolute deviation of the days
+  before, and a dollar floor), no model is involved, and the output says what
+  it knows and what it does not: the last day or two can still be settling in
+  Cost Explorer, and a weekly job reads as a spike every week. It makes one
+  Cost Explorer request, which AWS charges $0.01 for, and says so first. It can
+  tell a webhook, and be recorded and replayed with no request at all. See
+  [Spend anomalies](packages/cli/README.md#spend-anomalies).
 - **The bill, for scale.** With `--bill` the report also says what the account
   spent last month and what share of it the waste found is, from one Cost
   Explorer request. AWS charges $0.01 for it, so it is off unless you ask.

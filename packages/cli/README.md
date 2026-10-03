@@ -31,9 +31,9 @@ fails the build if the code calls anything that is not on this list or that
 is not a `Describe`, `List` or `Get`.
 
 Every call here is free except the last. `GetCostAndUsage` is made only when
-you pass `--bill`, and AWS charges $0.01 for each Cost Explorer request.
-CloudPilot never spends your money unasked, so without `--bill` it is never
-called.
+you pass `--bill` or run `anomalies`, and AWS charges $0.01 for each Cost Explorer
+request. CloudPilot never spends your money unasked, so a scan without
+`--bill` never calls it, and nothing else does.
 
 | Service | Operation | IAM permission | Used for |
 |---|---|---|---|
@@ -62,7 +62,7 @@ called.
 | S3 | `ListParts` | `s3:ListMultipartUploadParts` | The size of an incomplete upload |
 | CloudWatch | `GetMetricData` | `cloudwatch:GetMetricData` | CPU history of running instances, connection history of database instances, traffic of NAT gateways and load balancers |
 | Pricing | `GetProducts` | `pricing:GetProducts` | Unit prices for what was found |
-| CostExplorer | `GetCostAndUsage` | `ce:GetCostAndUsage` | Last month's total spend, only with `--bill` |
+| CostExplorer | `GetCostAndUsage` | `ce:GetCostAndUsage` | Last month's total spend, only with `--bill`; the last days' cost per service, only with `anomalies` |
 
 CloudShell's credentials are your console permissions, which usually allow
 far more than this. To hold CloudPilot to exactly these reads, run it with a
@@ -96,7 +96,7 @@ out halfway through one. It reports:
   tested when there is none. The one charged read, `CostExplorer
   GetCostAndUsage`, is never made - checking that a scan will work must cost
   nothing - and is reported as not tested with that reason; only `scan --bill`
-  makes it.
+  and `anomalies` make it.
 - **The cluster**, when `kubectl` is on the PATH and has a current context (or
   `--context`): whether each list the cluster scan makes is allowed (a
   `kubectl get --raw` with `limit=1`), whether a Prometheus is found (or named
@@ -194,6 +194,172 @@ share are shown then. The comparison is rough on purpose: the waste is an
 estimate at today's prices and the bill is last month's actual total, so a
 resource that only appeared this month, or a bill with a large one-off charge,
 moves it. The daily report does not pass `--bill`.
+
+### Spend anomalies
+
+```sh
+npx @meruapps/cloudpilot anomalies
+```
+
+`anomalies` says which services cost unusually much on the latest complete
+day, compared with that service's own days before it. It does not look for
+waste and it reads no resources: it reads the account's daily cost per service
+from AWS Cost Explorer (`ce:GetCostAndUsage`, unblended cost, before credits,
+refunds and tax) and applies a fixed rule. **AWS charges $0.01 for each Cost
+Explorer request.** The command makes one request (more only if AWS splits the
+answer into pages, and it says how many it made), CloudPilot never spends your
+money unasked, and so the first line of its output, and its `--help`, say so
+before anything is read. No model is involved: the same days always give the
+same answer, and there is no `--explain`.
+
+```
+Cost Explorer: AWS charges $0.01 for each request, and this makes one (more only if AWS splits the answer into pages).
+
+Spend anomalies for AWS account 123456789012
+Unblended cost per service over the last 30 days, before credits, refunds and tax.
+Judged: 2026-10-02, the latest complete day, against the 29 days before it (2026-09-03 to 2026-10-01).
+Today (2026-10-03) is still in progress and is not used. Cost Explorer can take a day or two to settle, so the figures for the last day or two may still change. AWS still marks 2026-10-02 as an estimate.
+
+2 services cost more than usual on 2026-10-02:
+
+  1. Amazon Elastic Compute Cloud - Compute
+     2026-10-02    $45.20
+     usual day     $12.30  (median of the 29 days before)
+     difference    +$32.90 a day; if this continues, about +$987.00 over 30 days
+
+  2. Amazon Bedrock
+     2026-10-02    $8.00
+     usual day     $0.00  (no cost at all in the 29 days before: new spend)
+     difference    +$8.00 a day; if this continues, about +$240.00 over 30 days
+
+Total: +$40.90 a day more than usual across 2 services. If all of it continued, that would add up to about $1227.00 over 30 days.
+The rule says a day was unusual, not why. The 30-day figure is arithmetic on one day, not a forecast.
+
+Cost Explorer requests made: 1 (AWS charges $0.01 each).
+```
+
+**The rule.** For each service, the latest complete day is compared with the
+days before it in the window. Every figure is in whole cents.
+
+- The usual day is the median of the earlier days, and the spread is their
+  median absolute deviation (MAD). Both barely move for a few odd days, which
+  is why they are used and not a mean and a standard deviation.
+- A service is flagged when **both** hold. The latest day is above the median
+  plus `k` times 1.4826 times the MAD (`k` is `--sensitivity`, default 3; the
+  1.4826 makes the MAD read like a standard deviation). And it is at least
+  `--min-increase` above the median (default $1.00 a day), so pennies never
+  raise an alarm, however large the rise looks next to a tiny usual cost.
+- When the MAD is 0 (a flat baseline) there is no spread to measure against,
+  so the day must be at least the floor above the median **and** at least 50%
+  above it.
+- A service with no cost at all in the earlier days that now costs at least
+  the floor is flagged as new spend.
+- A service missing from a day Cost Explorer returned counts as $0 that day. A
+  day Cost Explorer returned nothing for at all is not a day.
+- At least 7 earlier days are needed. With fewer, the output says there is not
+  enough history, nothing is flagged, and the exit status is 0. So does a
+  window with no cost data at all (a new account, or Cost Explorer only just
+  enabled). A cost of exactly the floor, or exactly 50% above the median, is
+  flagged.
+- Anomalies are listed with the largest daily increase first. For each: the
+  service, the day and what it cost, the usual day, the increase a day, and
+  what that adds up to over 30 days **if** every day cost as much as this one.
+  That sum is arithmetic on one day, worded as a condition and never as a
+  forecast. A total line adds them up. With nothing unusual it prints one calm
+  line saying so. The exit status is 0 either way; a failure to read Cost
+  Explorer is 1.
+
+**The days.** `--days <n>` (8 to 90, default 30) is how many complete days are
+read: the latest one is judged and the rest are its baseline. The day in
+progress is never asked for and never used, because a partial day always looks
+cheap. The days before it can still be settling: Cost Explorer can take a day
+or two to finalise its figures, so a figure for the latest day may be a little
+low and can still change. The output says so every time, and says when AWS
+marks the latest day as an estimate. Run it a day later and the same day may
+read differently. If Cost Explorer has no data for yesterday yet, the latest
+day it does have is judged and the output says that nothing later was there.
+Credits, refunds and tax are left out of the request, so a credit running out
+or the month's tax landing on the first does not read as a service costing
+more. Cost Explorer's dates are UTC.
+
+**What it cannot see.** The rule has no idea what a week looks like.
+
+- A service that costs less at weekends is fine: the weekdays are most of the
+  days, so the median is the weekday cost, and an ordinary weekday, or a quiet
+  weekend, is not flagged.
+- A service whose busy days are the *few* days, a weekly report or a job that
+  runs on Saturdays, is the reverse: the median is the quiet day, so each busy
+  day looks like a spike and is flagged every week. CloudPilot does not try to
+  tell those apart. What it does about it is show the usual day, the number of
+  days compared and their dates, so that you can see why it spoke, and offer
+  `--sensitivity` and `--min-increase`; a longer `--days` does not change this.
+- A change that lasts is flagged for as long as it takes to become the usual
+  day, which is half the window, and then no more. A daily run therefore
+  repeats a sustained rise for a while.
+- A cost that arrives on one day of the month (a support or subscription fee,
+  an upfront reservation payment) can look like a spike on that day.
+- It judges one day. It does not say what caused it, whether it is a mistake,
+  or what next month's bill will be.
+- It reads what Cost Explorer shows the credentials. Called from an AWS
+  Organization's management account that is the consolidated cost of every
+  member account together, with no split by account; from a member account it
+  is that account alone. Run it where you mean to look.
+
+**Options.** `--days <n>`, `--sensitivity <k>` (above zero), `--min-increase
+<dollars>` (zero or more), `--json`, `--profile`, `--redact-account`,
+`--notify`, `--record` and `--replay`; see [Options](#options). A value that
+makes no sense is refused before anything is asked of AWS.
+
+**JSON.** `--json` prints one JSON document on stdout, and the charge notice
+on stderr. New fields may be added; none will be renamed or removed. Amounts
+are dollars to the cent, days are `YYYY-MM-DD` in UTC.
+
+```json
+{
+  "command": "anomalies",
+  "accountId": "123456789012",
+  "charge": { "requests": 1, "usdPerRequest": 0.01, "notice": "Cost Explorer: AWS charges $0.01 for each request, and this makes one (more only if AWS splits the answer into pages)." },
+  "status": "ok",
+  "today": "2026-10-03",
+  "windowDays": 30,
+  "latestDay": "2026-10-02",
+  "latestDayEstimated": true,
+  "baseline": { "days": 29, "from": "2026-09-03", "to": "2026-10-01" },
+  "baselineDaysFound": 29,
+  "servicesChecked": 4,
+  "rule": { "sensitivity": 3, "minIncreaseUsd": 1, "madScale": 1.4826, "flatRise": 0.5, "minBaselineDays": 7, "projectionDays": 30 },
+  "anomalies": [
+    { "service": "Amazon Elastic Compute Cloud - Compute", "kind": "spike", "day": "2026-10-02", "costUsd": 45.2, "medianUsd": 12.3, "madUsd": 0, "increaseUsd": 32.9, "monthlyIfContinuesUsd": 987, "baselineDays": 29 }
+  ],
+  "totalIncreaseUsd": 32.9,
+  "totalMonthlyIfContinuesUsd": 987,
+  "note": "Cost Explorer can take a day or two to settle, so the figures for the last day or two may still change."
+}
+```
+
+`status` is `ok`, `not-enough-history` or `no-data`; with the last two,
+`anomalies` is empty. `kind` is `spike` or `new`. `baseline` is `null` unless
+`status` is `ok`, and `latestDay` is `null` with `no-data`. A replay adds a
+`replay` field holding the banner, and its `charge.requests` is 0.
+
+**Without a Cost Explorer request.** `--record <dir>` runs live and saves the
+answers, and `--replay <dir>` repeats the run from them with no network, no
+credentials and no charge, behind the usual `REPLAY MODE` banner, followed by a
+line saying no request is made. The recording notes the `--days` it was made
+with and a replay uses them, so the clock and the request match; asking for
+another window is a missing read, never a call to AWS. See
+[Record and replay](#record-and-replay). A scan recording and an anomalies
+recording can share a directory.
+
+**Telling your team.** `--notify <url>` sends one message when at least one
+service cost more than usual: the services, their costs, the usual day and the
+rise, and the 30-day sum as a condition. It sends nothing when nothing is
+unusual or when there was not enough history, and says which on stderr. Unlike
+`scan --notify` it keeps no memory between runs: a rise that lasts is
+reported on every run while the latest day is still unusual. A run that could
+not read Cost Explorer sends a message saying the check failed, so silence only
+ever means nothing was unusual. See
+[Tell your team what is new](#tell-your-team-what-is-new).
 
 ### Rule confidence
 
@@ -346,12 +512,19 @@ report. A message is cut to 2,000 characters for Discord, the most it takes,
 and to 3,000 for Slack; the list gives way, the headline and the closing lines
 do not, and the message says how many findings were left out. A generic
 webhook has no such limit. It receives one JSON object: `source`
-(`cloudpilot`), `event` (`first-report`, `new-findings`, `check-failed` or
-`check-recovered`), `text` (the message above as plain lines) and `subject`.
+(`cloudpilot`), `event` (`first-report`, `new-findings`, `check-failed`,
+`check-recovered` or, from `anomalies`, `spend-anomalies`), `text` (the message above as plain lines) and `subject`.
 A report adds `scannedAt`, `totalMonthlyWasteUsd`, `comparison`, `warnings`
 and `findings`, which holds the new findings exactly as `--json` has them,
 evidence and fix commands included; a failure or a recovery adds `at` and
 either the `error` or the `failingSince` it had been failing from.
+
+`anomalies --notify` sends the same way, one message when a service cost more
+than usual (see [Spend anomalies](#spend-anomalies)). Its generic body is
+`source`, `event` (`spend-anomalies`), `text`, `subject`, `day`,
+`totalIncreaseUsd`, `totalMonthlyIfContinuesUsd` and `anomalies`, as `--json`
+has them. It has no earlier scan to compare with, so none of the rules above
+about the saved scan apply to it.
 
 **A message that fails to send is not lost.** CloudPilot says so on stderr and
 exits with status 1, and the saved scan is left as it was, so the next run
@@ -660,7 +833,7 @@ the cluster tools are not offered: the server replays an account only.
 
 ### Record and replay
 
-`--record <dir>` on `scan` and `ask` runs normally and saves every AWS
+`--record <dir>` on `scan`, `ask` and `anomalies` runs normally and saves every AWS
 response and every model event of that run. `--replay <dir>` repeats the run
 from that recording with no network calls and no credentials: the clock is
 pinned to the recording time, so ages, CloudWatch windows and results match
@@ -693,8 +866,13 @@ error). `--live-llm` replays the cluster
 and calls the model live, and a recorded `ask --kube` question replays by its
 exact words.
 
+`anomalies` records and replays the same way, into a folder of its own
+(`anomalies/`) that holds its Cost Explorer answer and the caller's identity,
+and notes the `--days` it was made with. Its replay needs no credentials and
+makes no request, so nothing is charged.
+
 An account and a cluster can be recorded into one directory. Each session
-has a folder of its own (`scan/`, `ask-<hash>/` for the account; `kube/`,
+has a folder of its own (`scan/`, `ask-<hash>/`, `anomalies/` for the account; `kube/`,
 `kube-ask-<hash>/` for a cluster) and a line in `manifest.json`, so recording
 one never touches the other, and `scan --replay`, `kube --replay` and the two
 kinds of `ask` each find only their own sessions. Account sessions keep
@@ -852,7 +1030,9 @@ present. It needs Docker and is not part of `npm test`.
 
 These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
 reads `--lookback-hours` with its own meaning and default: see
-[Kubernetes](#kubernetes). `ask --kube` takes the `kube` options named there
+[Kubernetes](#kubernetes). `anomalies` takes `--days`, `--sensitivity` and
+`--min-increase`, and the options below that name it: see
+[Spend anomalies](#spend-anomalies). `ask --kube` takes the `kube` options named there
 in place of the AWS ones. `init` takes `--profile`, `--region`, `--context`,
 `--prometheus`, `--json` and `--print-policy`: see
 [Check first with `init`](#check-first-with-init). `watch` takes the ones that
@@ -865,16 +1045,19 @@ say so: see [Watch it](#watch-it).
 | `--all-regions` | Scan every region enabled for the account. The default when `--region` is not given |
 | `--html <file>` | `scan` only: also write a self-contained HTML report |
 | `--out <file>` | `scan` only: also write the report to a file, as Markdown, or as plain text when the name ends in `.txt` |
-| `--json` | `scan`, `kube` and `init` only: print the result as JSON |
+| `--json` | `scan`, `kube`, `anomalies` and `init` only: print the result as JSON |
 | `--explain` | `scan` and `kube` only: have a model write the summary |
 | `--compare <file>` | `scan` only: say what changed since this earlier scan. Default: the last scan made from this directory |
 | `--no-compare` | `scan` only: do not compare |
 | `--only-new` | `scan` only: list only the findings that are new since the earlier scan |
-| `--notify <url>` | `scan`, `kube` and `watch`: send what is new to this Slack, Discord or other https webhook. Repeatable; or `CLOUDPILOT_NOTIFY`, comma-separated. See [Tell your team what is new](#tell-your-team-what-is-new) |
+| `--notify <url>` | `scan`, `kube`, `anomalies` and `watch`: send what is new (for `anomalies`, the services that cost more than usual) to this Slack, Discord or other https webhook. Repeatable; or `CLOUDPILOT_NOTIFY`, comma-separated. See [Tell your team what is new](#tell-your-team-what-is-new) |
 | `--upload <url>` | `scan`, `kube` and `watch`: send each scan's full result as JSON to this https address, the hosted service's upload endpoint. The token is read only from `CLOUDPILOT_UPLOAD_TOKEN`, never from a flag. Not with `--replay`, `--redact-account` or `kube --answer-key`. See [Keep the history](#keep-the-history) |
 | `--every <interval>` | `watch` only: the wait between rounds, `15m` to `7d`. Default `6h` |
 | `--max-runs <n>` | `watch` only: stop after this many rounds. Default: until stopped |
 | `--kube` | `watch` and `ask`: work on the cluster kubectl points at instead of the AWS account. With `ask` it takes `--context`, `--namespace`, `--prometheus`, `--lookback-hours` (default 168, not 24) and the price options, and refuses `--region`, `--all-regions`, `--profile`, `--price-file`, `--offline` and `--redact-account` |
+| `--days <n>` | `anomalies` only: complete days of cost to read, 8 to 90. Default 30. With `--replay`, the days recorded. AWS charges $0.01 for the one Cost Explorer request `anomalies` makes |
+| `--sensitivity <k>` | `anomalies` only: flag a day above the median plus `k` times 1.4826 times the median absolute deviation. Default 3 |
+| `--min-increase <dollars>` | `anomalies` only: never flag a day less than this far above the median. Default 1.00 |
 | `--bill` | `scan` only: also read last month's total spend from Cost Explorer and say what share of it the waste is. AWS charges $0.01 for this one request, so it is never made unless you ask |
 | `--lookback-hours <n>` | Hours of CPU, database connection and NAT gateway and load balancer traffic history used to judge idle and oversized resources. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
@@ -882,10 +1065,10 @@ say so: see [Watch it](#watch-it).
 | `--provider <name>` | `anthropic`, `openai` or `bedrock`. Default: whichever key is set |
 | `--model <id>` | Model for `--explain` and `ask` |
 | `--bedrock-profile <name>` | AWS profile for Claude through Amazon Bedrock |
-| `--record <dir>` | Run live and save the run for replay. Also for `kube` |
-| `--replay <dir>` | Repeat a recorded run with no network calls. Also for `kube` |
+| `--record <dir>` | Run live and save the run for replay. Also for `kube` and `anomalies` |
+| `--replay <dir>` | Repeat a recorded run with no network calls. Also for `kube` and `anomalies` |
 | `--live-llm` | With `--replay`: AWS (or the cluster) from the recording, model called live |
-| `--redact-account` | Show the account ID as `123456789012`. Not with `--kube` |
+| `--redact-account` | Show the account ID as `123456789012`. Also for `anomalies`. Not with `--kube` |
 
 The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
 and `--redact-account` runs. With `--notify` it is saved once the message has
@@ -1114,6 +1297,14 @@ The rules are checked against a seeded cluster: see
   decimal. The bill is the unblended cost before credits and refunds, as Cost
   Explorer reports it for the last full calendar month in UTC. A new account,
   or one Cost Explorer was only just enabled for, has none yet.
+- `anomalies` judges one day against the days before it with a fixed rule, and
+  cannot tell a weekly pattern from a spike when the busy days are the few
+  (a weekly job is flagged every week); a rise that lasts is reported until it
+  becomes the usual day; the latest day can still be settling in Cost
+  Explorer. The rule is in [Spend anomalies](#spend-anomalies). It has been
+  run against a stand-in for Cost Explorer and recordings made from it, never
+  against AWS: the real service's answers, and the `RECORD_TYPE` values the
+  request filters on (`Credit`, `Refund`, `Tax`), have not been checked live.
 - Kubernetes: peak use is taken from the history Prometheus holds. A workload
   whose busy season falls outside that window (month-end, a yearly sale) will
   look over-requested; widen `--lookback-hours` or label it
