@@ -199,7 +199,8 @@ always do, and send only when that comparison finds something new. The first
 scan, with nothing to compare with, sends the whole report once. A scan with
 nothing new sends nothing, and says so on stderr. Findings that were resolved
 are shown in the report but are not a reason to send. `--notify` needs the
-comparison, so it cannot be used with `--no-compare`.
+comparison, so it cannot be used with `--no-compare`, nor with `kube
+--answer-key`, which scores a lab instead of reporting.
 
 **What it says.** The same lines in every service, for example:
 
@@ -220,12 +221,13 @@ is permanent. Fix commands are not in the chat message: they are in the
 report. A message is cut to 2,000 characters for Discord, the most it takes,
 and to 3,000 for Slack; the list gives way, the headline and the closing lines
 do not, and the message says how many findings were left out. A generic
-webhook has no such limit. It receives one JSON object: `event`
-(`first-report`, `new-findings`, `check-failed` or `check-recovered`), `text`
-(the message above as plain lines), `subject`, `scannedAt`,
-`totalMonthlyWasteUsd`, `comparison`, `warnings` and `findings`, which holds
-the new findings exactly as `--json` has them, evidence and fix commands
-included.
+webhook has no such limit. It receives one JSON object: `source`
+(`cloudpilot`), `event` (`first-report`, `new-findings`, `check-failed` or
+`check-recovered`), `text` (the message above as plain lines) and `subject`.
+A report adds `scannedAt`, `totalMonthlyWasteUsd`, `comparison`, `warnings`
+and `findings`, which holds the new findings exactly as `--json` has them,
+evidence and fix commands included; a failure or a recovery adds `at` and
+either the `error` or the `failingSince` it had been failing from.
 
 **A message that fails to send is not lost.** CloudPilot says so on stderr and
 exits with status 1, and the saved scan is left as it was, so the next run
@@ -289,9 +291,10 @@ before the next one, so rounds never overlap.
   run from, so a restart carries on instead of reporting everything again. It
   is separate from the scan that `scan` and `kube` save, so running those by
   hand does not decide what the watch has told your team. `--replay` never
-  writes it, and `--redact-account` neither reads nor writes it. If a check could not run in a
-  region, what was found there last time is kept, so it is not reported as new
-  when the check works again.
+  writes it, and `--redact-account` neither reads nor writes it. What a region
+  held last time is kept whenever this round did not read that region in full,
+  whether a check there failed or the round never looked, so it is not
+  reported as new when that region is read again.
 - **Stopping:** Ctrl+C or SIGTERM ends it cleanly, between rounds or in the
   middle of one. `--max-runs <n>` ends it after `n` rounds. The exit status is
   1 if the last round failed or its message was not delivered, and 0 otherwise,
