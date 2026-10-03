@@ -377,6 +377,9 @@ const KUBE_LISTS = [
   { resource: "persistentvolumes", path: "/api/v1/persistentvolumes", without: "released volumes are not reported" },
 ] as const;
 
+/** The lists without which a cluster scan cannot run at all. */
+const KUBE_REQUIRED: ReadonlySet<string> = new Set(KUBE_LISTS.filter((l) => "required" in l).map((l) => l.resource));
+
 const refused = (err: unknown) => /\((Forbidden|Unauthorized)\)|is forbidden|must be logged in/i.test(err instanceof Error ? err.message : String(err));
 
 /** What the people who read the report need to know about a failed kubectl call, in one line. */
@@ -444,7 +447,7 @@ export async function checkKubernetes(reader: KubeReader, options: PreflightOpti
     }),
   );
   const allowed = (resource: string) => checks.find((c) => c.resource === resource)?.status === "allowed";
-  const canScan = KUBE_LISTS.filter((l) => "required" in l).every((l) => allowed(l.resource));
+  const canScan = [...KUBE_REQUIRED].every((resource) => allowed(resource));
   const base = { context: identity.context, ...(identity.server ? { server: identity.server } : {}), checks };
   if (!canScan) return { ...base, status: "not-ready" };
 
@@ -509,7 +512,10 @@ function renderAws(aws: AwsReport, options: PreflightOptions): string[] {
   out.push("", `  ${count("allowed")} of ${total} reads allowed${count("denied") ? `, ${count("denied")} denied` : ""}${count("failed") ? `, ${count("failed")} failed` : ""}${count("not-tested") ? `, ${count("not-tested")} not tested` : ""}.`);
   if (aws.status === "not-ready") out.push("  No read was allowed, so a scan would find nothing.");
   else if (aws.status === "limited") out.push("  A scan still runs and reports each read it cannot make as a skipped check.");
-  if (!aws.canListRegions) out.push("  DescribeRegions is not allowed, so a scan has to be given --region.");
+  const regions = aws.checks.find((c) => c.operation === "DescribeRegions");
+  if (regions && regions.status !== "allowed") {
+    out.push(regions.status === "denied" ? "  DescribeRegions is not allowed, so a scan has to be given --region." : "  DescribeRegions did not answer, so a scan has to be given --region.");
+  }
   if (aws.fix.length > 0) {
     out.push(
       "",
@@ -532,9 +538,15 @@ function renderKube(kube: KubeReport): string[] {
     const effect = c.status === "allowed" ? "" : [c.detail, lists.get(c.resource)].filter(Boolean).join("; ");
     out.push(`    ${mark(c.status)}${c.resource}${effect ? `  (${effect})` : ""}`);
   }
-  const lost = kube.checks.filter((c) => c.status !== "allowed");
-  if (kube.status === "not-ready") out.push("", "  The scan needs to list namespaces and pods. Nothing was found that lets it.");
-  if (lost.length > 0) out.push("", `  Access to read these comes from your cluster's administrator. ${KUBE_ROLE_FILE} in the CloudPilot repository holds the least access the scan needs;`, "  it is a file for you to apply, and CloudPilot does not apply it.");
+  const denied = kube.checks.filter((c) => c.status === "denied");
+  const silent = kube.checks.filter((c) => c.status === "failed");
+  if (kube.status === "not-ready") {
+    const unanswered = kube.checks.find((c) => KUBE_REQUIRED.has(c.resource) && c.status === "failed");
+    const refusedRequired = kube.checks.some((c) => KUBE_REQUIRED.has(c.resource) && c.status === "denied");
+    out.push("", refusedRequired || !unanswered ? "  The scan needs to list namespaces and pods. Nothing was found that lets it." : `  The scan needs to list namespaces and pods, and that read did not answer: ${unanswered.detail ?? "no reason was given"}.`);
+  }
+  if (silent.length > 0) out.push("", "  A list that did not answer is not a refusal: check that the cluster can be reached from here, then run cloudpilot init again.");
+  if (denied.length > 0) out.push("", `  Access to read these comes from your cluster's administrator. ${KUBE_ROLE_FILE} in the CloudPilot repository holds the least access the scan needs;`, "  it is a file for you to apply, and CloudPilot does not apply it.");
 
   const p = kube.prometheus;
   if (p) {

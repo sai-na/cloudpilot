@@ -381,6 +381,29 @@ test("a cluster that cannot be reached is a failed list, not a refused one", asy
   const report = await checkKubernetes(reader, options);
   assert.equal(report.status, "not-ready");
   assert.ok(report.checks.every((c) => c.status === "failed" && c.detail!.startsWith("Unable to connect")));
+
+  const text = renderPreflight({ ready: false, aws: NO_AWS, kubernetes: report, next: [] }, options);
+  assert.match(text, /The scan needs to list namespaces and pods, and that read did not answer: Unable to connect to the server/);
+  assert.match(text, /A list that did not answer is not a refusal: check that the cluster can be reached from here/);
+  assert.doesNotMatch(text, /cluster's administrator/, "nothing was refused, so there is no RBAC to ask for");
+  assert.doesNotMatch(text, /Nothing was found that lets it/);
+});
+
+test("a read that did not answer is never reported as a refusal", async () => {
+  const { probes } = aws({
+    answer: (operation) => {
+      if (operation === "DescribeRegions") throw new AwsError("RequestLimitExceeded", "Request limit exceeded.");
+      return found(operation);
+    },
+  });
+  const noRegionGiven = { ...options, regionGiven: false };
+  const result = await preflight(noRegionGiven, { aws: probes, kube: kubeReader({ missing: true }) });
+  assert.equal(result.aws.checks.find((c) => c.operation === "DescribeRegions")!.status, "failed");
+  assert.deepEqual(result.next, ["cloudpilot scan --region ap-south-1"], "without the region list a scan still has to be given one");
+  const text = renderPreflight(result, noRegionGiven);
+  assert.match(text, /DescribeRegions did not answer, so a scan has to be given --region\./);
+  assert.doesNotMatch(text, /DescribeRegions is not allowed/);
+  assert.deepEqual(result.aws.fix, [], "a throttled read is not a missing permission");
 });
 
 test("the exit code is 0 when either side can be scanned and the next commands name only what works", async () => {
