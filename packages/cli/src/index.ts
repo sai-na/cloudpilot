@@ -1118,7 +1118,7 @@ function whoAmI(): string {
 
 program
   .command("apply")
-  .description("Run the fix for the resources you name, after showing it and asking. The only command that can change anything")
+  .description("Run the fix for the resources you name, after showing it and asking. The only command that can change anything, apart from watch --autopilot, which is off unless you turn it on")
   .argument("<resource...>", "resource IDs exactly as the report shows them, e.g. vol-0123456789abcdef0 or deployment/api")
   .option("--from <file>", "take the fixes from this scan result (default: the scans saved in this directory)")
   .option("--allow-permanent", "choose the fix that cannot be undone; it still needs the resource ID typed back at a terminal")
