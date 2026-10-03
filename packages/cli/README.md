@@ -429,7 +429,7 @@ npm test            # unit tests and replay tests, no AWS or network needed
 npm run test:lab    # records and replays a scan of the live waste lab
 npm run test:kube-lab   # scans the Kubernetes lab (a kind cluster on this machine)
 npm run typecheck
-npm run fonts     # rewrite src/fonts.ts after a file in site/fonts changes
+npm run fonts       # rewrite src/fonts.ts after a file in site/fonts changes
 ```
 
 `src/mcp.ts` is the MCP server (protocol only, no dependencies);
