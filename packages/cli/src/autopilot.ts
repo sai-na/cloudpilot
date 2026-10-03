@@ -75,10 +75,7 @@ export const AUTOPILOT_RULES: Record<Pattern, Qualifies | Never> = {
   "idle-load-balancer": { ok: false, reason: permanent("deletes the load balancer") },
   "orphaned-snapshot": { ok: false, reason: permanent("deletes the snapshot") },
   "unused-ami": { ok: false, reason: permanent("deregisters the image and deletes its snapshots") },
-  "incomplete-multipart-upload": {
-    ok: false,
-    reason: "its fix aborts the upload and the parts already uploaded are discarded for good. The allow-list does not call that permanent, because an upload that never finished has no object to lose, but nothing can bring the parts back.",
-  },
+  "incomplete-multipart-upload": { ok: false, reason: permanent("aborts the upload, and the parts already uploaded are discarded for good") },
   "over-requested-workload": {
     ok: false,
     reason:

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { apply, ApplyError, plan, renderAudit, runnable, tokenize, type AuditEntry, type Runner } from "../src/apply.js";
+import { apply, ApplyError, commandRisk, plan, renderAudit, runnable, tokenize, type AuditEntry, type Runner } from "../src/apply.js";
 import { collectCluster, type KubeReader } from "../src/kube.js";
 import { detectCluster, OPENCOST_DEFAULTS } from "../src/kube-detect.js";
 import type { Finding, ScanResult } from "../src/types.js";
@@ -443,6 +443,32 @@ test("the idle NAT gateway, load balancer and database fixes are permanent: they
   const dry = ws.run(["apply", pick("idle-load-balancer").resourceIds[0]!, "--allow-permanent", "--dry-run"]);
   assert.match(dry.stdout, /\$ aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:\S+ --region ap-south-1\n {2}Dry run/);
   assert.equal(ws.calls().length, 1, "a dry run starts nothing");
+});
+
+test("aborting an incomplete multipart upload is permanent: --yes never runs it, and it needs --allow-permanent and the ID typed back", async () => {
+  const upload = pick("incomplete-multipart-upload");
+  const id = upload.resourceIds[0]!;
+  assert.equal(upload.fix.risk, "dangerous");
+  assert.match(upload.fix.rollback, /Cannot be undone/);
+  assert.equal(commandRisk(upload.fix.commands[0]!), "dangerous");
+
+  const ws = workspace({ "last-scan.json": fresh(rules) });
+  const unattended = ws.run(["apply", id, "--yes"]);
+  assert.equal(unattended.status, 1);
+  assert.match(unattended.stderr, /The only fix for \S+ is permanent/);
+  const blocked = ws.run(["apply", id, "--allow-permanent", "--yes"]);
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stdout, /PERMANENT: this cannot be undone\./);
+  assert.doesNotMatch(blocked.stdout, /Can be undone\./);
+  assert.match(blocked.stdout, /Not run: a permanent fix is never run unattended\./);
+  assert.deepEqual(ws.calls(), [], "the abort was never started");
+
+  // At a terminal, with the ID typed back, it runs.
+  const { ran, runner } = recorder();
+  const { ctx, log } = context({ runner, ask: async () => id });
+  assert.deepEqual(await apply(plan([fresh(rules)], [id], { ...options, now: new Date(), allowPermanent: true }), ctx), ["applied"]);
+  assert.deepEqual(ran[0]!.slice(0, 3), ["aws", "s3api", "abort-multipart-upload"]);
+  assert.equal(log[0]!.risk, "dangerous");
 });
 
 test("a scan of a cluster that was given a name with --cluster-name is saved under that name, and apply runs its fix against that name", async () => {

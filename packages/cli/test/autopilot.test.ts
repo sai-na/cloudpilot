@@ -109,7 +109,7 @@ test("the table is true of the real rules: what qualifies is undoable, at its st
         assert.equal(f.confidence, rule.confidence, pattern);
         assert.deepEqual(rule.commands(f), f.fix.commands, `${pattern}: the table's commands are the rule's`);
         assert.equal(f.alternative, undefined, pattern);
-      } else if (["oversized-instance", "incomplete-multipart-upload", "over-requested-workload"].includes(pattern)) {
+      } else if (["oversized-instance", "over-requested-workload"].includes(pattern)) {
         // Marked as one that can be undone, and left out for what undoing it costs, which the reason says.
         assert.equal(f.fix.risk, "caution", pattern);
       } else {
@@ -119,6 +119,7 @@ test("the table is true of the real rules: what qualifies is undoable, at its st
       }
     }
   }
+  assert.match((AUTOPILOT_RULES["incomplete-multipart-upload"] as { reason: string }).reason, /which is permanent, and autopilot never runs a permanent fix/);
   assert.match((AUTOPILOT_RULES["incomplete-multipart-upload"] as { reason: string }).reason, /discarded for good/);
   assert.match((AUTOPILOT_RULES["oversized-instance"] as { reason: string }).reason, /outage/);
   assert.match((AUTOPILOT_RULES["over-requested-workload"] as { reason: string }).reason, /restarts/);

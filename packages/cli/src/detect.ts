@@ -573,8 +573,8 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
         costBasis: u.bytes === undefined ? "part sizes not visible; cost unknown" : `${u.bytes} bytes x ${usd(prices.s3StandardGbMonth)}/GB-month`,
         fix: {
           commands: [cli(`s3api abort-multipart-upload --bucket ${b.name} --key ${quoted(u.key)} --upload-id ${quoted(u.uploadId)}`)],
-          risk: "caution",
-          rollback: "Aborting discards the uploaded parts; the upload would have to start again from the beginning.",
+          risk: "dangerous",
+          rollback: "Cannot be undone: aborting discards the uploaded parts for good, and the upload would have to start again from the beginning.",
         },
         // Without the part sizes the cost is unknown; a fresh upload may simply still be in progress.
         confidence: u.bytes === undefined ? 0.6 : ageHours !== undefined && ageHours < 24 ? 0.8 : 0.9,

@@ -85,7 +85,7 @@ export const RUNNABLE: ReadonlyArray<{ kind: string; permanent: boolean }> = [
   { kind: "aws rds delete-db-instance", permanent: true },
   { kind: "aws rds stop-db-instance", permanent: false },
   { kind: "aws s3api put-bucket-lifecycle-configuration", permanent: false },
-  { kind: "aws s3api abort-multipart-upload", permanent: false },
+  { kind: "aws s3api abort-multipart-upload", permanent: true },
   { kind: "kubectl set resources", permanent: false },
   { kind: "kubectl delete persistentvolumeclaim", permanent: true },
   { kind: "kubectl delete persistentvolume", permanent: true },

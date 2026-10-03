@@ -153,7 +153,7 @@ read as a skipped check.
 | Orphaned snapshot | Source volume no longer exists and no AMI uses it | Delete it |
 | Unused AMI | No instance and no launch template references it | Deregister it and delete its snapshots |
 | Bucket without lifecycle rule | No lifecycle configuration | Add one |
-| Incomplete multipart upload | Listed by `ListMultipartUploads` | Abort it |
+| Incomplete multipart upload | Listed by `ListMultipartUploads` | Abort it (permanent: the parts already uploaded are discarded for good) |
 
 Detection uses resource properties, not labels. Every finding carries its
 evidence, a monthly cost, a rule confidence, the fix commands, a risk level
@@ -876,11 +876,11 @@ bucket has; the finding exists only where the scan saw none, moments earlier.
 
 Every other rule is refused when it is named, before anything runs, with the
 reason. Most print a fix that deletes, terminates, releases or deregisters,
-which is permanent. Two rules print a fix that is not marked permanent and are
-still left out: an oversized instance (the fix stops a running instance and
-starts it again, an outage that a failure part-way leaves half done) and an
-incomplete multipart upload (aborting discards the parts already uploaded for
-good), and so is an over-requested workload (it restarts the pods, and a
+which is permanent, and so does aborting an incomplete multipart upload: the
+parts already uploaded are discarded for good. Two rules print a fix that is not
+marked permanent and are still left out: an oversized instance (the fix stops a
+running instance and starts it again, an outage that a failure part-way leaves
+half done) and an over-requested workload (it restarts the pods, and a
 cluster is never touched). A rule whose main fix is permanent but that has a
 gentler alternative, such as a volume nobody has attached, which could be
 converted to gp3 instead of deleted, is refused as well: autopilot never takes
