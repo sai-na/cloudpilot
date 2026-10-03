@@ -487,9 +487,13 @@ shows the templated summary as it does for any other model failure. Set
 `CLOUDPILOT_MODEL_TIMEOUT_MS` to change the limit, in milliseconds.
 
 Model text is checked before it is shown. Every resource ID and dollar
-amount in it must already exist in the scan data. If one does not, the text
-is discarded, the value that failed is logged, and the templated summary is
-shown instead.
+amount in it must already exist in the scan data. So must any percentage
+written near a word about spending (`bill`, `spend`, `invoice`): the only one
+accepted is the share of the bill CloudPilot worked out itself, so a scan
+without `--bill`, which reads no bill at all, accepts none. A percentage
+nowhere near those words, such as a CPU reading, is not checked. If a value
+does not check out, the text is discarded, the value that failed is logged,
+and the templated summary is shown instead.
 
 The same works for a cluster: `kube --explain` writes the summary, and
 `ask --kube` answers a question about the cluster your `kubectl` points at
