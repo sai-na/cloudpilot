@@ -44,16 +44,29 @@ function incompleteRegions(scan: ScanResult): Set<string> {
 }
 
 /**
+ * Which regions (or namespaces) this scan read in full, so that what an
+ * earlier scan had there and this one does not is really gone. A region this
+ * scan never looked at is as unknown as one whose check failed. Both the
+ * comparison and the carrying forward have to agree on this, or a finding can
+ * be neither resolved nor kept and so look new the next time it is read.
+ */
+function readFully(scan: ScanResult): (region: string) => boolean {
+  const incomplete = incompleteRegions(scan);
+  return (region) => scan.regions.includes(region) && !incomplete.has(region);
+}
+
+/**
  * The scan to compare the next one with once this one has been reported:
- * the scan itself, plus what the earlier one had in places where a check could
- * not run this time. Without that, a check that fails once and works again
- * would make every finding behind it look new the second time.
+ * the scan itself, plus what the earlier one had in places this one did not
+ * read in full. Without that, a check that fails once and works again - or a
+ * run narrowed to fewer regions - would make every finding behind it look new
+ * the next time it is read.
  */
 export function carryForward(previous: ScanResult | undefined, current: ScanResult): ScanResult {
   if (!previous || previous.accountId !== current.accountId) return current;
-  const incomplete = incompleteRegions(current);
+  const readAgain = readFully(current);
   const have = new Set(current.findings.map(keyOf));
-  const kept = previous.findings.filter((f) => incomplete.has(f.region) && !have.has(keyOf(f)));
+  const kept = previous.findings.filter((f) => !readAgain(f.region) && !have.has(keyOf(f)));
   if (kept.length === 0) return current;
   const findings = [...current.findings, ...kept];
   return { ...current, findings, totalMonthlyWasteUsd: findings.reduce((sum, f) => sum + f.monthlyCostUsd, 0) };
@@ -73,8 +86,7 @@ export function compareScans(previous: ScanResult, current: ScanResult): ScanRes
   // A finding is only "resolved" if its region was read again in full and it is
   // gone. Where a check could not run, the resource may well still be there and
   // only the reading of it is missing, which is never a fix.
-  const incomplete = incompleteRegions(current);
-  const readAgain = (region: string) => current.regions.includes(region) && !incomplete.has(region);
+  const readAgain = readFully(current);
   const resolved = previous.findings
     .filter((f) => readAgain(f.region) && !now.has(keyOf(f)))
     .map((f) => ({ title: f.title, region: f.region, resourceIds: f.resourceIds, monthlyCostUsd: f.monthlyCostUsd }));

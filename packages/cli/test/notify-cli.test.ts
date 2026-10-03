@@ -21,12 +21,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const KUBE_FIXTURE = resolve(here, "fixtures/kube-lab.json");
 
 const KUBECTL_STAND_IN = `#!/usr/bin/env node
-// Serves the recorded cluster, as in kube.test.ts. KUBE_BROKEN makes every read fail, as an unreachable cluster does.
+// Serves the recorded cluster, as in kube.test.ts. KUBE_BROKEN makes every read fail, as an unreachable cluster does,
+// and KUBE_NO_CONTEXT leaves kubectl with no current context, which is what a trimmed-down environment looks like.
 const fs = require("fs");
 const fixture = JSON.parse(fs.readFileSync(process.env.KUBE_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 const rest = args[0] === "--context" ? args.slice(2) : args;
-if (rest.join(" ") === "config view --minify -o json") {
+if (rest.join(" ") === "config view --minify -o json" && process.env.KUBE_NO_CONTEXT) {
+  process.stdout.write(JSON.stringify({ contexts: [], clusters: [] }));
+} else if (rest.join(" ") === "config view --minify -o json") {
   process.stdout.write(JSON.stringify({ contexts: [{ name: fixture.identity.context }], clusters: [{ cluster: { server: fixture.identity.server } }] }));
 } else if (process.env.KUBE_BROKEN) {
   process.stderr.write("Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout");
@@ -240,7 +243,32 @@ test("kube --notify: a cluster that cannot be read is a message of its own, and 
   });
 });
 
+test("kube --notify: not knowing which cluster to read is a message of its own", async () => {
+  const k = lab();
+  await withHook(async (server) => {
+    const run = await k.run(["kube", "--lookback-hours", "1", "--notify", server.url], { KUBE_NO_CONTEXT: "1" });
+    assert.equal(run.status, 1);
+    assert.deepEqual(events(server), ["check-failed"]);
+    const [body] = bodies(server);
+    assert.equal(body.subject, "cluster (the current context)");
+    assert.match(body.error, /kubectl has no current context/);
+    assert.match(run.stderr, /Told 127\.0\.0\.1:\d+ that the check failed\./);
+  });
+});
+
 // watch
+
+test("watch --kube: not knowing which cluster to read is said before the loop starts, not swallowed", async () => {
+  const k = lab();
+  await withHook(async (server) => {
+    const run = await k.run(["watch", "--kube", "--every", "1h", "--max-runs", "1", "--lookback-hours", "1", "--notify", server.url], { KUBE_NO_CONTEXT: "1" });
+    assert.equal(run.status, 1);
+    assert.deepEqual(events(server), ["check-failed"]);
+    assert.equal(bodies(server)[0].subject, "cluster (the current context)");
+    assert.match(bodies(server)[0].error, /kubectl has no current context/);
+    assert.equal(existsSync(k.file(`watch-kube-${CONTEXT}.json`)), false);
+  });
+});
 
 test("watch --kube --max-runs 1: first report, then silence, then only what is new", async () => {
   const k = lab();

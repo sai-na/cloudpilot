@@ -129,6 +129,24 @@ async function notifyFailed(targets: Target[], subject: string, err: unknown): P
 }
 
 /**
+ * Run part of a check with its targets told if it throws. Everything a check
+ * needs before it can read anything - which cluster kubectl points at, for one
+ * - belongs in here too: a failure there is just as much a failed check, and
+ * going quiet on it would make silence mean something other than "nothing new".
+ */
+async function notifying<T>(targets: Target[], subject: () => string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    await notifyFailed(targets, subject(), err);
+    throw err;
+  }
+}
+
+/** What a cluster check is about before its context is known: whatever was asked for. */
+const contextSubject = (context: string | undefined) => `cluster ${context ?? "(the current context)"}`;
+
+/**
  * Put the run into live, record or replay mode and settle what it scans.
  * A replay announces itself here, before anything else is printed.
  */
@@ -502,17 +520,11 @@ program
     if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
     const prices = clusterPrices(options);
     const reader = kubectlReader(options.context);
-    const { context } = await reader.identity();
+    // Reading which cluster this is can fail on its own (no kubectl, no current context), and that is a failed check too.
+    const { context } = await notifying(targets, () => contextSubject(options.context), () => reader.identity());
     const saved = clusterFile("last-kube-scan", context);
     const previous = await previousScan(options, saved);
-
-    let scanned: ScanResult;
-    try {
-      scanned = await scanCluster(reader, context, options, lookbackHours, prices);
-    } catch (err) {
-      await notifyFailed(targets, `cluster ${context}`, err);
-      throw err;
-    }
+    const scanned = await notifying(targets, () => `cluster ${context}`, () => scanCluster(reader, context, options, lookbackHours, prices));
 
     if (options.answerKey) {
       const evaluation = await evaluate(scanned, options.answerKey);
@@ -585,7 +597,8 @@ program
       if (lookbackHours === 0) throw new Error("--lookback-hours must be more than zero.");
       const prices = clusterPrices(options as KubeOptions);
       // The context in force now, kept for every round: a later `kubectl config use-context` must not move the watch to another cluster.
-      const { context } = await kubectlReader(options.context).identity();
+      // A watch that cannot even start must say so: it is not going to keep trying.
+      const { context } = await notifying(targets, () => contextSubject(options.context), () => kubectlReader(options.context).identity());
       const reader = kubectlReader(context);
       subject = `cluster ${context}`;
       baselinePath = clusterFile("watch-kube", context);

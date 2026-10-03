@@ -395,12 +395,33 @@ test("what is carried forward is only what an unread region had, and only for th
   assert.equal(carryForward(before, now).totalMonthlyWasteUsd, 59.5);
   assert.equal(carryForward(undefined, now), now);
   assert.equal(carryForward(at([a], { accountId: "999999999999" }), now), now);
-  assert.equal(carryForward(before, at([a])).findings.length, 1, "nothing to carry when every check ran");
+  assert.equal(carryForward(before, at([a], { regions: ["ap-south-1", "us-east-1"] })).findings.length, 1, "nothing to carry when every check ran everywhere");
+  // A round narrowed to fewer regions read nothing in the others, so what they had is still unknown, not gone.
+  assert.deepEqual(
+    carryForward(before, at([a], { regions: ["ap-south-1"] })).findings.map((f) => f.resourceIds[0]),
+    ["vol-0aaaaaaaaaaaaaaaa", "snap-0eeeeeeeeeeeeeeee"],
+  );
   // A cluster is read as a whole: a failed read leaves every namespace in doubt.
   const cluster = { context: "prod", lookbackHours: 1, prices: { source: "opencost-defaults" as const, cpuHourUsd: 0, memoryGibHourUsd: 0, storageGibMonthUsd: 0 } };
   const was = at([finding("deployment/api", 5, { region: "shop" })], { accountId: "prod", regions: ["shop"], cluster });
   const is = at([], { accountId: "prod", regions: ["shop"], cluster, warnings: ["Prometheus did not answer the query"] });
   assert.equal(carryForward(was, is).findings.length, 1);
+});
+
+test("a round over fewer regions keeps the rest of the baseline, so a wider round later reports nothing new", async () => {
+  const far = finding("vol-0dddddddddddddddd", 3, { region: "us-east-1" });
+  const wide = at([a, far], { regions: ["ap-south-1", "us-east-1"] });
+  // Restarted with --region ap-south-1: this round only reads the one region.
+  const narrow = rig([at([a], { regions: ["ap-south-1"] })], { baseline: wide });
+  await narrow.run();
+  assert.deepEqual(narrow.sent, [], "nothing is new and nothing is resolved, so nothing is said");
+  const kept = narrow.saved.at(-1)!;
+  assert.deepEqual(kept.findings.map((f) => f.resourceIds[0]).sort(), ["vol-0aaaaaaaaaaaaaaaa", "vol-0dddddddddddddddd"]);
+
+  // And the next round over both regions finds nothing new, instead of re-announcing us-east-1.
+  const again = rig([at([a, far], { regions: ["ap-south-1", "us-east-1"] })], { baseline: kept });
+  await again.run();
+  assert.deepEqual(again.sent, []);
 });
 
 // The interval
