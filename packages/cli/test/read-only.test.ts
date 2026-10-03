@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { cli } from "./helpers.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = ["src/collect.ts", "src/pricing.ts"].map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
@@ -80,19 +81,27 @@ test("the README lists the NAT gateway, load balancer and bill reads, and the po
   assert.deepEqual(allowed.filter((a) => a.startsWith("ce:")), ["ce:GetCostAndUsage"]);
 });
 
-test("the one paid call is made only when the scan is asked for the bill", () => {
-  const index = readFileSync(resolve(root, "src/index.ts"), "utf8");
-  const collect = readFileSync(resolve(root, "src/collect.ts"), "utf8");
-  // Cost Explorer is reached from one place, behind the flag.
-  assert.deepEqual([...source.matchAll(/new GetCostAndUsageCommand\(/g)].length, 1);
-  assert.equal([...index.matchAll(/readBill\(/g)].length, 1, "index.ts calls readBill once");
-  assert.match(index, /options\.bill \? withBill\(merged, await readBill\(/);
-  assert.equal([...collect.matchAll(/\breadBill\(/g)].length, 1, "collect.ts only defines it: scanning a region never reads the bill");
-  assert.match(index, /\.option\("--bill", ".*\$0\.01 for this one request.*never made unless you ask"\)/);
+/**
+ * The one paid call is behind --bill, and --bill is on scan alone. That the
+ * call is made only when the flag is given is proved against a recording in
+ * replay.test.ts; here the flag's reach over the commands is what is checked.
+ */
+test("the one paid call is offered by scan alone, which says what it costs, and no other command takes the flag", () => {
+  const help = cli(["scan", "--help"], { blockNetwork: true });
+  assert.equal(help.status, 0, help.stderr);
+  const flags = help.stdout.replace(/\s+/g, " ");
+  assert.match(flags, /--bill\b/, "scan offers the flag");
+  assert.match(flags, /AWS charges \$0\.01 for this one request, so it is never made unless you ask/, "scan's help says what it costs");
   assert.match(readme, /AWS charges \$0\.01 for each Cost Explorer\s+request/);
-  // The flag is on scan alone: ask, eval, mcp and kube cannot spend it.
-  assert.equal([...index.matchAll(/\.option\("--bill"/g)].length, 1);
-  assert.doesNotMatch(index.slice(index.indexOf("function withCommonOptions"), index.indexOf("const VERSION")), /--bill/);
+  // eval's own required option has to be given, or that is what it complains about first.
+  for (const [command, ...before] of [["ask"], ["eval", "--manifest", "/dev/null"], ["mcp"], ["kube"]]) {
+    const own = cli([command!, "--help"], { blockNetwork: true });
+    assert.match(own.stdout, /Options:/, `${command} --help lists its options`);
+    assert.doesNotMatch(own.stdout.replace(/\s+/g, " "), /--bill/, `${command} must not offer --bill`);
+    const run = cli([command!, ...before, "--bill"], { blockNetwork: true });
+    assert.notEqual(run.status, 0, `${command} --bill must be refused`);
+    assert.match(run.stderr, /unknown option '--bill'/, `${command} --bill must be refused as an unknown option`);
+  }
 });
 
 test("the landing page lists every call the README lists, and its count of kinds is right", () => {

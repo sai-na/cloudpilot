@@ -154,7 +154,7 @@ produced by a model.
 | Oversized instance | 40% or 50% | CPU only: memory is invisible without the CloudWatch agent, so it is never checked. 40% under 24 hours of data, 50% from 24 hours |
 | Idle RDS instance | 50%, 70% or 85% | Connections only. 50% under 24 hours of data, 70% from 24 hours, 85% from 7 days. A job that connects once a month is not in the window |
 | Idle NAT gateway | 50%, 70% or 85% | Traffic only. 50% under 24 hours of data, 70% from 24 hours, 85% from 7 days. A route used only when another path fails carries nothing until then |
-| Idle load balancer | 50%, 70% or 85% | The same ladder, by the hours of no traffic, or by how long the balancer has existed when its targets alone were the reason. At most 50% when its traffic could not be read. A balancer that serves a yearly event is quiet the rest of the year |
+| Idle load balancer | 50%, 70% or 85% | The same ladder, by the hours of no traffic, or by how long the balancer has existed when its targets alone were the reason. At most 50% when its traffic could not be read, or covered less than 90% of the window. A balancer that serves a yearly event is quiet the rest of the year |
 | Orphaned snapshot | 80% | The source volume is gone, but the snapshot may be a deliberate backup |
 | Unused AMI | 70% | Auto Scaling launch configurations and other accounts are not visible to the scan |
 | Bucket without lifecycle rule | 90% | The configuration is simply absent |

@@ -650,6 +650,21 @@ test("idle load balancer: at least 90% of the window must be covered, and a bala
   );
 });
 
+test("idle load balancer reported on its empty target groups alone: a traffic reading too short to count is said to be inconclusive, and the confidence stays at the bottom", () => {
+  // 100 of the 168 hours asked for is under 90% of the window, so the zero requests rule nothing out.
+  const lb = balancer("web", { targetGroups: empties, traffic: traffic(100, 0, 168), windowHours: 168 });
+  const [f, ...rest] = detect(inventory({ loadBalancers: [lb] }), networked);
+  assert.equal(rest.length, 0);
+  assert.equal(f!.title, "Idle application load balancer web: no registered targets");
+  assert.ok(
+    f!.evidence.some((e) => /CloudWatch held RequestCount for only the last 100\.0 h of the 168 h asked for, less than the 90% of the window needed, so requests over the rest of it are not ruled out/.test(e)),
+    "the short reading is named",
+  );
+  assert.ok(!f!.evidence.some((e) => /Traffic was not read/.test(e)));
+  assert.equal(f!.confidence, 0.5);
+  assert.ok(!/with no traffic there are almost none/.test(f!.costBasis));
+});
+
 test("idle load balancer: targets in any state count, and a balancer with no target group or an unread one is not judged on targets", () => {
   assert.deepEqual(
     balancerPatterns([

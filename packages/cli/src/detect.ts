@@ -439,7 +439,13 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
                 : `CloudWatch ${metrics} over the last ${t.hoursObserved.toFixed(1)} h of the ${t.windowHours} h asked for: ${t.total} ${unit} in total (${t.datapoints} datapoints)`,
             ]
           : []),
-        ...(!t ? [`Traffic was not read, so ${unit} are not ruled out: a load balancer with no targets can still answer with a redirect or a fixed response`] : []),
+        ...(!noTraffic
+          ? [
+              t
+                ? `CloudWatch held ${metrics} for only the last ${t.hoursObserved.toFixed(1)} h of the ${t.windowHours} h asked for, less than the ${(options.minCoverage * 100).toFixed(0)}% of the window needed, so ${unit} over the rest of it are not ruled out: a load balancer with no targets can still answer with a redirect or a fixed response`
+                : `Traffic was not read, so ${unit} are not ruled out: a load balancer with no targets can still answer with a redirect or a fixed response`,
+            ]
+          : []),
         "No targets or no traffic in that window does not show that nothing uses the load balancer, such as one that serves a yearly event",
         `${b.type} load balancer ${b.name}, ${b.scheme ?? "unknown scheme"}, state active, DNS name ${b.dnsName ?? "unknown"}`,
         `ARN ${b.arn}`,
@@ -453,8 +459,8 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
         risk: "dangerous",
         rollback: `Deleting a load balancer is permanent. Its DNS name${b.dnsName ? ` (${b.dnsName})` : ""} is gone for good and cannot be claimed again, so every DNS record or allow-list that uses it breaks, and a new load balancer gets a new DNS name. Its listeners and rules are deleted with it. Its target groups are left behind, unused and not billed: delete them separately if they are not wanted. If deletion protection is on, the command is refused until it is switched off. To keep a way back, save its setup first: ${cli(`elbv2 describe-listeners --load-balancer-arn ${b.arn}`)} and ${cli("elbv2 describe-rules --listener-arn <each listener ARN>")}.`,
       },
-      // The same ladder as the other idle rules. Without the traffic reading, only the empty target groups speak, so it stays low.
-      confidence: Math.min(hours >= 168 ? 0.85 : hours >= 24 ? 0.7 : 0.5, t ? 1 : 0.5),
+      // The same ladder as the other idle rules. Without a traffic reading that covers the window, only the empty target groups speak, so it stays low.
+      confidence: Math.min(hours >= 168 ? 0.85 : hours >= 24 ? 0.7 : 0.5, noTraffic ? 1 : 0.5),
     });
   }
 
