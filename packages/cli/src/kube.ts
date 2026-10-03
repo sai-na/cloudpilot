@@ -119,7 +119,7 @@ export interface Workload {
   /** Labelled or annotated cloudpilot/ignore=true, so no finding is raised for it. */
   ignored: boolean;
   containers: WorkloadContainer[];
-  /** How many of its pods are bound to each node, by node name. Absent when the pods were not read with their nodes. */
+  /** How many of its pods are bound to each node, by node name. Absent when no pod of it is bound to a node. */
   nodes?: Record<string, number>;
 }
 

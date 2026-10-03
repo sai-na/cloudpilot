@@ -272,3 +272,38 @@ test("apply has nothing to run for a finding that carries no command, and says w
   assert.deepEqual(scan.findings.map((f) => f.resourceIds[0]), ["statefulset/Bad_Name"]);
   assert.throws(() => plan([scan], ["statefulset/Bad_Name"], { maxAgeHours: 24, now: NOW }), (err: unknown) => err instanceof ApplyError && /no command to run/.test(err.message) && /not a valid Kubernetes name/.test(err.message));
 });
+
+test("the spare node figure subtracts only what the nodes' requests include: pending pods with usage history free nothing from them", async () => {
+  const node = (name: string) => ({ metadata: { name }, status: { allocatable: { cpu: "4", memory: "16Gi" } } });
+  const fill = (name: string, nodeName: string) => ({
+    metadata: { name, namespace: "prod" },
+    spec: { nodeName, containers: [{ name: "filler", resources: { requests: { cpu: "3", memory: "1Gi" } } }] },
+    status: { phase: "Running" },
+  });
+  // Three replicas of 'api' that no node has taken, so none is in any node's requests.
+  const pending = (n: number) => ({
+    metadata: { name: `api-7558c476b-aaaa${n}`, namespace: "prod", ownerReferences: [{ kind: "ReplicaSet", name: "api-7558c476b", controller: true }] },
+    spec: { containers: [{ name: "app", resources: { requests: { cpu: "2", memory: "256Mi" } } }] },
+    status: { phase: "Pending", conditions: [{ type: "PodScheduled", status: "False", reason: "Unschedulable", message: "0/2 nodes are available" }] },
+  });
+  const names = [1, 2, 3].map((n) => `api-7558c476b-aaaa${n}`);
+  const each = (value: number) => Object.fromEntries(names.map((n) => [n, value]));
+  const inventory = await read({
+    nodes: [node("w1"), node("w2")],
+    pods: [fill("f1", "w1"), fill("f2", "w2"), pending(1), pending(2), pending(3)],
+    replicaSets: [{ metadata: { name: "api-7558c476b", namespace: "prod", ownerReferences: [{ kind: "Deployment", name: "api" }] } }],
+    usage: { cpu: each(0.01), memory: each(20 * MI), since: each(NOW.getTime() / 1000 - 100 * 3600) },
+  });
+  const api = inventory.workloads.find((w) => w.name === "api")!;
+  assert.equal(api.replicas, 3);
+  assert.equal(api.nodes, undefined, "no pod of it is bound to a node");
+
+  const result = detectCluster(inventory, OPENCOST_DEFAULTS);
+  assert.equal(result.findings.length, 1, "the over-requested finding is raised from the history");
+  // 6 of 8 CPU is requested on two nodes of 4: both are needed, and the pending pods change none of it.
+  assert.equal(
+    result.advisories!.find((a) => a.rule === "spare-node-capacity"),
+    undefined,
+    "freeing requests that no node counts would have made one node look spare",
+  );
+});

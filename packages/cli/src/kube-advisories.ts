@@ -259,7 +259,8 @@ export function spareNodeCapacity(inventory: ClusterInventory, prices: ClusterPr
   let freedCpu = 0;
   let freedMemory = 0;
   for (const f of freed) {
-    const pods = f.workload.nodes ? Object.entries(f.workload.nodes).reduce((total, [node, n]) => total + (counted.has(node) ? n : 0), 0) : f.workload.replicas;
+    // A workload with no pod bound to a node has no `nodes`, and none of its pods is in the requests above.
+    const pods = Object.entries(f.workload.nodes ?? {}).reduce((total, [node, n]) => total + (counted.has(node) ? n : 0), 0);
     freedCpu += pods * f.cpuFreedPerPod;
     freedMemory += pods * f.memoryFreedPerPod;
   }
