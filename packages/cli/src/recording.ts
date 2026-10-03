@@ -132,10 +132,14 @@ export function redact(text: string): string {
   return text.split(state.accountId).join(REDACTED_ACCOUNT);
 }
 
+let redactingOutput = false;
+
 /** From here on, the account ID never reaches the terminal. */
 export function enableRedaction(accountId: string): void {
   state.accountId = accountId;
-  if (!state.redact || accountId === REDACTED_ACCOUNT) return;
+  // Once is enough: the wrapper reads the account ID from state, and a process that scans again and again (watch) would otherwise wrap the streams on every round.
+  if (!state.redact || accountId === REDACTED_ACCOUNT || redactingOutput) return;
+  redactingOutput = true;
   for (const stream of [process.stdout, process.stderr]) {
     const write = stream.write.bind(stream) as (chunk: unknown, ...rest: unknown[]) => boolean;
     stream.write = ((chunk: unknown, ...rest: unknown[]) =>
