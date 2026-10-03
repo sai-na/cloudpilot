@@ -212,6 +212,12 @@ print every finding, cost and fix command; `scan --explain` says in one line
 that explanations are unavailable and shows a templated summary built from
 the findings; `ask` stops with a clear message.
 
+One model request is given two minutes and one retry, so a provider that
+stops answering cannot leave a finished scan hanging for the ten minutes the
+SDKs wait by default. A timeout is reported as one, and `--explain` then
+shows the templated summary as it does for any other model failure. Set
+`CLOUDPILOT_MODEL_TIMEOUT_MS` to change the limit, in milliseconds.
+
 Model text is checked before it is shown. Every resource ID and dollar
 amount in it must already exist in the scan data. If one does not, the text
 is discarded, the value that failed is logged, and the templated summary is
@@ -329,6 +335,7 @@ simply lacks (the run says how many). It is still a recording of your cluster:
 it names its namespaces, workloads, pods, images and volumes. `--redact-account`
 is not offered for clusters, and the context name and API server address are
 recorded as they are; on EKS the context name holds the AWS account ID.
+
 ### Offline and emulator use
 
 ```sh
