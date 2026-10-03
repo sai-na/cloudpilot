@@ -37,7 +37,8 @@ each fix with the old values as the way back.
 2. **Apply rules.** Each kind of waste is a fixed rule over what it read.
 3. **Price.** Unit prices come from the AWS Price List.
 4. **Report.** Findings go to the terminal, and optionally to JSON, Markdown,
-   a self-contained HTML file, or a Slack, Discord or other webhook.
+   a self-contained HTML file, a Slack, Discord or other webhook, or
+   CloudPilot's hosted service.
 
 None of that uses AI, so the same account always gives the same answer and no
 API key is needed. A model is optional: with a key, `--explain` writes the
@@ -73,6 +74,14 @@ says what is new, what was resolved and what is unchanged.
 - **What changed since last time.** A repeat scan compares with the last one
   made from the same directory and says what is new, what was resolved and
   what is unchanged, so nobody re-reads every finding.
+- **Keep the history for the team.** `--upload <url>` on `scan`, `kube` and
+  `watch` sends each scan's full result to CloudPilot's hosted service, which
+  works out what is new and what was resolved across weeks of scans. The
+  scanner still runs in your own account or cluster, so the service never
+  holds cloud credentials; its token is read only from
+  `CLOUDPILOT_UPLOAD_TOKEN`, never from a flag. The service is not deployed
+  yet, so the address in the docs is a placeholder. See
+  [Keep the history](packages/cli/README.md#keep-the-history).
 - **Say it where the team looks.** `--notify <url>` sends what is new to a
   Slack, Discord or other webhook, and sends nothing on a run with nothing
   new; a check that could not run gets its own message. `cloudpilot watch`
