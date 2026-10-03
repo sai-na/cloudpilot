@@ -152,3 +152,15 @@ test("the Secret made but the name left as shipped: the webhook hears why, rathe
     await server.close();
   }
 });
+
+test("run as the pod runs it, the watch starts no kubectl write, and turning autopilot on there is refused before kubectl is started", async () => {
+  const read = await inThePod({ CLOUDPILOT_CLUSTER_NAME: "prod-eu" });
+  assert.equal(read.status, 0, read.stderr);
+  for (const call of read.kubectl.calls()) assert.ok(call[0] === "get" || call.join(" ") === "config view --minify -o json", `kubectl ${call.join(" ")}`);
+
+  const refused = await inThePod({ CLOUDPILOT_CLUSTER_NAME: "prod-eu" }, ["--max-runs", "1", "--lookback-hours", "1", "--autopilot", "gp2-volume"]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /--autopilot cannot be used inside a cluster: the watcher that runs in a cluster is read-only by design/);
+  assert.equal(refused.kubectl.started(), false);
+  assert.equal(existsSync(join(refused.cwd, ".cloudpilot")), false);
+});
