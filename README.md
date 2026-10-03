@@ -1,7 +1,7 @@
 # CloudPilot
 
 A read-only command that finds the money your AWS account is wasting and
-prints the exact command that would fix each item. It changes nothing.
+prints the exact command that would fix each item. A scan changes nothing.
 
 ```sh
 npx @meruapps/cloudpilot
@@ -57,7 +57,13 @@ resource ID that is not in the scan.
 
 - **It only reads.** Every AWS call is listed in the CLI README, and a test
   fails if the code calls anything else.
-- **It never runs a fix.** It prints the commands for a person to review.
+- **A scan never runs a fix.** It prints the commands for a person to review.
+  `kube`, `watch`, `ask`, `anomalies`, `init` and `mcp` change nothing in your
+  account or cluster either.
+- **`apply` is the only command that can change anything, and only what you
+  name and approve.** It shows the commands, asks, runs only the kinds of
+  command the rules print, and keeps a record. A fix that cannot be undone is
+  never run unattended.
 - **It runs in your account,** with your credentials, and sends no telemetry.
 - **It is open source,** so you can read what it checks.
 

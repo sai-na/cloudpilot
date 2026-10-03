@@ -1,7 +1,7 @@
 # CloudPilot watching the cluster it runs in. It scans every few hours, with
 # read-only access, and tells a webhook only when something new appears.
 #
-# Everything it creates is in this file. CloudPilot itself only reads: its
+# Everything it creates is in this file. The watcher itself only reads: its
 # access is the least that `cloudpilot kube` needs, the same as
 # docs/cloudpilot-kube-readonly.yaml, and a test fails if the two differ. If
 # you have applied that file already, applying this one changes none of it.

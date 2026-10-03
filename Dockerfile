@@ -6,7 +6,8 @@
 # (which `cloudpilot kube` needs). It runs as a non-root user and holds no
 # credentials: pass them in when you run it. See "Run it in Docker" in
 # packages/cli/README.md. In a cluster it reads with the pod's service account:
-# see deploy/kube-watch.yaml.
+# see deploy/kube-watch.yaml. It is for scanning, which changes nothing: run
+# `cloudpilot apply` from your own machine, with your own aws and kubectl.
 
 ARG NODE_IMAGE=node:22.19.0-alpine3.22
 
@@ -46,7 +47,7 @@ RUN set -eu; \
 # The image you run.
 FROM ${NODE_IMAGE}
 LABEL org.opencontainers.image.title="CloudPilot" \
-      org.opencontainers.image.description="Read-only finder of wasted AWS and Kubernetes spend" \
+      org.opencontainers.image.description="Finder of wasted AWS and Kubernetes spend: a scan is read-only" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 WORKDIR /app
 # The command reads ../package.json for its version, so keep this layout.

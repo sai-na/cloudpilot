@@ -170,7 +170,7 @@ export function renderText(result: ScanResult, options: ReportOptions = {}): str
       lines.push("");
     });
     // The notice is about the commands just listed, and there are none to speak of when nothing was.
-    if (shown.length > 0) lines.push(dim("CloudPilot is read-only: it prints these commands and never runs them."));
+    if (shown.length > 0) lines.push(dim("This scan is read-only: it prints these commands and runs none of them."));
   }
 
   const resolved = resolvedLines(result);
@@ -235,7 +235,7 @@ export function renderMarkdown(result: ScanResult, summary?: string, banner?: st
       }
       lines.push("");
     });
-    lines.push("CloudPilot is read-only: it prints these commands and never runs them.", "");
+    lines.push("This scan is read-only: it prints these commands and runs none of them.", "");
   }
   const skipped = skippedLine(result);
   if (skipped) lines.push(skipped, "");

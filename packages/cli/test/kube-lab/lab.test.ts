@@ -28,7 +28,11 @@ const kube = (...args: string[]) =>
 
 /** Everything in the lab that a scan could conceivably have changed, as the API server holds it. */
 const snapshot = () =>
-  execFileSync("kubectl", ["--context", CONTEXT, "get", "deployments,persistentvolumeclaims,persistentvolumes", "--all-namespaces", "-o", "custom-columns=KIND:.kind,NAME:.metadata.name,VERSION:.metadata.resourceVersion", "--no-headers"], { encoding: "utf8" });
+  execFileSync("kubectl", ["--context", CONTEXT, "get", "deployments,persistentvolumeclaims,persistentvolumes", "--all-namespaces", "-o", "custom-columns=NAMESPACE:.metadata.namespace,KIND:.kind,NAME:.metadata.name,VERSION:.metadata.resourceVersion", "--no-headers"], { encoding: "utf8" })
+    .split("\n")
+    // apply.test.ts changes a workload on purpose, in a namespace of its own, and may be running at the same time.
+    .filter((line) => !line.startsWith("cloudpilot-apply-test "))
+    .join("\n");
 
 test("a live scan of the lab finds exactly what its answer key says", () => {
   const run = kube("--answer-key", ANSWER_KEY);

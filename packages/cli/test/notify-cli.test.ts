@@ -462,7 +462,7 @@ test("watch with no --notify prints and sends nothing", async () => {
 test("Ctrl+C ends a watch cleanly, between rounds", async () => {
   const run = cliAsync(["watch", "--replay", FIXTURE]);
   const started = Date.now();
-  while (!run.output().stdout.includes("CloudPilot is read-only")) {
+  while (!run.output().stdout.includes("This scan is read-only")) {
     assert.ok(Date.now() - started < 30_000, "the first round finished");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

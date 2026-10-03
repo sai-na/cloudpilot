@@ -174,6 +174,8 @@ const usd = (n: number) => `$${Number(n.toFixed(4))}`;
  */
 export function detect(inventory: Inventory, prices: PriceBook, options: DetectOptions = DEFAULT_DETECT_OPTIONS): Finding[] {
   const cli = (command: string) => `aws ${command} --region ${inventory.region}`;
+  // An object key or upload ID can hold spaces and other characters a shell would act on.
+  const quoted = (value: string) => (/^[A-Za-z0-9._\/=:@%+,-]+$/.test(value) ? value : value.includes("'") ? `"${value.replace(/[\\"$`]/g, "\\$&")}"` : `'${value}'`);
   const ebsPrice = (type: string) => prices.ebsGbMonth[type] ?? 0;
   const volumeById = new Map(inventory.volumes.map((v) => [v.id, v]));
   const findings: Array<Omit<Finding, "region">> = [];
@@ -564,7 +566,7 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
         monthlyCostUsd: ((u.bytes ?? 0) / GIB) * prices.s3StandardGbMonth,
         costBasis: u.bytes === undefined ? "part sizes not visible; cost unknown" : `${u.bytes} bytes x ${usd(prices.s3StandardGbMonth)}/GB-month`,
         fix: {
-          commands: [cli(`s3api abort-multipart-upload --bucket ${b.name} --key ${u.key} --upload-id ${u.uploadId}`)],
+          commands: [cli(`s3api abort-multipart-upload --bucket ${b.name} --key ${quoted(u.key)} --upload-id ${quoted(u.uploadId)}`)],
           risk: "caution",
           rollback: "Aborting discards the uploaded parts; the upload would have to start again from the beginning.",
         },

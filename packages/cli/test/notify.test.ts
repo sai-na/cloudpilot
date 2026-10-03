@@ -126,7 +126,7 @@ test("the check itself failing, and recovering, are messages of their own", () =
       "Reason: The security token included in the request is expired",
       "This is said once. CloudPilot keeps trying and will say so when checking works again.",
       "",
-      "Nothing has been changed: CloudPilot only reads.",
+      "Nothing has been changed: this check only reads.",
     ].join("\n"),
   );
   assert.doesNotMatch(plainText({ ...failed, watching: false } as Notice), /keeps trying/);
