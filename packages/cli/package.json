@@ -26,7 +26,8 @@
     "cloudpilot": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "licenses"
   ],
   "engines": {
     "node": ">=18"
@@ -37,6 +38,7 @@
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
+    "fonts": "node scripts/embed-fonts.mjs",
     "test": "tsx --test test/*.test.ts",
     "test:lab": "tsx --test test/lab/*.test.ts",
     "test:kube-lab": "tsx --test test/kube-lab/*.test.ts",

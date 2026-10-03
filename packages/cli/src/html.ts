@@ -1,12 +1,14 @@
 /**
  * The scan as one self-contained HTML file: no fonts, images, scripts or
  * styles are fetched from anywhere, so it opens offline and prints cleanly.
+ * Its two typefaces, the ones the landing page uses, travel inside the file.
  *
  * The reader makes one decision, not one per command: they tick the fixes
  * they want, the saving and the script follow at once, and they copy one
  * script. Fixes that can be undone start ticked; permanent ones never do.
  */
 import { comparisonLine, header, money, onlyNewLine, regionsWithFindings, type ReportOptions, shortId, shownFindings, skippedLine, words } from "./report.js";
+import { ARCHIVO, COURIER_PRIME_400, COURIER_PRIME_700 } from "./fonts.js";
 import type { Finding, Fix, ScanResult } from "./types.js";
 
 const escape = (text: string) =>
@@ -18,19 +20,25 @@ const RISK_NOTE: Record<Fix["risk"], string> = {
   caution: "Review before running. It can be undone.",
 };
 
+const face = (family: string, weight: string, data: string) =>
+  `@font-face { font-family: "${family}"; src: url(data:font/woff2;base64,${data}) format("woff2"); font-weight: ${weight}; }`;
+
 const STYLE = `
+${face("Archivo", "400 900", ARCHIVO)}
+${face("Courier Prime", "400", COURIER_PRIME_400)}
+${face("Courier Prime", "700", COURIER_PRIME_700)}
 /* A printed statement, audited by hand: black ink on paper, highlighter over
    the money that bought nothing, red for what cannot be undone. Light only. */
 :root {
   --paper: #fcfdf8; --band: #e4f1e3; --ink: #0d0d0d; --soft: #4b4f48; --line: #b9beb2;
   --marker: #fff04a; --red: #cf2318; --red-wash: #fbeceb; --red-on-ink: #ff9a90;
-  --print: "Courier New", Courier, ui-monospace, monospace;
+  --print: "Courier Prime", "Courier New", Courier, ui-monospace, monospace;
   color-scheme: light;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--paper); color: var(--ink);
-  font: 1.0625rem/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font: 1.0625rem/1.55 Archivo, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-variant-numeric: tabular-nums;
 }
 main { max-width: 60rem; margin: 0 auto; padding: 2.75rem 1.75rem 4rem; }
@@ -104,7 +112,7 @@ h1 { font-size: clamp(2.2rem, 6.4vw, 4.25rem); line-height: 0.98; font-weight: 9
 .bar .permanent { color: var(--red-on-ink); font-weight: 700; }
 .bar a { color: var(--paper); }
 .bar button {
-  font: 800 1rem/1 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--marker);
+  font: 800 1rem/1 Archivo, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--marker);
   border: 0; padding: 0.7rem 1.1rem; min-width: 8.5rem; cursor: pointer;
 }
 .bar button:hover { background: #fff; }
