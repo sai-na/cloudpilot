@@ -153,12 +153,13 @@ test("the command compares with an earlier scan file and can list only what is n
   assert.equal(json.findings.filter((f: Finding) => f.isNew).length, 2);
 });
 
-test("with nothing asked, the next scan from the same directory compares with the last one by itself", () => {
-  // The live test covers the real thing; here the saved last scan is what a previous run leaves behind.
+test("every scan leaves .cloudpilot/last-scan.json as the plain result, the baseline the next scan reads", () => {
+  // The automatic comparison itself needs two live scans: test/lab/record-replay.test.ts covers it.
   const run = cli(["scan", "--replay", FIXTURE, "--json"], { blockNetwork: true });
   const saved = JSON.parse(readFileSync(join(run.cwd, ".cloudpilot/last-scan.json"), "utf8"));
   assert.equal(saved.findings.length, 10);
-  assert.equal(saved.comparison, undefined, "the saved scan is the plain result");
+  assert.equal(saved.comparison, undefined, "the saved scan carries no comparison data");
+  assert.ok(isScanResult(saved), "and the next run can compare with it");
 });
 
 test("a file that is not a scan result is refused by name", () => {
