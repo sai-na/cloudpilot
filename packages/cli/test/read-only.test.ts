@@ -31,7 +31,7 @@ test("the README lists exactly the AWS operations the code calls", () => {
 });
 
 test("no other source file talks to AWS", () => {
-  for (const file of ["advisor", "assistant", "detect", "evaluate", "html", "index", "mcp", "notify", "output-check", "report", "watch"]) {
+  for (const file of ["advisor", "anomaly", "assistant", "detect", "evaluate", "html", "index", "mcp", "notify", "output-check", "report", "watch"]) {
     const text = readFileSync(resolve(root, `src/${file}.ts`), "utf8");
     assert.doesNotMatch(text, /@aws-sdk\/client-/, `${file}.ts imports an AWS client`);
   }
@@ -82,25 +82,34 @@ test("the README lists the NAT gateway, load balancer and bill reads, and the po
 });
 
 /**
- * The one paid call is behind --bill, and --bill is on scan alone. That the
- * call is made only when the flag is given is proved against a recording in
- * replay.test.ts; here the flag's reach over the commands is what is checked.
+ * The one paid call is made only by `scan --bill` and by `anomalies`, and each
+ * says what it costs. That the call is made only when asked for is proved
+ * against a recording in replay.test.ts and against a stand-in in
+ * anomalies-cli.test.ts; here the reach of the flag and of the command is checked.
  */
-test("the one paid call is offered by scan alone, which says what it costs, and no other command takes the flag", () => {
+test("the paid call is offered by scan --bill and by anomalies alone, each says what it costs, and no other command takes --bill", () => {
   const help = cli(["scan", "--help"], { blockNetwork: true });
   assert.equal(help.status, 0, help.stderr);
   const flags = help.stdout.replace(/\s+/g, " ");
   assert.match(flags, /--bill\b/, "scan offers the flag");
   assert.match(flags, /AWS charges \$0\.01 for this one request, so it is never made unless you ask/, "scan's help says what it costs");
   assert.match(readme, /AWS charges \$0\.01 for each Cost Explorer\s+request/);
+  const anomalies = cli(["anomalies", "--help"], { blockNetwork: true });
+  assert.equal(anomalies.status, 0, anomalies.stderr);
+  assert.match(anomalies.stdout.replace(/\s+/g, " "), /AWS charges \$0\.01 for each Cost Explorer request, and this makes one\./, "anomalies' help says what it costs");
+  assert.doesNotMatch(anomalies.stdout, /--bill/);
   // eval's own required option has to be given, or that is what it complains about first.
-  for (const [command, ...before] of [["ask"], ["eval", "--manifest", "/dev/null"], ["mcp"], ["kube"]]) {
+  for (const [command, ...before] of [["ask"], ["eval", "--manifest", "/dev/null"], ["mcp"], ["kube"], ["anomalies"]]) {
     const own = cli([command!, "--help"], { blockNetwork: true });
     assert.match(own.stdout, /Options:/, `${command} --help lists its options`);
     assert.doesNotMatch(own.stdout.replace(/\s+/g, " "), /--bill/, `${command} must not offer --bill`);
     const run = cli([command!, ...before, "--bill"], { blockNetwork: true });
     assert.notEqual(run.status, 0, `${command} --bill must be refused`);
     assert.match(run.stderr, /unknown option '--bill'/, `${command} --bill must be refused as an unknown option`);
+  }
+  // No other command reads Cost Explorer: not even a help page of theirs names the operation, and the MCP server has no such tool.
+  for (const command of ["ask", "mcp", "kube", "watch", "init"]) {
+    assert.doesNotMatch(cli([command, "--help"], { blockNetwork: true }).stdout, /Cost Explorer/, `${command} has no Cost Explorer option`);
   }
 });
 
