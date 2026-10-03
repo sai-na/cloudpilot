@@ -7,6 +7,7 @@
  * never printed, saved or put in an error message; wherever a target has to be
  * named, it is named by its host.
  */
+import { PROJECTION_DAYS, type AnomalyReport } from "./anomaly.js";
 import { redact } from "./recording.js";
 import { comparisonLine, money, shortId, shownFindings, words } from "./report.js";
 import type { Finding, ScanResult } from "./types.js";
@@ -74,6 +75,8 @@ export function scrub(text: string, targets: Target[]): string {
 export type Notice =
   /** Findings to decide on. `result` is compared with the earlier scan unless `first`, when every finding is new. */
   | { kind: "findings"; result: ScanResult; first: boolean; banner?: string; recoveredSince?: string }
+  /** Services that cost more than usual on the latest complete day. Sent only when there is at least one. */
+  | { kind: "anomalies"; report: AnomalyReport; accountId: string; banner?: string }
   /** The check itself did not run to the end. */
   | { kind: "failed"; subject: string; reason: string; at: string; watching: boolean; banner?: string }
   /** The check works again and there is nothing new to report with it. */
@@ -123,6 +126,25 @@ function draft(notice: Notice, code: (s: string) => string): Draft {
       intro: [...banner, `The check had been failing since ${notice.since} and completed at ${notice.at}. Nothing new was found.`],
       items: [],
       outro: [],
+    };
+  }
+  if (notice.kind === "anomalies") {
+    const { report } = notice;
+    const n = report.anomalies.length;
+    return {
+      headline: `CloudPilot: ${plural(n, "service")} cost${n === 1 ? "s" : ""} more than usual on ${report.latestDay}, ${money(report.totalIncreaseUsd)} a day more, AWS account ${notice.accountId}`,
+      intro: [
+        ...banner,
+        `Each service is compared with its own usual day: the median of the ${report.baseline?.days} days before. Cost Explorer can take a day or two to settle, so these figures may still change.`,
+      ],
+      items: report.anomalies.map(
+        (a, i) => `${i + 1}. ${a.service}: ${money(a.costUsd)} on ${a.day}, ${a.kind === "new" ? "new spend, nothing before" : `usually ${money(a.medianUsd)}`} (+${money(a.increaseUsd)} a day)`,
+      ),
+      outro: [
+        `If all of it continued, that would add up to about ${money(report.totalMonthlyIfContinuesUsd)} over ${PROJECTION_DAYS} days. That is arithmetic on one day, not a forecast.`,
+        "Nothing has been changed: CloudPilot only reads.",
+        "Run cloudpilot anomalies to see the figures behind each one.",
+      ],
     };
   }
   const { result, first } = notice;
@@ -187,6 +209,19 @@ export function compose(notice: Notice, target: Pick<Target, "kind">): string {
     return JSON.stringify({ content: fit(draft(notice, noBackticks), LIMIT.discord, (s) => `**${s}**`, (s) => s), allowed_mentions: { parse: [] } });
   }
   const text = plainText(notice);
+  if (notice.kind === "anomalies") {
+    const { report } = notice;
+    return JSON.stringify({
+      source: "cloudpilot",
+      event: "spend-anomalies",
+      text,
+      subject: `AWS account ${notice.accountId}`,
+      day: report.latestDay,
+      totalIncreaseUsd: report.totalIncreaseUsd,
+      totalMonthlyIfContinuesUsd: report.totalMonthlyIfContinuesUsd,
+      anomalies: report.anomalies,
+    });
+  }
   if (notice.kind === "findings") {
     const { result, first } = notice;
     return JSON.stringify({
