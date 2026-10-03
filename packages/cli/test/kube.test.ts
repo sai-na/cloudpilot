@@ -351,6 +351,8 @@ test("cloudpilot kube reports the cluster in its own words, and kubectl is only 
     const rest = call[0] === "--context" ? call.slice(2) : call;
     assert.ok(rest.slice(0, 2).join(" ") === "get --raw" || rest.join(" ") === "config view --minify -o json", `kubectl ${call.join(" ")}`);
   }
+  // The nodes are one of those reads: a GET of a list, through the same door.
+  assert.ok(lab.calls().some((call) => call.slice(-3).join(" ") === "get --raw /api/v1/nodes?limit=500"));
 
   // The HTML report: the resizes can be undone, so they start ticked; the deletions do not.
   const page = new JSDOM(readFileSync(join(lab.cwd, "report.html"), "utf8"), { runScripts: "dangerously" }).window.document;
