@@ -195,5 +195,6 @@ test("the report carries the landing page's own typefaces inside the file", () =
   assert.ok(pkg.files.includes("licenses"), "the published tarball carries licenses/");
   for (const licence of ["OFL-Archivo.txt", "OFL-CourierPrime.txt"]) {
     assert.ok(readFileSync(resolve(cli, "licenses", licence)).equals(readFileSync(resolve(fonts, licence))), licence);
+    assert.match(readFileSync(resolve(cli, "licenses", licence), "utf8"), /^SIL OPEN FONT LICENSE Version 1\.1 - 26 February 2007$/m, licence);
   }
 });
