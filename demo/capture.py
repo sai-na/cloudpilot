@@ -23,13 +23,30 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLI = os.path.join(ROOT, "packages", "cli", "dist", "index.js")
 COLS, ROWS = 112, 30
 
-# What the viewer sees typed, the arguments really run, and how many lines of
-# the report to show (the shown command pipes into `head` for the same number).
+# The arguments really run, and how many lines of the report to show (the shown
+# command pipes into `head` for the same number). What the viewer sees typed is
+# these same arguments, so the command above the output is the one that made it.
 SCENES = [
-    ("cloudpilot scan --replay aws-lab --no-compare", ["scan", "--replay", "aws-lab", "--no-compare"], 19),
-    ("cloudpilot kube --replay cluster-lab --no-compare", ["kube", "--replay", "cluster-lab", "--no-compare"], 19),
-    ("cloudpilot kube --replay cluster-lab --answer-key answer-key.json", ["kube", "--replay", "cluster-lab", "--answer-key", "answer-key.json"], None),
+    (["scan", "--replay", "aws-lab", "--no-compare"], 19),
+    (["kube", "--replay", "cluster-lab", "--no-compare"], 19),
+    (["kube", "--replay", "cluster-lab", "--answer-key", "answer-key.json"], None),
 ]
+
+# The whole environment each scene runs in, built from nothing like the one the
+# guard test uses (packages/cli/test/helpers.ts): no AWS profile, no model key,
+# no webhook, no colour. The maintainer's own shell must not reach the capture,
+# or it renders something the test can never reproduce.
+ENV = {
+    "PATH": os.environ.get("PATH", ""),
+    "HOME": os.environ.get("HOME", ""),
+    "NO_COLOR": "1",
+    "AWS_CONFIG_FILE": "/dev/null",
+    "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
+    "AWS_EC2_METADATA_DISABLED": "true",
+    # An unreachable proxy, in case anything honours it: these scenes are replays and call nothing.
+    "HTTPS_PROXY": "http://127.0.0.1:9",
+    "HTTP_PROXY": "http://127.0.0.1:9",
+}
 
 
 def main() -> int:
@@ -50,11 +67,12 @@ def main() -> int:
         os.symlink(os.path.join(ROOT, "demo", "cluster-lab"), os.path.join(stage, "cluster-lab"))
         shutil.copy(os.path.join(ROOT, "k8s-lab", "answer-key.json"), os.path.join(stage, "answer-key.json"))
 
-        for number, (shown, args, head) in enumerate(SCENES):
-            done = subprocess.run(["node", CLI, *args], cwd=stage, capture_output=True, text=True)
+        for number, (args, head) in enumerate(SCENES):
+            done = subprocess.run(["node", CLI, *args], cwd=stage, env=ENV, capture_output=True, text=True)
             if done.returncode != 0:
                 print(done.stderr, file=sys.stderr)
                 return 1
+            shown = " ".join(["cloudpilot", *args])
             report = done.stdout.rstrip("\n").split("\n")
             if head is not None:
                 shown, report = f"{shown} | head -{head}", report[:head]
