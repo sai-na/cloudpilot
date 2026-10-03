@@ -561,18 +561,33 @@ Run cloudpilot to see each finding's evidence and fix commands.
 
 Each new finding gets its title, its ID, where it is (region, or namespace for
 a cluster), its monthly cost as the scan worked it out, and whether the fix
-is permanent. Fix commands are not in the chat message: they are in the
-report. A message is cut to 2,000 characters for Discord, the most it takes,
+is permanent. Fix commands are not in the chat message of a scan: they are in
+the report. (With `watch --autopilot`, a round that ran, held back or refused a
+fix sends a message of its own, which does carry the way back for each fix, and
+that is often a command. See [What you are told](#let-watch-run-the-fixes-that-can-be-undone-autopilot).) A message is cut to 2,000 characters for Discord, the most it takes,
 and to 3,000 for Slack; the list gives way, the headline and the closing lines
 do not, and the message says how many findings were left out. A generic
 webhook has no such limit. It receives one JSON object: `source`
 (`cloudpilot`), `event` (`first-report`, `new-findings`, `check-failed`,
-`check-recovered` or, from `anomalies`, `spend-anomalies`), `text` (the
-message above as plain lines) and `subject`.
+`check-recovered`, `autopilot` or, from `anomalies`, `spend-anomalies`), `text`
+(the message above as plain lines) and `subject`.
 A report adds `scannedAt`, `totalMonthlyWasteUsd`, `comparison`, `warnings`
 and `findings`, which holds the new findings exactly as `--json` has them,
 evidence and fix commands included; a failure or a recovery adds `at` and
 either the `error` or the `failingSince` it had been failing from.
+
+An `autopilot` event comes only from `watch --autopilot`, once for each round
+that ran, failed, held back or refused a fix, or that could not use the audit
+log. It adds `at`, `dryRun` (true when nothing was run), `rules`, `lines` and,
+when the round could not run anything or the audit log could not take a record,
+`problem`. Each of `lines` has `outcome` (`applied`, `failed`, `held-back`,
+`refused` or `would-run`), `title`, `resourceIds`, `region`, `monthlyCostUsd`,
+the `commands` that were or would be run, `wayBack`, and where they apply
+`reason`, `halfDone`, `notStarted` (a failed fix that never started, so changed
+nothing) and `exitCode`. So unlike every other event, it carries fix commands,
+and its `reason` and `problem` can hold error text from the machine that runs
+the watch. The Slack and Discord text of it has the way back for each fix and
+the reason for each one held back or not run, not the command list.
 
 `anomalies --notify` sends the same way, one message when a service cost more
 than usual (see [Spend anomalies](#spend-anomalies)). Its generic body is
@@ -594,7 +609,10 @@ failed, with the reason, and the command still exits with status 1.
 **Privacy.** `--notify` sends finding titles, resource IDs and costs to the
 service you name, with the account ID or cluster name, and a generic webhook
 also gets each finding's evidence and fix commands. When a check fails, the
-error it gave is sent too. Nothing else is sent, and nothing is sent anywhere
+error it gave is sent too. With `watch --autopilot`, each round's message
+adds what autopilot ran or would run: the titles and IDs, the way back for each
+fix and the reason for each one held back or refused, and a generic webhook also
+gets the commands themselves. Nothing else is sent, and nothing is sent anywhere
 you did not name: each message is one HTTPS request to your URL, and a redirect is
 treated as a failure instead of being followed. A webhook URL is a secret,
 since anyone who has it can post to that channel. CloudPilot never prints it,

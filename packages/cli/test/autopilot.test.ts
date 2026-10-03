@@ -710,6 +710,29 @@ test("when a dry-run round stops, the watch does not point at an audit log that 
   }
 });
 
+test("the generic webhook's autopilot event has the fields the README documents, carries the commands and the way back, and the chat text carries the way back but not the command list", async () => {
+  const p = pilot({}, { failOn: "modify-volume" });
+  const failed = (await p.round(account([gp2(1)]))).notice as Extract<Notice, { kind: "autopilot" }>;
+  const body = JSON.parse(compose(failed, { kind: "generic" }));
+  assert.deepEqual(Object.keys(body), ["source", "event", "text", "subject", "at", "dryRun", "rules", "lines"]);
+  assert.deepEqual([body.source, body.event, body.dryRun], ["cloudpilot", "autopilot", false]);
+  assert.deepEqual(Object.keys(body.lines[0]).sort(), ["commands", "exitCode", "monthlyCostUsd", "outcome", "region", "resourceIds", "title", "wayBack"]);
+  assert.match(body.lines[0].commands[0], /^aws ec2 modify-volume /, "the command is in the JSON");
+  assert.match(body.lines[0].wayBack, /Online and reversible/);
+
+  for (const kind of ["slack", "discord"] as const) {
+    const text = JSON.parse(compose(failed, { kind }))[kind === "slack" ? "text" : "content"] as string;
+    assert.match(text, /Way back: Online and reversible/);
+    assert.doesNotMatch(text, /aws ec2 modify-volume/, `${kind}: the command list is not in the chat text`);
+  }
+
+  // A round that could not use the audit log adds the problem.
+  const broken = (await pilot({}, { unreadable: true }).round(account([gp2(1)]))).notice as Extract<Notice, { kind: "autopilot" }>;
+  const problem = JSON.parse(compose(broken, { kind: "generic" }));
+  assert.deepEqual(Object.keys(problem), ["source", "event", "text", "subject", "at", "dryRun", "rules", "lines", "problem"]);
+  assert.match(problem.problem, /could not be read/);
+});
+
 // Stopping
 
 test("a watch that is stopped lets no further fix start, and says so", async () => {
