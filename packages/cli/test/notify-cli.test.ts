@@ -228,6 +228,22 @@ test("kube --notify: a message that did not arrive leaves the findings new, and 
   });
 });
 
+test("kube --replay --notify: the banner does not claim no live calls were made", async () => {
+  const k = lab();
+  const recording = join(k.cwd, "recording");
+  const made = await k.run(["kube", "--lookback-hours", "1", "--record", recording]);
+  assert.equal(made.status, 0, made.stderr);
+
+  await withHook(async (server) => {
+    const run = await k.run(["kube", "--replay", recording, "--notify", server.url]);
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(events(server), ["first-report"], "a replay still sends the one message it was asked to send");
+    const [body] = bodies(server);
+    assert.match(body.text, /^REPLAY MODE: .* No live calls\. Notifications are still sent\.$/m);
+    assert.match(run.stdout, /^REPLAY MODE: .* No live calls\. Notifications are still sent\.$/m);
+  });
+});
+
 test("kube --notify: a cluster that cannot be read is a message of its own, and still fails the run", async () => {
   const k = lab();
   await withHook(async (server) => {

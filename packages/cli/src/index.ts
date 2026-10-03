@@ -190,6 +190,10 @@ function announce(banner: string, json: boolean): void {
   else console.log(`${banner}\n`);
 }
 
+/** What a replay banner says about live calls: the same words for an account and for a cluster, and a replay that was given --notify still sends. */
+const replayTail = (what: "AWS" | "kubectl", options: { liveLlm?: boolean; notifying?: boolean }) =>
+  `${options.liveLlm ? `No live ${what} calls; the model is called live.` : "No live calls."}${options.notifying ? " Notifications are still sent." : ""}`;
+
 /**
  * Put the run into live, record or replay mode and settle what it scans.
  * A replay announces itself here, before anything else is printed.
@@ -221,7 +225,7 @@ function begin(options: CommonOptions, command: "scan" | "ask", question: string
   enableRedaction(manifest.accountId);
   const account = redactAccount ? REDACTED_ACCOUNT : manifest.accountId;
   const where = session.regions.length === 1 ? `region ${session.regions[0]}` : `${session.regions.length} regions`;
-  const tail = `${options.liveLlm ? "No live AWS calls; the model is called live." : "No live calls."}${options.notifying ? " Notifications are still sent." : ""}`;
+  const tail = replayTail("AWS", options);
   const banner = `REPLAY MODE: recorded ${session.recordedAt} from account ${account}, ${where}. ${tail}`;
   announce(banner, json);
   return { banner, scope: { homeRegion: session.homeRegion, region: session.region } };
@@ -446,6 +450,8 @@ interface KubeOptions extends OutputOptions {
   onlyNew?: boolean;
   answerKey?: string;
   notify?: string[];
+  /** Set once the notify targets are settled, so a replay's banner can say it still sends them. */
+  notifying?: boolean;
   explain?: boolean;
   model?: string;
   provider?: Provider;
@@ -456,7 +462,6 @@ interface KubeOptions extends OutputOptions {
   liveLlm?: boolean;
 }
 
-/** Read the cluster through kubectl, once, and find the waste in it. */
 /** The saved scan of one cluster, so scanning a second cluster never replaces the first one's baseline. */
 const clusterFile = (prefix: string, context: string) => `.cloudpilot/${prefix}-${context.replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
 
@@ -547,7 +552,7 @@ function beginCluster(options: KubeOptions, command: "kube" | "kube-ask", questi
     prices: pricesGiven(options) ? scan.prices : session.prices,
   };
   const where = session.namespaces.length === 1 ? `namespace ${session.namespaces[0]}` : `${session.namespaces.length} namespaces`;
-  const tail = options.liveLlm ? "No live kubectl calls; the model is called live." : "No live calls.";
+  const tail = replayTail("kubectl", options);
   const banner = `REPLAY MODE: recorded ${session.recordedAt} from cluster ${session.context}, ${where}. ${tail}`;
   announce(banner, json);
   return { banner, reader: kubeReader(() => kubectlReader()), scan: replayed };
@@ -664,7 +669,7 @@ withRecordingOptions(
     const { banner, inventory, result: scanned, previous, saved } = await notifying(
       targets,
       () => (known ? `cluster ${known}` : contextSubject(options.context)),
-      () => runKube(options, "kube", undefined, lookbackGiven, Boolean(options.json), targets.length === 0, (context) => (known = context)),
+      () => runKube({ ...options, notifying: targets.length > 0 }, "kube", undefined, lookbackGiven, Boolean(options.json), targets.length === 0, (context) => (known = context)),
     );
 
     if (options.answerKey) {
