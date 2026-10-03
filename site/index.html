@@ -431,6 +431,18 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
   </figure>
 </section>
 
+<section id="anomalies">
+  <h2>And when the bill moves, not just the waste</h2>
+  <p class="lead">Waste is money that has been going nowhere for a while. A spike is money that started going somewhere yesterday. One more command reads the account's daily cost per service and says which services cost unusually much on the latest complete day, judged against their own earlier days.</p>
+  <div class="command">
+    <code id="anomalies-one-liner">npx @meruapps/cloudpilot anomalies</code>
+    <button type="button" data-copy="anomalies-one-liner">Copy</button>
+  </div>
+  <p><strong>This is the one read AWS charges for: $0.01 a request.</strong> Cost Explorer is the only call in <a href="#api-calls">the list of reads above</a> that costs anything, and only this command and <code>scan --bill</code> ever make it. <code>anomalies</code> makes a single request, and more only if AWS splits the answer into pages, so the first line of its output, and its <code>--help</code>, say what it costs before anything is read. CloudPilot never spends your money unasked.</p>
+  <p>A fixed rule decides, and no model is involved: the same days always give the same answer. A service is flagged when the latest complete day stands above the median of the days before it by more than three times their spread &mdash; the median absolute deviation, scaled to read like a standard deviation &mdash; <em>and</em> by at least a dollar, so pennies never raise an alarm however large the rise looks beside a tiny usual cost. Both numbers are yours to set, with <code>--sensitivity</code> and <code>--min-increase</code>. When every earlier day cost the same there is no spread to measure against, so the day has to clear both the dollar floor and 50% above the median. A service with no cost at all in the earlier days is new spend. The day in progress is never asked for, because a partial day always looks cheap, and with fewer than seven earlier days the command says it has not enough history and flags nothing.</p>
+  <p>Each service it names comes with the day and what it cost, the usual day it was judged against, the rise a day, and what that rise would add up to over 30 days if every day cost as much as this one &mdash; arithmetic on a single day, worded as a condition and never as a forecast. It is as plain about what it cannot see: Cost Explorer can take a day or two to settle, so the last day or two may still change, and a service whose busy day comes round weekly reads as a spike every week. <code>--notify</code> posts it to a Slack, Discord or other https webhook, and only when something was flagged; <code>--json</code> prints the figures; and a recorded run replays with no network, no credentials and no charge.</p>
+</section>
+
 <section id="daily">
   <h2>Then let it keep checking</h2>
   <p class="lead">Two ways to stop remembering, and both of them speak up only when there is something to decide: the first run sends the whole list once, a run with nothing new sends nothing at all, and a check that could not run gets a message of its own. Silence always means nothing new.</p>
