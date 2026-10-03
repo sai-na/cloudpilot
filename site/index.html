@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CloudPilot: find the money your AWS account is wasting</title>
+<title>CloudPilot: stop hunting for AWS waste by hand</title>
 <meta name="description" content="A read-only, open-source command that scans your AWS account, and your Kubernetes clusters, for wasted spend and prints the exact fix for each item. It changes nothing.">
 <style>
 /* Two typefaces, served from this site's own files (both under the SIL Open
@@ -189,13 +189,13 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
 
 <div class="hero">
   <div>
-    <h1>Find the money your AWS account is wasting. <span class="keep">Read-only.</span> <span class="keep">Two minutes.</span></h1>
+    <h1>Stop hunting for AWS waste by hand. <span class="keep">Read-only.</span> <span class="keep">Two minutes.</span></h1>
     <div class="command">
       <code id="one-liner">npx @meruapps/cloudpilot</code>
       <button type="button" data-copy="one-liner">Copy</button>
     </div>
+    <p><strong>It changes nothing.</strong> Every call it makes is a read, and every fix is printed for you to run, never run for you. <a href="https://github.com/sai-na/cloudpilot" data-github>Read the source on GitHub</a>.</p>
     <p>Paste it into AWS CloudShell. It reads every region with the credentials CloudShell already has, then prints an itemised statement of what you are paying for and not using, with the exact command that would fix each line.</p>
-    <p>It changes nothing. <a href="https://github.com/sai-na/cloudpilot" data-github>Read the source on GitHub</a>.</p>
     <p>Running Kubernetes as well? <code>cloudpilot kube</code> reads the cluster your <code>kubectl</code> points at and does the same there. <a href="#clusters">What it finds in a cluster</a>.</p>
   </div>
 
@@ -256,6 +256,84 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
     </g>
   </svg>
 </div>
+
+<section id="saves">
+  <h2>What it takes off your hands</h2>
+  <p class="lead">The slow parts of a cost cleanup, done for you. What is left is the part only you can do: deciding.</p>
+  <ol class="statement">
+    <li>
+      <span class="item">Checking every region</span><span class="amount">One run</span>
+      <p class="note">It reads each region enabled for the account in the same scan, so nothing sits unnoticed in a region nobody opens.</p>
+    </li>
+    <li>
+      <span class="item">Working out what each leftover costs</span><span class="amount">Priced</span>
+      <p class="note">Each finding carries its monthly cost, from the AWS price list, and the evidence it rests on.</p>
+    </li>
+    <li>
+      <span class="item">Writing the cleanup commands</span><span class="amount">One script</span>
+      <p class="note">The HTML report gives every fix a tick box. Tick the ones you want, watch the saving change, and copy the one script. A fix that cannot be undone is never ticked for you.</p>
+    </li>
+    <li>
+      <span class="item">Reading the whole list again next time</span><span class="amount">Only what is new</span>
+      <p class="note">A repeat scan compares with the last one and says what is new, what was resolved and what is unchanged.</p>
+    </li>
+    <li>
+      <span class="item">Remembering to check at all</span><span class="amount">A daily email</span>
+      <p class="note">Deploy one template and the scan runs every day in your own account. It writes to you only on a day something new appears.</p>
+    </li>
+  </ol>
+</section>
+
+<section id="safe">
+  <div class="safe-top">
+    <h2>How it stays safe</h2>
+    <span class="stamp">Read-only</span>
+  </div>
+  <div class="safe">
+    <div>
+      <h3>It only reads</h3>
+      <p>Every AWS call it makes is a Describe, a List or a Get. A test in the repository fails if the code ever calls anything else. In a cluster, every read is a <code>kubectl get --raw</code>, which can only GET, and the repository ships the least-access role those reads need.</p>
+    </div>
+    <div>
+      <h3>It never runs a command</h3>
+      <p>It prints each fix for you to review and says which ones are permanent. Running them is your decision.</p>
+    </div>
+    <div>
+      <h3>It runs inside your own account</h3>
+      <p>The scan happens in your CloudShell or terminal, with your credentials. There is no CloudPilot server in the path, and the tool sends no telemetry.</p>
+    </div>
+    <div>
+      <h3>It is open source</h3>
+      <p>The code is on GitHub under the AGPL, so you can read exactly what it checks before you run it.</p>
+    </div>
+  </div>
+  <details id="api-calls">
+    <summary>The full list of AWS API calls it makes: 18 kinds, none of which can change anything</summary>
+    <table>
+      <thead><tr><th>Service</th><th>Call</th><th>Used for</th></tr></thead>
+      <tbody>
+        <tr><td>STS</td><td>GetCallerIdentity</td><td>The account ID shown in the report</td></tr>
+        <tr><td>EC2</td><td>DescribeRegions</td><td>The regions enabled for the account</td></tr>
+        <tr><td>EC2</td><td>DescribeVolumes</td><td>Unattached and gp2 volumes</td></tr>
+        <tr><td>EC2</td><td>DescribeSnapshots</td><td>Snapshots of deleted volumes</td></tr>
+        <tr><td>EC2</td><td>DescribeImages</td><td>Unused machine images</td></tr>
+        <tr><td>EC2</td><td>DescribeInstances</td><td>Stopped and idle instances</td></tr>
+        <tr><td>EC2</td><td>DescribeAddresses</td><td>Idle Elastic IPs</td></tr>
+        <tr><td>EC2</td><td>DescribeLaunchTemplates</td><td>Whether an image is still referenced</td></tr>
+        <tr><td>EC2</td><td>DescribeLaunchTemplateVersions</td><td>Whether an image is still referenced</td></tr>
+        <tr><td>S3</td><td>ListBuckets</td><td>The buckets in each region</td></tr>
+        <tr><td>S3</td><td>GetBucketLocation</td><td>A bucket's region, when the listing omits it</td></tr>
+        <tr><td>S3</td><td>GetBucketLifecycleConfiguration</td><td>Buckets with no lifecycle rule</td></tr>
+        <tr><td>S3</td><td>GetBucketTagging</td><td>The tag that tells CloudPilot to skip a bucket</td></tr>
+        <tr><td>S3</td><td>ListObjectsV2</td><td>Object count and size; contents are never read</td></tr>
+        <tr><td>S3</td><td>ListMultipartUploads</td><td>Incomplete uploads</td></tr>
+        <tr><td>S3</td><td>ListParts</td><td>The size of an incomplete upload</td></tr>
+        <tr><td>CloudWatch</td><td>GetMetricData</td><td>CPU history of running instances</td></tr>
+        <tr><td>Pricing</td><td>GetProducts</td><td>Unit prices for what was found</td></tr>
+      </tbody>
+    </table>
+  </details>
+</section>
 
 <section id="finds">
   <h2>What it finds in an AWS account</h2>
@@ -332,60 +410,9 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
   <p>Cluster costs use the OpenCost project's default unit prices unless you give your own, and every one of these findings says the same thing: lowering a request frees capacity, and the money is saved once that lets the cluster run fewer or smaller nodes. When Prometheus holds only a little history the finding says how much it had and its confidence drops, and a container with under five minutes is not judged at all. Not yet for clusters: the daily report below, record and replay, the MCP server, and the model-written summary.</p>
 </section>
 
-<section id="safe">
-  <div class="safe-top">
-    <h2>How it stays safe</h2>
-    <span class="stamp">Read-only</span>
-  </div>
-  <div class="safe">
-    <div>
-      <h3>It only reads</h3>
-      <p>Every AWS call it makes is a Describe, a List or a Get. A test in the repository fails if the code ever calls anything else. In a cluster, every read is a <code>kubectl get --raw</code>, which can only GET, and the repository ships the least-access role those reads need.</p>
-    </div>
-    <div>
-      <h3>It never runs a command</h3>
-      <p>It prints each fix for you to review and says which ones are permanent. Running them is your decision.</p>
-    </div>
-    <div>
-      <h3>It runs inside your own account</h3>
-      <p>The scan happens in your CloudShell or terminal, with your credentials. There is no CloudPilot server in the path, and the tool sends no telemetry.</p>
-    </div>
-    <div>
-      <h3>It is open source</h3>
-      <p>The code is on GitHub under the AGPL, so you can read exactly what it checks before you run it.</p>
-    </div>
-  </div>
-  <details id="api-calls">
-    <summary>The full list of AWS API calls it makes: 18 kinds, none of which can change anything</summary>
-    <table>
-      <thead><tr><th>Service</th><th>Call</th><th>Used for</th></tr></thead>
-      <tbody>
-        <tr><td>STS</td><td>GetCallerIdentity</td><td>The account ID shown in the report</td></tr>
-        <tr><td>EC2</td><td>DescribeRegions</td><td>The regions enabled for the account</td></tr>
-        <tr><td>EC2</td><td>DescribeVolumes</td><td>Unattached and gp2 volumes</td></tr>
-        <tr><td>EC2</td><td>DescribeSnapshots</td><td>Snapshots of deleted volumes</td></tr>
-        <tr><td>EC2</td><td>DescribeImages</td><td>Unused machine images</td></tr>
-        <tr><td>EC2</td><td>DescribeInstances</td><td>Stopped and idle instances</td></tr>
-        <tr><td>EC2</td><td>DescribeAddresses</td><td>Idle Elastic IPs</td></tr>
-        <tr><td>EC2</td><td>DescribeLaunchTemplates</td><td>Whether an image is still referenced</td></tr>
-        <tr><td>EC2</td><td>DescribeLaunchTemplateVersions</td><td>Whether an image is still referenced</td></tr>
-        <tr><td>S3</td><td>ListBuckets</td><td>The buckets in each region</td></tr>
-        <tr><td>S3</td><td>GetBucketLocation</td><td>A bucket's region, when the listing omits it</td></tr>
-        <tr><td>S3</td><td>GetBucketLifecycleConfiguration</td><td>Buckets with no lifecycle rule</td></tr>
-        <tr><td>S3</td><td>GetBucketTagging</td><td>The tag that tells CloudPilot to skip a bucket</td></tr>
-        <tr><td>S3</td><td>ListObjectsV2</td><td>Object count and size; contents are never read</td></tr>
-        <tr><td>S3</td><td>ListMultipartUploads</td><td>Incomplete uploads</td></tr>
-        <tr><td>S3</td><td>ListParts</td><td>The size of an incomplete upload</td></tr>
-        <tr><td>CloudWatch</td><td>GetMetricData</td><td>CPU history of running instances</td></tr>
-        <tr><td>Pricing</td><td>GetProducts</td><td>Unit prices for what was found</td></tr>
-      </tbody>
-    </table>
-  </details>
-</section>
-
 <section id="report">
   <h2>Sample report</h2>
-  <p class="lead">Add <code>--html report.html</code> and the same scan is saved as a single file you can open, print or send to whoever approves the cleanup.</p>
+  <p class="lead">Add <code>--html report.html</code> and the same scan is saved as a single file. Every fix has a tick box: tick the ones you want, the saving updates as you go, and one button copies the script. Open it, print it, or send it to whoever approves the cleanup.</p>
   <figure>
     <div class="torn">
       <a href="sample-report.html">
@@ -397,7 +424,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
 </section>
 
 <section id="daily">
-  <h2>Or let it check every day</h2>
+  <h2>Then let it check every day</h2>
   <p class="lead">Deploy one CloudFormation template into your own account and the scan runs on a schedule, daily unless you change it. You get an email only on a day something new appears, and it lists only what is new. A day with nothing new sends nothing. If the scan itself fails that gets its own email, so silence always means nothing new.</p>
   <p>It runs in your account with the same read-only access, from a template you can read before you deploy it: a build job, a topic for the email, and one small file in S3 so the next run knows what is new. Nothing it creates can change, stop or delete anything else in the account, and a test in the repository fails if the template's permissions grow beyond that. The template and the steps to deploy it, or to stop it again, are in <code>deploy/</code>.</p>
 </section>
