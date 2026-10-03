@@ -84,15 +84,19 @@ out halfway through one. It reports:
 
 - **Who your AWS credentials are**: account and ARN, or that none were found
   and how to supply them (CloudShell, `--profile`, environment variables).
-- **Which reads are allowed**: for each read in the table above, the cheapest
-  real call of it in one region (`--region`, otherwise where a scan starts:
-  `AWS_REGION`, `AWS_DEFAULT_REGION`, then `us-east-1`). Each read is reported
-  as allowed, denied, failed or not tested, and nothing stops at the first
-  denial. A read AWS refused is denied; a read that errored or did not answer
-  in time is failed, which is not a refusal and asks nothing of IAM. A read
-  that needs something to try on (a bucket, a launch template, an incomplete
-  upload) is tried on the first one found in that region, and reported as not
-  tested when there is none.
+- **Which reads are allowed**: for every read in the table above that AWS does
+  not charge for, the cheapest real call of it in one region (`--region`,
+  otherwise where a scan starts: `AWS_REGION`, `AWS_DEFAULT_REGION`, then
+  `us-east-1`). Each read is reported as allowed, denied, failed or not tested,
+  and nothing stops at the first denial. A read AWS refused is denied; a read
+  that errored or did not answer in time is failed, which is not a refusal and
+  asks nothing of IAM. A read that needs something to try on (a bucket, a
+  launch template, an incomplete multipart upload, a load balancer, a target
+  group) is tried on the first one found in that region, and reported as not
+  tested when there is none. The one charged read, `CostExplorer
+  GetCostAndUsage`, is never made - checking that a scan will work must cost
+  nothing - and is reported as not tested with that reason; only `scan --bill`
+  makes it.
 - **The cluster**, when `kubectl` is on the PATH and has a current context (or
   `--context`): whether each list the cluster scan makes is allowed (a
   `kubectl get --raw` with `limit=1`), whether a Prometheus is found (or named
@@ -762,7 +766,7 @@ say so: see [Watch it](#watch-it).
 | `--notify <url>` | `scan`, `kube` and `watch`: send what is new to this Slack, Discord or other https webhook. Repeatable; or `CLOUDPILOT_NOTIFY`, comma-separated. See [Tell your team what is new](#tell-your-team-what-is-new) |
 | `--every <interval>` | `watch` only: the wait between rounds, `15m` to `7d`. Default `6h` |
 | `--max-runs <n>` | `watch` only: stop after this many rounds. Default: until stopped |
-| `--kube` | `watch` only: watch the cluster kubectl points at instead of the AWS account |
+| `--kube` | `watch` and `ask`: work on the cluster kubectl points at instead of the AWS account. With `ask` it takes `--context`, `--namespace`, `--prometheus`, `--lookback-hours` (default 168, not 24) and the price options, and refuses `--region`, `--all-regions`, `--profile`, `--price-file`, `--offline` and `--redact-account` |
 | `--bill` | `scan` only: also read last month's total spend from Cost Explorer and say what share of it the waste is. AWS charges $0.01 for this one request, so it is never made unless you ask |
 | `--lookback-hours <n>` | Hours of CPU, database connection and NAT gateway and load balancer traffic history used to judge idle and oversized resources. Default 24 |
 | `--price-file <path>` | Saved price table to fall back on |
@@ -774,7 +778,6 @@ say so: see [Watch it](#watch-it).
 | `--replay <dir>` | Repeat a recorded run with no network calls. Also for `kube` |
 | `--live-llm` | With `--replay`: AWS (or the cluster) from the recording, model called live |
 | `--redact-account` | Show the account ID as `123456789012`. Not with `--kube` |
-| `--kube` | `ask` only: ask about a Kubernetes cluster instead of the account. Takes `--context`, `--namespace`, `--prometheus`, `--lookback-hours` (default 168, not 24) and the price options, and refuses `--region`, `--all-regions`, `--profile`, `--price-file`, `--offline` and `--redact-account` |
 
 The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
 and `--redact-account` runs. With `--notify` it is saved once the message has
