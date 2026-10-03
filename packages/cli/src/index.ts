@@ -11,8 +11,8 @@ import { detect, mergeScans } from "./detect.js";
 import { loadEnvFile } from "./env.js";
 import { evaluate, renderEvaluation } from "./evaluate.js";
 import { renderHtml } from "./html.js";
-import { collectCluster, kubectlReader, parsePrometheusRef } from "./kube.js";
-import { detectCluster, OPENCOST_DEFAULTS } from "./kube-detect.js";
+import { collectCluster, kubectlReader, parsePrometheusRef, type ClusterInventory } from "./kube.js";
+import { cpuQuantity, detectCluster, memoryQuantity, OPENCOST_DEFAULTS } from "./kube-detect.js";
 import { serveMcp } from "./mcp.js";
 import { allowedValues, unsupportedValues, type Allowed } from "./output-check.js";
 import { fetchPrices, isEmpty, loadPriceFile, noPrices } from "./pricing.js";
@@ -30,7 +30,7 @@ import {
   startRecord,
   startReplay,
 } from "./recording.js";
-import { money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
+import { header, money, renderMarkdown, renderPlainText, renderText, type ReportOptions, templatedSummary } from "./report.js";
 import type { ClusterPrices, Inventory, PriceBook, RegionScan, ScanResult } from "./types.js";
 
 const LAST_SCAN = ".cloudpilot/last-scan.json";
@@ -348,6 +348,46 @@ function clusterPrices(options: KubeOptions): ClusterPrices {
   };
 }
 
+interface ClusterScanOptions {
+  context?: string;
+  namespace?: string;
+  prometheus?: string;
+  lookbackHours: number;
+  prices: ClusterPrices;
+}
+
+/** Read a cluster and apply the rules. Used by the kube command and by the MCP server. */
+async function scanCluster(options: ClusterScanOptions): Promise<{ inventory: ClusterInventory; result: ScanResult }> {
+  const inventory = await collectCluster(kubectlReader(options.context), {
+    namespace: options.namespace,
+    prometheus: options.prometheus ? parsePrometheusRef(options.prometheus) : undefined,
+    lookbackHours: options.lookbackHours,
+  });
+  return { inventory, result: detectCluster(inventory, options.prices) };
+}
+
+/** A cluster's workloads as a model should read them: requests and peaks in the units a manifest uses. */
+function workloadsForModel(inventory: ClusterInventory) {
+  const optional = <T>(value: T | undefined, format: (v: T) => string) => (value === undefined ? null : format(value));
+  return inventory.workloads.map((w) => ({
+    namespace: w.namespace,
+    kind: w.kind,
+    name: w.name,
+    replicas: w.replicas,
+    skippedByLabel: w.ignored,
+    containers: w.containers.map((c) => ({
+      name: c.name,
+      cpuRequest: optional(c.cpuRequestCores, cpuQuantity),
+      // Peaks are rounded up to a whole millicore or mebibyte, so they never read as less than they were.
+      cpuPeak: optional(c.cpuPeakCores, (cores) => cpuQuantity(Math.ceil(cores * 1000 - 1e-9) / 1000)),
+      memoryRequest: optional(c.memoryRequestBytes, memoryQuantity),
+      memoryPeak: optional(c.memoryPeakBytes, (bytes) => memoryQuantity(Math.ceil(bytes / 2 ** 20 - 1e-9) * 2 ** 20)),
+      historyHours: c.historyHours === undefined ? null : Number(c.historyHours.toFixed(1)),
+      killedForMemory: c.oomKilled,
+    })),
+  }));
+}
+
 const program = new Command()
   .name("cloudpilot")
   .description("Read-only agent that finds wasted AWS spend and proposes the fix commands.")
@@ -408,12 +448,7 @@ program
     const previous = await previousScan(options, saved);
 
     note(`Reading cluster ${context} through kubectl (read-only)...`);
-    const inventory = await collectCluster(reader, {
-      namespace: options.namespace,
-      prometheus: options.prometheus ? parsePrometheusRef(options.prometheus) : undefined,
-      lookbackHours,
-    });
-    const scanned = detectCluster(inventory, prices);
+    const { result: scanned } = await scanCluster({ context: options.context, namespace: options.namespace, prometheus: options.prometheus, lookbackHours, prices });
 
     if (options.answerKey) {
       const evaluation = await evaluate(scanned, options.answerKey);
@@ -525,6 +560,52 @@ withCommonOptions(program.command("mcp").description("Run as an MCP server over 
         },
       })),
     ];
+
+    // Clusters. A recording holds an AWS account only, so a replaying server has no cluster to offer.
+    if (!options.replay) {
+      type ClusterScan = Awaited<ReturnType<typeof scanCluster>>;
+      let cluster: ClusterScan | undefined;
+      const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+      const readCluster = async (args: Record<string, unknown>) => {
+        const hours = Number(args.lookback_hours);
+        cluster = await scanCluster({
+          context: text(args.context),
+          namespace: text(args.namespace),
+          prometheus: text(args.prometheus),
+          lookbackHours: Number.isFinite(hours) && hours > 0 ? Math.min(hours, 24 * 90) : 168,
+          prices: OPENCOST_DEFAULTS,
+        });
+        return cluster;
+      };
+      tools.push(
+        {
+          name: "scan_cluster",
+          description:
+            "Scan a Kubernetes cluster for waste, read-only through kubectl, and return a summary plus every finding: workloads that request more CPU or memory than they use (with the kubectl command that lowers the request and the old values as the way back), volume claims no pod mounts, and Released volumes. Reads the current kubectl context unless one is given. Usage comes from the cluster's Prometheus. Costs use the OpenCost project's default unit prices, which the result states.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              context: { type: "string", description: "kubectl context to read. Default: the current one." },
+              namespace: { type: "string", description: "Read only this namespace. Default: every namespace except the cluster's own." },
+              prometheus: { type: "string", description: "Where usage history is, as namespace/service:port. Default: found among the cluster's services." },
+              lookback_hours: { type: "integer", description: "Hours of usage history to judge requests by. Default 168 (a week)." },
+            },
+            additionalProperties: false,
+          },
+          run: async (args) => {
+            const { result } = await readCluster(args);
+            return `${header(result).join("\n")}\n\n${templatedSummary(result)}\n\nFindings as JSON:\n${JSON.stringify(forModel(result))}`;
+          },
+        },
+        {
+          name: "get_cluster_workloads",
+          description:
+            "Return every Deployment, StatefulSet and DaemonSet the latest cluster scan read, including those NOT flagged: replicas, and for each container its CPU and memory request, its peak use over the history Prometheus holds, how many hours of history that is, and whether it has been killed for running out of memory. Use it to answer what a workload asks for and uses, or why one was not flagged. Runs scan_cluster with its defaults first if no cluster has been scanned yet.",
+          inputSchema: { type: "object", properties: {}, additionalProperties: false },
+          run: async () => JSON.stringify(workloadsForModel((cluster ?? (await readCluster({}))).inventory)),
+        },
+      );
+    }
 
     await serveMcp({ name: "cloudpilot", version: VERSION, instructions: MCP_INSTRUCTIONS, tools });
     // The client has gone; do not let idle AWS connections keep the process alive.

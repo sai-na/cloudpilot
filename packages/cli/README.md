@@ -250,9 +250,12 @@ From a source checkout, the command is `node` with
 | `get_inventory` | Everything the scan read for one kind of resource, flagged or not |
 | `get_prices` | The unit prices used |
 | `get_cpu_history` | Live CloudWatch CPU figures for one instance |
+| `scan_cluster` | A scan of a Kubernetes cluster through `kubectl`: what was read and at what prices, the summary, and every finding. Takes an optional `context`, `namespace`, `prometheus` and `lookback_hours` |
+| `get_cluster_workloads` | Every workload the latest cluster scan read, flagged or not: replicas, and each container's requests, peak use, hours of history, and whether it was killed for running out of memory |
 
-Every tool is marked read-only, and they make the same AWS calls as the
-list above and nothing else. The server tells the client's model the same
+Every tool is marked read-only. The account tools make the same AWS calls
+as the list above and nothing else, and the cluster tools only run
+`kubectl get --raw`. Cluster costs use the OpenCost default prices here. The server tells the client's model the same
 ground rules `ask` uses: quote figures exactly, and present fix commands as
 proposals for a person. Two things differ from `ask`. The tool results (the
 findings and inventory of your account) go to whichever model your client
@@ -260,7 +263,8 @@ uses. And CloudPilot cannot check what that model then writes, so the
 output check does not apply.
 
 `--region`, `--profile`, `--redact-account` and `--replay <dir>` work here
-too. With `--replay` every result starts with the `REPLAY MODE` banner.
+too. With `--replay` every result starts with the `REPLAY MODE` banner, and
+the cluster tools are not offered: a recording holds an account only.
 
 ### Record and replay
 
@@ -394,8 +398,9 @@ new without touching the AWS baseline. Label or annotate a workload or volume
 `cloudpilot/ignore=true` to leave it out. `--namespace <name>` reads one
 namespace.
 
-Not yet for clusters: `ask`, the MCP server, `--explain`, record and replay,
-and the daily report.
+The MCP server has cluster tools too (`scan_cluster`, `get_cluster_workloads`:
+see above). Not yet for clusters: `ask`, `--explain`, record and replay, and
+the daily report.
 
 The rules are checked against a seeded cluster: see
 [`k8s-lab/`](../../k8s-lab).

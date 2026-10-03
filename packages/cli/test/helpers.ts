@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -59,3 +59,42 @@ export function recordingText(dir: string): string {
 }
 
 export const SECRET_MARKERS = ["AKIA", "ASIA", "x-amz-security-token", "Authorization", "sk-ant"];
+
+const KUBECTL_STAND_IN = `#!/usr/bin/env node
+// Serves the recorded lab. Anything but a GET of a known path, or reading the local config, is refused.
+// Output is left to drain by itself: exiting straight after a large write would cut it short.
+const fs = require("fs");
+const fixture = JSON.parse(fs.readFileSync(process.env.KUBE_FIXTURE, "utf8"));
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.KUBE_LOG, JSON.stringify(args) + "\\n");
+const rest = args[0] === "--context" ? args.slice(2) : args;
+if (rest.join(" ") === "config view --minify -o json") {
+  process.stdout.write(JSON.stringify({ contexts: [{ name: fixture.identity.context }], clusters: [{ cluster: { server: fixture.identity.server } }] }));
+} else if (rest.length === 3 && rest[0] === "get" && rest[1] === "--raw" && rest[2] in fixture.responses) {
+  process.stdout.write(JSON.stringify(fixture.responses[rest[2]]));
+} else if (rest.length === 3 && rest[0] === "get" && rest[1] === "--raw") {
+  process.stderr.write("Error from server (NotFound): " + rest[2]);
+  process.exitCode = 1;
+} else {
+  process.stderr.write("the scanner called something it should not: kubectl " + args.join(" "));
+  process.exitCode = 2;
+}
+`;
+
+/**
+ * A kubectl that serves a recorded cluster (see test/kube-lab/record-fixture.ts)
+ * and keeps a log of everything it was asked. Put `env` in the environment of
+ * the process under test.
+ */
+export function fakeKubectl(fixture: string) {
+  const dir = mkdtempSync(join(tmpdir(), "cloudpilot-kubectl-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "kubectl"), KUBECTL_STAND_IN);
+  chmodSync(join(bin, "kubectl"), 0o755);
+  const log = join(dir, "kubectl.log");
+  return {
+    env: { PATH: `${bin}:${dirname(process.execPath)}`, KUBE_FIXTURE: fixture, KUBE_LOG: log },
+    calls: (): string[][] => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)),
+  };
+}

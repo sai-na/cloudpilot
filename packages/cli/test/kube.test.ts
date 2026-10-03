@@ -5,7 +5,7 @@
  * answers without needing one.
  */
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -17,7 +17,7 @@ import { collectCluster, parseBytes, parseCpu, parsePrometheusRef, type ClusterI
 import { cpuQuantity, detectCluster, hours, memoryQuantity, OPENCOST_DEFAULTS } from "../src/kube-detect.js";
 import { renderHtml } from "../src/html.js";
 import { templatedSummary } from "../src/report.js";
-import { cli } from "./helpers.js";
+import { cli, fakeKubectl } from "./helpers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(here, "fixtures/kube-lab.json");
@@ -314,45 +314,13 @@ test("quantities are read and written the way Kubernetes writes them", () => {
 
 // The command itself, with kubectl replaced by a stand-in that serves the recorded lab.
 
-const KUBECTL_STAND_IN = `#!/usr/bin/env node
-// Serves the recorded lab. Anything but a GET of a known path, or reading the local config, is refused.
-// Output is left to drain by itself: exiting straight after a large write would cut it short.
-const fs = require("fs");
-const fixture = JSON.parse(fs.readFileSync(process.env.KUBE_FIXTURE, "utf8"));
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.KUBE_LOG, JSON.stringify(args) + "\\n");
-const rest = args[0] === "--context" ? args.slice(2) : args;
-if (rest.join(" ") === "config view --minify -o json") {
-  process.stdout.write(JSON.stringify({ contexts: [{ name: fixture.identity.context }], clusters: [{ cluster: { server: fixture.identity.server } }] }));
-} else if (rest.length === 3 && rest[0] === "get" && rest[1] === "--raw" && rest[2] in fixture.responses) {
-  process.stdout.write(JSON.stringify(fixture.responses[rest[2]]));
-} else if (rest.length === 3 && rest[0] === "get" && rest[1] === "--raw") {
-  process.stderr.write("Error from server (NotFound): " + rest[2]);
-  process.exitCode = 1;
-} else {
-  process.stderr.write("the scanner called something it should not: kubectl " + args.join(" "));
-  process.exitCode = 2;
-}
-`;
-
 function withKubectl() {
-  const dir = mkdtempSync(join(tmpdir(), "cloudpilot-kube-"));
-  const bin = join(dir, "bin");
-  mkdirSync(bin);
-  writeFileSync(join(bin, "kubectl"), KUBECTL_STAND_IN);
-  chmodSync(join(bin, "kubectl"), 0o755);
-  const log = join(dir, "kubectl.log");
-  const cwd = join(dir, "work");
-  mkdirSync(cwd);
+  const kubectl = fakeKubectl(FIXTURE);
+  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-kube-"));
   return {
     cwd,
-    calls: (): string[][] => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)),
-    run: (args: string[]) =>
-      cli(["kube", "--lookback-hours", "1", ...args], {
-        blockNetwork: true,
-        cwd,
-        env: { PATH: `${bin}:${dirname(process.execPath)}`, KUBE_FIXTURE: FIXTURE, KUBE_LOG: log },
-      }),
+    calls: kubectl.calls,
+    run: (args: string[]) => cli(["kube", "--lookback-hours", "1", ...args], { blockNetwork: true, cwd, env: kubectl.env }),
   };
 }
 
