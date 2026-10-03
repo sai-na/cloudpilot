@@ -12,14 +12,17 @@ const RESOURCE_ID = /\b(?:vol|snap|ami|i|eipalloc|eipassoc|eni|lt|sg|subnet|vpc)
 const DOLLARS = /\$\s?(\d[\d,]*(?:\.\d+)?)/g;
 
 /**
- * A Kubernetes object as kubectl names it: the whole lower-case kind, a slash
- * and the name, optionally with its namespace in front (shop/deployment/reports).
+ * A Kubernetes object as kubectl names it: the whole kind, a slash and the
+ * name, optionally with its namespace in front (shop/deployment/reports).
  * Only whole kinds count. Short forms (deploy, pvc, sts) are also everyday
  * words and file names, and every ID a scan prints uses the whole kind.
+ * Read whatever the case, because the data also names kinds as Kubernetes
+ * does (resourceType "Deployment", the workloads lookup's kind), and a name
+ * and a namespace are both DNS-1123, so one object has one lower-case form.
  * Not preceded by a word character, dot or hyphen, so neither a longer word
  * nor a name ending in one of these kinds (non-deployment/x) is read as one.
  */
-const OBJECT = /(?<![\w.-])(?:([a-z0-9](?:[-a-z0-9]*[a-z0-9])?)\/)?(deployment|statefulset|daemonset|persistentvolumeclaim|persistentvolume)\/([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)(?![\w/-])/g;
+const OBJECT = /(?<![\w.-])(?:([a-z0-9](?:[-a-z0-9]*[a-z0-9])?)\/)?(deployment|statefulset|daemonset|persistentvolumeclaim|persistentvolume)\/([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)(?![\w/-])/gi;
 /**
  * Address in a URL, which can look like an object (docs/deployment/rolling) and
  * is not one. Stopped at a quote or backslash as well as whitespace: the scan
@@ -64,8 +67,9 @@ interface ObjectMention {
 
 function objectsIn(text: string): ObjectMention[] {
   return [...text.replace(URL, " ").matchAll(OBJECT)]
-    .filter((m) => !KIND_WORDS.has(m[3]!))
-    .map((m) => ({ written: m[0], namespace: m[1], kind: m[2]!, id: `${m[2]}/${m[3]}` }));
+    .map((m) => ({ written: m[0], namespace: m[1]?.toLowerCase(), kind: m[2]!.toLowerCase(), name: m[3]!.toLowerCase() }))
+    .filter(({ name }) => !KIND_WORDS.has(name))
+    .map(({ written, namespace, kind, name }) => ({ written, namespace, kind, id: `${kind}/${name}` }));
 }
 
 /** Everything the model was given and may therefore repeat. */

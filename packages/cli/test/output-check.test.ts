@@ -123,6 +123,19 @@ test("an invented workload, volume or qualified name is rejected", () => {
   assert.deepEqual(bad("namespace/shop/deployment/ghost"), ["shop/deployment/ghost"]);
 });
 
+test("a kind written as Kubernetes writes it names the same object, and an invented one is still caught", () => {
+  // The data hands the model capitalised kinds (resourceType "Deployment", the workloads lookup), so it writes them back.
+  assert.deepEqual(unsupportedValues("Deployment/reports and shop/Deployment/checkout are over-requested.", fromFindings), []);
+  assert.deepEqual(unsupportedValues("PersistentVolume/archive-2025 is Released.", fromFindings), []);
+  const bad = (text: string) => unsupportedValues(text, fromFindings);
+  assert.deepEqual(bad("Deployment/ghost is over-requested."), ["Deployment/ghost"]);
+  assert.deepEqual(bad("shop/Deployment/ghost and DEPLOYMENT/phantom waste the most."), ["shop/Deployment/ghost", "DEPLOYMENT/phantom"]);
+  assert.deepEqual(bad("PersistentVolumeClaim/scratch is unused."), ["PersistentVolumeClaim/scratch"]);
+  // A kind after a kind is prose however it is written, and a volume still belongs to no namespace.
+  assert.deepEqual(bad("Each Deployment/StatefulSet pair is judged on its own."), []);
+  assert.deepEqual(bad("Look at shop/PersistentVolume/archive-2025."), ["shop/PersistentVolume/archive-2025"]);
+});
+
 test("a workload the scan read but did not flag may be named once the model was given the workloads", () => {
   assert.deepEqual(unsupportedValues("deployment/web is sized right.", fromFindings), ["deployment/web"]);
   assert.deepEqual(unsupportedValues("deployment/web is sized right, as is shop/deployment/importer.", fromLookups), []);
