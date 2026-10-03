@@ -188,8 +188,12 @@ test("the report carries the landing page's own typefaces inside the file", () =
   }
   assert.match(html, /font: 1\.0625rem\/1\.55 Archivo, system-ui/);
   assert.match(html, /--print: "Courier Prime", "Courier New", Courier/);
-  // The licence each face is used under ships with the package.
+  // The licence each face is used under ships with the package, byte for byte the
+  // text that sits beside the font files the generator copies both from.
+  const cli = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const pkg = JSON.parse(readFileSync(resolve(cli, "package.json"), "utf8")) as { files: string[] };
+  assert.ok(pkg.files.includes("licenses"), "the published tarball carries licenses/");
   for (const licence of ["OFL-Archivo.txt", "OFL-CourierPrime.txt"]) {
-    assert.match(readFileSync(resolve(fonts, "../../packages/cli/licenses", licence), "utf8"), /SIL OPEN FONT LICENSE/i);
+    assert.ok(readFileSync(resolve(cli, "licenses", licence)).equals(readFileSync(resolve(fonts, licence))), licence);
   }
 });
