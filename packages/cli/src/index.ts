@@ -99,11 +99,12 @@ function replaySession(dir: string, command: SessionMeta["command"], question: s
   let session = manifest.sessions.find((s) => s.id === sessionIdFor(command, question));
   if (!session && (command === "ask" || command === "kube-ask")) {
     const scan = manifest.sessions.find((s) => s.id === (command === "ask" ? "scan" : "kube"));
+    const recorded = manifest.sessions.filter((s) => s.command === command).map((s) => `  - ${s.question}`);
     if (liveLlm && scan) {
       // A new question: the scan comes from the recording, the model answers live.
       session = scan;
-    } else {
-      const recorded = manifest.sessions.filter((s) => s.command === command).map((s) => `  - ${s.question}`);
+    } else if (scan || recorded.length) {
+      // The recording is of this kind of run, so what is missing is the question itself.
       note(["This question was not recorded. Recorded questions:", ...(recorded.length ? recorded : ["  (none)"])].join("\n"));
       throw new Stop();
     }

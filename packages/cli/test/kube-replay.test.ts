@@ -136,6 +136,16 @@ test("a recording of an account is not a recording of a cluster, and the other w
   assert.equal(only.status, 1);
   assert.match(only.stderr, /holds no recorded scan\. Record one with --record first\./);
   assert.equal(only.stdout, "");
+
+  // A question put to the wrong kind of recording names what is missing: the recording, not the question.
+  const asked = cli(["ask", "--kube", "--replay", AWS_RECORDING, QUESTION], { blockNetwork: true, env: NO_KUBECTL });
+  assert.equal(asked.status, 1);
+  assert.match(asked.stderr, /holds no recorded cluster question\. Record one with --record first\./);
+  assert.doesNotMatch(asked.stderr, /This question was not recorded/);
+  const awsAsked = cli(["ask", "--replay", recorded, QUESTION], { blockNetwork: true });
+  assert.equal(awsAsked.status, 1);
+  assert.match(awsAsked.stderr, /holds no recorded ask\. Record one with --record first\./);
+  assert.doesNotMatch(awsAsked.stderr, /This question was not recorded/);
 });
 
 test("an account and a cluster share one recording directory, each session in a folder of its own", () => {
