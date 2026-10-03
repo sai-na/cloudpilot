@@ -137,8 +137,13 @@ function autopilotDraft(notice: Extract<Notice, { kind: "autopilot" }>, code: (s
       if (l.outcome === "held-back" || l.outcome === "refused") return `${what}. ${l.reason ?? ""}`;
       return `${what}. ${l.halfDone ? "It may be half done: check the resource. " : ""}Way back: ${l.wayBack}`;
     }),
-    outro: ["Every command and its result is in .cloudpilot/audit.jsonl on the machine that runs the watch: run cloudpilot audit to read it."],
-    more: (left) => `... and ${left} more not listed here: ${left === 1 ? "it is" : "they are"} in the audit log. Run cloudpilot audit.`,
+    outro: dryRun
+      ? ["A dry run writes nothing to the audit log. What it would have run is in this message and in the watch's own output, on the machine that runs the watch."]
+      : ["Every command and its result is in .cloudpilot/audit.jsonl on the machine that runs the watch: run cloudpilot audit to read it."],
+    more: (left) =>
+      dryRun
+        ? `... and ${left} more not listed here. A dry run writes nothing to the audit log: ${left === 1 ? "it is" : "they are"} in the watch's own output, on the machine that runs the watch.`
+        : `... and ${left} more not listed here: ${left === 1 ? "it is" : "they are"} in the audit log. Run cloudpilot audit.`,
   };
 }
 

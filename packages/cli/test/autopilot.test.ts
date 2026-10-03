@@ -18,7 +18,7 @@ import { AUTOPILOT_DEFAULTS, AUTOPILOT_QUALIFYING, AUTOPILOT_RULES, autopilotBan
 import { detect, gp3Command, lifecycleCommand } from "../src/detect.js";
 import { collectCluster, type KubeReader } from "../src/kube.js";
 import { detectCluster, OPENCOST_DEFAULTS } from "../src/kube-detect.js";
-import { plainText, parseTargets, type Notice } from "../src/notify.js";
+import { compose, plainText, parseTargets, type Notice } from "../src/notify.js";
 import { PATTERNS, type BucketInfo, type Finding, type Inventory, type ScanResult, type VolumeInfo } from "../src/types.js";
 import { watch, type WatchDeps } from "../src/watch.js";
 import { everyAwsFinding, everyRuleBook, everyRuleInventory, scan } from "./scans.js";
@@ -202,6 +202,10 @@ test("the banner says in plain words that it runs fixes, which rules, the gates 
   assert.match(text, /written to \.cloudpilot\/audit\.jsonl/);
   const dry = autopilotBanner(settings({ dryRun: true })).join("\n");
   assert.match(dry, /^AUTOPILOT IS ON, AS A DRY RUN: nothing will be run\./);
+  // A dry run writes no audit log, so the banner must not send anyone there.
+  assert.match(dry, /A dry run writes nothing to \.cloudpilot\/audit\.jsonl\. What it would run, and what it would hold back or refuse, is printed here each round/);
+  assert.doesNotMatch(dry, /is written to \.cloudpilot\/audit\.jsonl/);
+  assert.doesNotMatch(dry, /cloudpilot audit/);
 });
 
 // Gate 1: only the rules named
@@ -631,6 +635,56 @@ test("a dry run runs nothing and records nothing, says what would run, counts ag
   assert.deepEqual(p.ran, []);
   assert.match(plainText(notice), /^CloudPilot autopilot \(dry run\): 2 fixes would run, 2 held back, AWS account 123456789012\n/);
   assert.match(plainText(notice), /This is a dry run: nothing was run, and the lines below are what a real run would have run\./);
+});
+
+test("a dry run's message does not send the reader to an audit log it never wrote, whole or cut off", async () => {
+  const p = pilot({ dryRun: true, maxPerRound: 99 });
+  const many = account(Array.from({ length: 40 }, (_, n) => gp2(n + 1)));
+  const round = await p.round(many);
+  const notice = round.notice as Extract<Notice, { kind: "autopilot" }>;
+  assert.equal(notice.lines.length, 40);
+  assert.deepEqual(p.log, []);
+
+  const whole = plainText(notice);
+  assert.match(whole, /A dry run writes nothing to the audit log\. What it would have run is in this message and in the watch's own output, on the machine that runs the watch\./);
+  assert.doesNotMatch(whole, /cloudpilot audit|audit\.jsonl/);
+
+  // Cut to fit a Slack message: the line that says how many were left out is true of a dry run too.
+  const slack = JSON.parse(compose(notice, { kind: "slack" })).text as string;
+  assert.match(slack, /\.\.\. and \d+ more not listed here\. A dry run writes nothing to the audit log: they are in the watch's own output/);
+  assert.doesNotMatch(slack, /cloudpilot audit|audit\.jsonl/);
+
+  // A real run still points at the log it wrote.
+  const real = pilot({ maxPerRound: 99, maxTotal: 99 });
+  const ran = (await real.round(many)).notice as Extract<Notice, { kind: "autopilot" }>;
+  assert.match(plainText(ran), /Every command and its result is in \.cloudpilot\/audit\.jsonl/);
+  assert.match(JSON.parse(compose(ran, { kind: "slack" })).text, /not listed here: they are in the audit log\. Run cloudpilot audit\./);
+});
+
+test("when a dry-run round stops, the watch does not point at an audit log that a dry run never wrote", async () => {
+  for (const dryRun of [true, false]) {
+    const err: string[] = [];
+    const engine = { settings: settings({ dryRun }), round: async () => { throw new Error("the audit log went away"); }, forget: () => {} };
+    const deps: WatchDeps = {
+      scan: async () => ({ result: account([gp2(1)]) }),
+      baseline: { load: async () => undefined, save: async () => {} },
+      send: async () => {},
+      clock: () => new Date(NOW),
+      sleep: async () => {},
+      out: () => {},
+      err: (line) => err.push(line),
+      autopilot: engine,
+    };
+    await watch({ everyMs: 6 * 3_600_000, maxRuns: 1, targets: [], subject: "the AWS account" }, deps, new AbortController().signal);
+    const line = err.find((l) => l.includes("Autopilot stopped this round"))!;
+    assert.match(line, /the audit log went away/);
+    if (dryRun) {
+      assert.match(line, /A dry run records nothing/);
+      assert.doesNotMatch(line, /audit\.jsonl/);
+    } else {
+      assert.match(line, /What it did before that is in \.cloudpilot\/audit\.jsonl\./);
+    }
+  }
 });
 
 // Stopping

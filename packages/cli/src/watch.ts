@@ -195,7 +195,7 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
       if (done.notice) outbox.push({ notice: done.notice, done: new Set() });
     } catch (err) {
       pilotFailed = true;
-      deps.err(`${at}  Autopilot stopped this round: ${reasonOf(err)}. What it did before that is in .cloudpilot/audit.jsonl.`);
+      deps.err(`${at}  Autopilot stopped this round: ${reasonOf(err)}. ${pilot.settings.dryRun ? "A dry run records nothing: what it said before that is above." : "What it did before that is in .cloudpilot/audit.jsonl."}`);
     }
     await sendOutbox();
   };
@@ -296,6 +296,12 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
 
   const stopped = signal.aborted;
   if (stopped && undelivered) deps.err("Stopped with a message not yet delivered. Its findings are still new, so the next run reports them.");
-  if (stopped && outbox.length > 0) deps.err("Stopped with an autopilot message not yet delivered. What it changed is in .cloudpilot/audit.jsonl: run cloudpilot audit.");
+  if (stopped && outbox.length > 0) {
+    deps.err(
+      pilot?.settings.dryRun
+        ? "Stopped with an autopilot message not yet delivered. It was a dry run, which changed nothing and records nothing: what it would have run was printed above."
+        : "Stopped with an autopilot message not yet delivered. What it changed is in .cloudpilot/audit.jsonl: run cloudpilot audit.",
+    );
+  }
   return { rounds, exitCode: !stopped && (outage || undelivered || outbox.length > 0 || pilotFailed || uploadFailure !== undefined) ? 1 : 0, stopped };
 }

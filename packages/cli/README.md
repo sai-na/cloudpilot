@@ -859,7 +859,8 @@ never run by it, under any option.
 
 **Start with a dry run.** `--autopilot-dry-run` does everything except run the
 commands: each round it prints, and sends to `--notify`, what it would have
-run. Read those for a few days, then take the dry run off.
+run. It writes nothing to the audit log, so that output and the message are the
+only record of it. Read those for a few days, then take the dry run off.
 
 ```sh
 cloudpilot watch --every 6h --notify https://hooks.slack.com/services/... \
@@ -939,7 +940,9 @@ being on.
 it starts: which rules, the caps, and that a permanent fix is never run. Every
 fix it runs, holds back, refuses or fails is written to
 `.cloudpilot/audit.jsonl` with a field saying it was autopilot's and which
-gates it had passed, and `cloudpilot audit` shows it. With `--notify`, each
+gates it had passed, and `cloudpilot audit` shows it. A dry run writes nothing
+to the audit log: what it would have run, held back or refused is printed in
+the watch's own output each round, and sent with `--notify`. With `--notify`, each
 round that did any of that sends one message of its own: what was changed, with
 the way back for each, what was held back or not run and why, and, for a dry
 run, what would have run. The message about new findings says that autopilot's

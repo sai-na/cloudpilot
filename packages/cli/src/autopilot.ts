@@ -172,7 +172,9 @@ export function autopilotBanner(s: AutopilotSettings): string[] {
       : `AUTOPILOT IS ON. This watch will RUN fixes, not only read: for ${rules}, and only those. A scan itself still only reads.`,
     `  Only fixes that can be undone are run. A permanent fix is never run by autopilot, whatever else is set, and nor is the gentler alternative to a permanent fix.`,
     `  A finding is fixed only at confidence ${s.minConfidence} or more, after it has been in ${times(s.after, "round")} of this watch in a row, once per resource (never again, even after a failure), at most ${s.maxPerRound} a round and ${s.maxTotal} in all.`,
-    `  Every fix, and every one it holds back, refuses or fails, is written to .cloudpilot/audit.jsonl (see it with: cloudpilot audit) and, with --notify, sent with the way back. Ctrl+C lets a fix that has started finish.`,
+    s.dryRun
+      ? `  A dry run writes nothing to .cloudpilot/audit.jsonl. What it would run, and what it would hold back or refuse, is printed here each round and, with --notify, sent with the way back.`
+      : `  Every fix, and every one it holds back, refuses or fails, is written to .cloudpilot/audit.jsonl (see it with: cloudpilot audit) and, with --notify, sent with the way back. Ctrl+C lets a fix that has started finish.`,
   ];
 }
 
