@@ -46,6 +46,12 @@ npm run test:kube-lab      # the live tests
 The second command scores the scan: every item found, every cost within 1%,
 every fix command exact, and nothing reported that is not in the key.
 
+The live tests also check `apply` for real: one of them creates a namespace
+of its own (`cloudpilot-apply-test`), applies a resize to a throwaway
+deployment in it, puts the request back and removes the namespace again. The
+lab's own seeded workloads are left untouched, and the scan test asserts
+that.
+
 ```sh
 k8s-lab/down.sh --confirm  # deletes the cluster
 ```

@@ -26,7 +26,7 @@ prints a deprecation warning on Node 18; Node 20 or later is quieter.
 
 ### Every AWS API call it makes
 
-CloudPilot only reads. These are all the operations it calls, and a test
+A scan only reads. These are all the operations it calls, and a test
 fails the build if the code calls anything that is not on this list or that
 is not a `Describe`, `List` or `Get`.
 
@@ -205,7 +205,8 @@ What it will and will not do:
 
 Every fix it ran, was told not to run or refused to run is appended to
 `.cloudpilot/audit.jsonl`: who, when, which finding, each command with its
-exit code, and the way back. `cloudpilot audit` prints it.
+exit code, and the way back. `cloudpilot audit` prints it as a list to read,
+`cloudpilot audit --json` as the entries themselves.
 
 The MCP server has no tool that runs a fix, so an AI client cannot apply
 anything through it.
@@ -477,7 +478,7 @@ The rules are checked against a seeded cluster: see
 ```sh
 npm test            # unit tests and replay tests, no AWS or network needed
 npm run test:lab    # records and replays a scan of the live waste lab
-npm run test:kube-lab   # scans the Kubernetes lab (a kind cluster on this machine)
+npm run test:kube-lab   # the Kubernetes lab (a kind cluster on this machine): scans it, and applies one fix
 npm run typecheck
 ```
 
@@ -488,6 +489,8 @@ ground rules and tools, with `src/claude.ts` and `src/openai.ts` as providers.
 The cluster side is the same split: `src/kube.ts` holds every read through
 kubectl and Prometheus, `src/kube-detect.ts` the rules over it.
 `src/compare.ts` is a pure function from two scans to what changed.
+`src/apply.ts` is the only module that can change anything: it chooses the
+fix, asks, and runs the commands through `aws` or `kubectl`.
 
 ## Licence
 

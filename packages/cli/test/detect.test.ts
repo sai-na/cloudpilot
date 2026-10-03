@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { runnable } from "../src/apply.js";
 import { detect, mergeScans } from "../src/detect.js";
 import type { Inventory, PriceBook } from "../src/types.js";
 
@@ -224,6 +225,40 @@ test("an incomplete upload is more certain once its size is known", () => {
   assert.equal(byId["sized"]!.confidence, 0.9);
   assert.equal(byId["unsized"]!.confidence, 0.6);
   close(byId["sized"]!.monthlyCostUsd, (5 / 1024) * 0.025);
+});
+
+test("an object key or upload ID a shell would act on is quoted, and apply reads it back whole", () => {
+  // Keys and upload IDs come from the account, so they can hold anything S3 allows.
+  const awkward = [
+    { key: "exports/Q3 report (final).bin", uploadId: "2~AbCd.EfGh_IjKl" },
+    { key: "logs/it's-mine.bin", uploadId: "2~Xy$Z`w" },
+    { key: "tmp/*.bin", uploadId: "2~a;b&c|d" },
+  ];
+  const findings = detect(
+    inventory({
+      buckets: [
+        {
+          name: "b",
+          hasLifecycle: true,
+          objectCount: 0,
+          bytes: 0,
+          truncated: false,
+          multipartUploads: awkward.map((u) => ({ ...u, initiatedAt: "2026-09-01T00:00:00Z", bytes: 1024 ** 3 })),
+        },
+      ],
+    }),
+    prices,
+  );
+  assert.equal(findings.length, awkward.length);
+  for (const { key, uploadId } of awkward) {
+    const finding = findings.find((f) => f.resourceIds[0] === uploadId)!;
+    const command = finding.fix.commands[0]!;
+    // apply's own reader accepts the printed command and gets the key and ID back exactly.
+    const args = runnable(command);
+    assert.deepEqual(args.slice(0, 3), ["aws", "s3api", "abort-multipart-upload"]);
+    assert.equal(args[args.indexOf("--key") + 1], key, command);
+    assert.equal(args[args.indexOf("--upload-id") + 1], uploadId, command);
+  }
 });
 
 test("scans of several regions merge into one result, most expensive first, each finding keeping its region", () => {

@@ -58,7 +58,12 @@ export function tokenize(command: string): string[] {
   return args;
 }
 
-/** Every kind of command a CloudPilot rule prints as a fix. Nothing else is ever run. */
+/**
+ * Every kind of command a CloudPilot rule prints as a fix. Nothing else is
+ * ever run. The RDS commands and the EC2 stop/resize/start sequence are the
+ * fixes of a rule set held on another branch: listed here so this allow-list
+ * does not have to be found again when those rules land.
+ */
 const RUNNABLE = [
   "aws ec2 modify-volume",
   "aws ec2 delete-volume",
