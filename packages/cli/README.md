@@ -3,7 +3,9 @@
 A command-line agent that finds wasted AWS spend, prices it from the AWS Price
 List, and prints the exact commands that would fix it. A scan changes nothing.
 `apply` is the only command that can change anything, and only what you name
-and approve.
+and approve. `watch --autopilot` is the one other thing that can: it is off
+unless you turn it on, it acts only for the rules you name, and only for fixes
+that can be undone.
 
 ## Run in AWS CloudShell
 
@@ -431,6 +433,10 @@ produced by a model.
 | Bucket without lifecycle rule | 90% | The configuration is simply absent |
 | Incomplete multipart upload | 60%, 80% or 90% | 60% when part sizes are not visible, 80% when sized but under a day old (it may still be running), 90% when sized and older |
 
+The default bar for `watch --autopilot` is 0.9, and only the gp2 and lifecycle
+rows reach it among the rules autopilot can run. See
+[Let watch run the fixes that can be undone](#let-watch-run-the-fixes-that-can-be-undone-autopilot).
+
 ### Leaving a resource out
 
 Tag a resource `cloudpilot:ignore` = `true` and no finding is raised for it.
@@ -641,6 +647,10 @@ before the next one, so rounds never overlap.
   held last time is kept whenever this round did not read that region in full,
   whether a check there failed or the round never looked, so it is not
   reported as new when that region is read again.
+- **Fixes:** none, unless you turn on `--autopilot`, which runs the fixes that
+  can be undone for the rules you name and nothing else. It is off by default
+  and has a section of its own: [Let watch run the fixes that can be undone](#let-watch-run-the-fixes-that-can-be-undone-autopilot).
+  Without it, `watch` only reads, in every round, whatever its findings hold.
 - **Uploads:** with `--upload`, every round that completed is uploaded, with
   something new or not (see [Keep the history](#keep-the-history)). A failed
   upload is said once on stderr and not again while it keeps failing the same
@@ -649,7 +659,8 @@ before the next one, so rounds never overlap.
 - **Stopping:** Ctrl+C or SIGTERM ends it cleanly, between rounds or in the
   middle of one. `--max-runs <n>` ends it after `n` rounds. The exit status is
   1 if the last round failed, its message was not delivered or its upload
-  failed, and 0 otherwise, and always 0 when it was stopped by a signal.
+  failed, or an autopilot fix failed, and 0 otherwise, and always 0 when it was
+  stopped by a signal.
 - **How often:** `--every` takes a number and a unit (`30m`, `6h`, `1d`), and
   defaults to `6h`. It is refused below 15 minutes and above 7 days. A round
   reads every region (or asks Prometheus for days of history for every
@@ -662,11 +673,13 @@ before the next one, so rounds never overlap.
 `--price-file`, `--offline`, `--replay` and `--redact-account` for the account,
 and `--kube` with `--context`, `--cluster-name`, `--namespace`, `--prometheus`,
 `--lookback-hours`, `--cpu-hour-usd`, `--memory-gib-hour-usd` and
-`--storage-gib-month-usd` for the cluster. With `--kube` the kubectl context in force
+`--storage-gib-month-usd` for the cluster, and the `--autopilot` options described
+below. With `--kube` the kubectl context in force
 when it starts is the one read in every round. To have a cluster watch itself,
 from inside it, see [Read a cluster from inside it](#read-a-cluster-from-inside-it). It makes the same read-only calls as `scan` and `kube`;
 the only new outbound requests are the POSTs to your `--notify` URLs and, with
-`--upload`, to the one address you gave.
+`--upload`, to the one address you gave. With `--autopilot` it also starts your
+own `aws` to run a fix, as `apply` does.
 
 ### Keep the history
 
@@ -766,11 +779,13 @@ the request (`401`, `409`, `413`, `422`) is not retried.
 
 ### Run a fix you approved
 
-A scan never runs anything, and neither do `kube`, `watch`, `ask`,
-`anomalies`, `init`, `audit` or `mcp`: none of them changes anything in your
-AWS account or cluster. `apply` is the only command that can, and only what
-you name and approve. If you want CloudPilot to run a fix for you, name the
-resource:
+A scan never runs anything, and neither do `kube`, `ask`, `anomalies`,
+`init`, `audit` or `mcp`, or `watch` unless you turn on `--autopilot`: none of
+them changes anything in your AWS account or cluster. `apply` is the only
+command that can, and only what you name and approve; `watch --autopilot` is
+the one other thing that can, [described below](#let-watch-run-the-fixes-that-can-be-undone-autopilot),
+and only for the rules you name and the fixes that can be undone. If you want
+CloudPilot to run a fix for you now, name the resource:
 
 ```sh
 cloudpilot apply vol-0123456789abcdef0
@@ -829,6 +844,119 @@ be a kubectl context on the machine where you run `apply`; where it is not,
 
 The MCP server has no tool that runs a fix, so an AI client cannot apply
 anything through it.
+
+### Let watch run the fixes that can be undone (autopilot)
+
+`watch` only reads, unless you turn on `--autopilot`. With it, `watch` is the
+one thing besides `apply` that can change anything in your account. It is off
+unless you give the option, it acts only for the rules you name (there is no
+"all"), and only for fixes that can be undone. A fix that cannot be undone is
+never run by it, under any option.
+
+**Start with a dry run.** `--autopilot-dry-run` does everything except run the
+commands: each round it prints, and sends to `--notify`, what it would have
+run. Read those for a few days, then take the dry run off.
+
+```sh
+cloudpilot watch --every 6h --notify https://hooks.slack.com/services/... \
+  --autopilot gp2-volume,bucket-without-lifecycle --autopilot-dry-run
+```
+
+**Which rules can qualify today.** Two. Autopilot is told the rule's name, and
+runs that rule's own fix, word for word as the report prints it:
+
+| Rule | What autopilot runs | What can be undone, and what cannot |
+|---|---|---|
+| `gp2-volume` | `aws ec2 modify-volume ... --volume-type gp3` | The change is made online and can be reversed: "Online and reversible: the volume can be changed back to gp2 after AWS's 6-hour modification cooldown." AWS allows one modification of a volume every 6 hours, so the way back opens 6 hours after the change. Until then the volume stays gp3. gp3 comes with 3,000 IOPS and 125 MiB/s unless more is paid for, and a gp2 volume of more than about 1 TB has more IOPS than that, and one of more than about 330 GB can have more throughput: autopilot does not look at a volume's size or its I/O, so such a volume can be slower until it is changed back |
+| `bucket-without-lifecycle` | `aws s3api put-bucket-lifecycle-configuration`, one rule for the whole bucket: abort multipart uploads left unfinished for 7 days, and move objects to Standard-IA after 30 days | The rule can be removed: "Remove the rule again with: `aws s3api delete-bucket-lifecycle --bucket <name>`. Objects already moved to Standard-IA stay there." An unfinished upload the rule has aborted is not brought back, and Standard-IA can cost more than Standard for many small objects |
+
+Both are reported at 90% rule confidence, which is why the default bar is
+`0.9`. Putting a lifecycle configuration on a bucket replaces whatever the
+bucket has; the finding exists only where the scan saw none, moments earlier.
+
+Every other rule is refused when it is named, before anything runs, with the
+reason. Most print a fix that deletes, terminates, releases or deregisters,
+which is permanent. Two rules print a fix that is not marked permanent and are
+still left out: an oversized instance (the fix stops a running instance and
+starts it again, an outage that a failure part-way leaves half done) and an
+incomplete multipart upload (aborting discards the parts already uploaded for
+good), and so is an over-requested workload (it restarts the pods, and a
+cluster is never touched). A rule whose main fix is permanent but that has a
+gentler alternative, such as a volume nobody has attached, which could be
+converted to gp3 instead of deleted, is refused as well: autopilot never takes
+an alternative in place of the fix a finding proposes. `apply` still does that,
+when you ask.
+
+**The gates.** A finding is fixed only if it passes every one of these, in
+this order, in a round of the watch:
+
+1. Its rule is one you named with `--autopilot <rules>`, a comma-separated
+   list such as `gp2-volume,bucket-without-lifecycle`. A name that is not a
+   rule, `all`, or a rule that can never qualify, is an error before anything
+   runs.
+2. The fix can be undone: the finding's own risk is not "dangerous", no
+   command in it is of a kind `apply`'s allow-list calls permanent, and the
+   commands are exactly the ones the rule prints for that one resource. A scan
+   edited to call a delete safe, or to add a command, fails here.
+3. Its confidence is at least `--autopilot-min-confidence` (default `0.9`).
+4. It has been among the findings of at least `--autopilot-after` rounds of
+   this watch in a row (default `2`), so a blip in one scan never changes
+   anything. The count is kept in memory: a restart, or a round whose check
+   failed, starts it again.
+5. The scan is from this round, not older than the round's start, and read the
+   finding's region in full: if a check could not run there, or a warning does
+   not say where it was from, nothing in it is run.
+6. No fix has been run, or failed, on that resource from this directory
+   before. The audit log is read for this, so it holds across restarts and
+   counts a fix you ran with `apply` too. A fix that failed is not tried again
+   either: to retry it, use `apply`.
+7. The caps: at most `--autopilot-max` fixes in a round (default `3`, biggest
+   saving first) and `--autopilot-max-total` in this watch process (default
+   `10`). What is past a cap is held back, not run.
+
+It stops at the first failure in a round: the fix that failed is recorded
+with its output, and the fixes after it in that round are held back. A fix of
+several commands that fails after the first says it may be half done, as
+`apply` does. If the audit log cannot be read or cannot take a line, nothing
+is run. Ctrl+C lets a fix that has started finish and be recorded, and starts
+no other.
+
+**It refuses to start,** before reading anything, with `--replay` (a recording
+is not the account as it is now), with `--redact-account` (the record would not
+say where), with `--kube` (no rule that runs against a cluster can qualify),
+and anywhere inside a cluster, found the way `watch --kube` finds it, since
+the watcher that runs in a cluster is read-only by design. Its options
+without `--autopilot` are an error, so that none of them can be mistaken for it
+being on.
+
+**What you are told.** The watch says in plain words that autopilot is on when
+it starts: which rules, the caps, and that a permanent fix is never run. Every
+fix it runs, holds back, refuses or fails is written to
+`.cloudpilot/audit.jsonl` with a field saying it was autopilot's and which
+gates it had passed, and `cloudpilot audit` shows it. With `--notify`, each
+round that did any of that sends one message of its own: what was changed, with
+the way back for each, what was held back or not run and why, and, for a dry
+run, what would have run. The message about new findings says that autopilot's
+changes are in a message of their own, so nothing in it is untrue. A round with
+nothing to do sends nothing, and findings that are not yet eligible (below the
+confidence bar, or not yet in enough rounds) are only listed in that round's
+output.
+
+**What it does not guard against.**
+
+- It runs your `aws` with your credentials, as `apply` does, and a scan's
+  read-only role cannot change anything. Use `--profile <name>` for an identity
+  that may make these two changes. A fix the identity may not make fails, is
+  recorded as failed, and is not tried again.
+- Two watches started in the same directory at once could each start a fix
+  on the same resource. Run one.
+- A process killed after a command finished and before its line reached the
+  audit log could try that resource again after a restart. For these two
+  fixes the second try is harmless (AWS refuses a second change to a volume that
+  is still being modified, and putting the same lifecycle rule again changes
+  nothing), but it is a gap.
+- The 6-hour wait AWS puts on a volume is also a limit on how fast a change can
+  be taken back.
 
 ### Score it against the waste lab
 
@@ -1211,6 +1339,12 @@ say so: see [Watch it](#watch-it).
 | `--upload <url>` | `scan`, `kube` and `watch`: send each scan's full result as JSON to this https address, the hosted service's upload endpoint. The token is read only from `CLOUDPILOT_UPLOAD_TOKEN`, never from a flag. Not with `--replay`, `--redact-account` or `kube --answer-key`. See [Keep the history](#keep-the-history) |
 | `--every <interval>` | `watch` only: the wait between rounds, `15m` to `7d`. Default `6h` |
 | `--max-runs <n>` | `watch` only: stop after this many rounds. Default: until stopped |
+| `--autopilot <rules>` | `watch` only: run the fix for these rules, comma-separated, when a finding passes every gate and the fix can be undone. Off unless given; there is no `all`; a permanent fix is never run. Can qualify today: `gp2-volume`, `bucket-without-lifecycle`. See [Let watch run the fixes that can be undone](#let-watch-run-the-fixes-that-can-be-undone-autopilot) |
+| `--autopilot-dry-run` | `watch --autopilot` only: do everything but run the commands, and say, and send, what would have run. Start with this |
+| `--autopilot-min-confidence <n>` | `watch --autopilot` only: the lowest confidence a finding may have. Default 0.9 |
+| `--autopilot-after <n>` | `watch --autopilot` only: the rounds of this watch in a row a finding must be in. Default 2 |
+| `--autopilot-max <n>` | `watch --autopilot` only: the most fixes in one round. Default 3 |
+| `--autopilot-max-total <n>` | `watch --autopilot` only: the most fixes in one watch process. Default 10 |
 | `--kube` | `watch` and `ask`: work on the cluster kubectl points at instead of the AWS account. With `ask` it takes `--context`, `--namespace`, `--prometheus`, `--lookback-hours` (default 168, not 24) and the price options, and refuses `--region`, `--all-regions`, `--profile`, `--price-file`, `--offline` and `--redact-account` |
 | `--cluster-name <name>` | `kube`, `watch --kube`, `ask --kube` and `init`: inside a cluster with no kubeconfig, what to call it (or `CLOUDPILOT_CLUSTER_NAME`). Use the kubectl context name your team uses for it: the fix commands carry `--context <name>`. Ignored when kubectl has a context; not with `--context`. See [Read a cluster from inside it](#read-a-cluster-from-inside-it) |
 | `--days <n>` | `anomalies` only: complete days of cost to read, 8 to 90. Default 30. With `--replay`, the days recorded. AWS charges $0.01 for the one Cost Explorer request `anomalies` makes |
@@ -1723,7 +1857,9 @@ with the real AWS probes beside them.
 behind `watch`: it is handed the scan, the clock and the sender, so its tests
 run without waiting or a network.
 `src/apply.ts` is the only module that can change anything: it chooses the
-fix, asks, and runs the commands through `aws` or `kubectl`.
+fix, asks, and runs the commands through `aws` or `kubectl`. `src/autopilot.ts`
+is the list of reasons `watch --autopilot` has to refuse a fix before it hands
+one to `apply`'s machinery, and `src/audit.ts` is the log both write.
 
 ## Licence
 

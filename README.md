@@ -2,6 +2,10 @@
 
 A read-only command that finds the money your AWS account is wasting and
 prints the exact command that would fix each item. A scan changes nothing.
+`apply` is the only command that can change anything, and only what you name
+and approve; `watch --autopilot` is the one other thing that can, off unless
+you turn it on, only for the rules you name, and only for fixes that can be
+undone.
 
 ```sh
 npx @meruapps/cloudpilot
@@ -66,12 +70,20 @@ resource ID that is not in the scan.
 - **It only reads.** Every AWS call is listed in the CLI README, and a test
   fails if the code calls anything else.
 - **A scan never runs a fix.** It prints the commands for a person to review.
-  `kube`, `watch`, `ask`, `anomalies`, `init` and `mcp` change nothing in your
-  account or cluster either.
+  `kube`, `ask`, `anomalies`, `init` and `mcp` change nothing in your account
+  or cluster either, and neither does `watch` unless you turn on `--autopilot`.
 - **`apply` is the only command that can change anything, and only what you
   name and approve.** It shows the commands, asks, runs only the kinds of
   command the rules print, and keeps a record. A fix that cannot be undone is
   never run unattended.
+- **`watch --autopilot` is the one other thing that can, and it is off unless
+  you turn it on.** It runs a fix only for the rules you name, only if the fix
+  can be undone, and only after the finding has passed a list of gates (a
+  confidence bar, several rounds in a row, caps, never the same resource
+  twice). Today that is a gp2 volume changed to gp3 and a lifecycle rule added
+  to a bucket that has none. A permanent fix is never run by it, whatever else
+  you pass. Start with `--autopilot-dry-run`. See
+  [Let watch run the fixes that can be undone](packages/cli/README.md#let-watch-run-the-fixes-that-can-be-undone-autopilot).
 - **It runs in your account,** with your credentials, and sends no telemetry.
 - **It is open source,** so you can read what it checks.
 
@@ -106,7 +118,9 @@ says what is new, what was resolved and what is unchanged.
 - **Say it where the team looks.** `--notify <url>` sends what is new to a
   Slack, Discord or other webhook, and sends nothing on a run with nothing
   new; a check that could not run gets its own message. `cloudpilot watch`
-  repeats the scan on an interval and speaks up the same way.
+  repeats the scan on an interval and speaks up the same way. With
+  `--autopilot`, which is off unless given, it also runs the fixes that can be
+  undone for the rules you name.
 - **MCP server.** `cloudpilot mcp` lets Claude Code, Cursor and other MCP
   clients scan the account or a Kubernetes cluster and query the findings
   through read-only tools.

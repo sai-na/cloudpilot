@@ -2,7 +2,9 @@
  * `cloudpilot watch`: scan again and again, and speak up only when there is
  * something to decide. The loop knows nothing of AWS or kubectl: the scan, the
  * clock, the sleep and the sending are handed in, so every branch can be run
- * offline and instantly.
+ * offline and instantly. It only reads, unless autopilot is handed in (see
+ * autopilot.ts): then, after each round's scan, the fixes that pass its gates
+ * are run and told to --notify in a message of their own.
  *
  * The same reasoning as the daily report's email (deploy/daily-report.yaml):
  * what has been reported is only advanced once the message was delivered. A
@@ -10,6 +12,7 @@
  * instead of losing them. And silence has to mean "nothing new", so a check
  * that could not run is a message of its own.
  */
+import type { Autopilot } from "./autopilot.js";
 import { carryForward, compareScans, keyOf } from "./compare.js";
 import { deliver, freshFindings, subjectOf, type Notice, type Sender, type Target } from "./notify.js";
 import { money, renderText, templatedSummary } from "./report.js";
@@ -82,6 +85,8 @@ export interface WatchDeps {
   send: Sender;
   /** Uploads one round's scan, as the JSON text of what `scan --json` would print. Unset: nothing is uploaded. Resolves with what came of it; it must not throw. */
   upload?(body: string, signal: AbortSignal): Promise<Outcome>;
+  /** Unset: the watch only reads, whatever else is true. Set: after each round's scan, the fixes that pass its gates are run. */
+  autopilot?: Autopilot;
   clock(): Date;
   /** Resolves after `ms`, or as soon as the signal aborts. */
   sleep(ms: number, signal: AbortSignal): Promise<void>;
@@ -100,7 +105,7 @@ export interface WatchOptions {
 
 export interface WatchEnd {
   rounds: number;
-  /** 1 when the last round failed, or a message is still undelivered, or the last upload failed; 0 otherwise, and always 0 when stopped by the user. */
+  /** 1 when the last round failed, or a message is still undelivered, or the last upload failed, or an autopilot fix failed; 0 otherwise, and always 0 when stopped by the user. */
   exitCode: number;
   stopped: boolean;
 }
@@ -145,6 +150,10 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
   let uploadFailure: string | undefined;
   let saveWarned = false;
   let rounds = 0;
+  const pilot = deps.autopilot;
+  /** What autopilot did, as messages not yet delivered, and the targets that already have each. */
+  const outbox: Array<{ notice: Notice; done: Set<number> }> = [];
+  let pilotFailed = false;
 
   /** True once every target has the message. Failures are said on stderr and left to the next round. */
   const send = async (key: string, notice: Notice): Promise<boolean> => {
@@ -161,7 +170,38 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
     return true;
   };
 
+  /** Autopilot's messages, oldest first. A failure is said on stderr and left for the next round: what was changed is in the audit log either way. */
+  const sendOutbox = async () => {
+    while (outbox.length > 0 && options.targets.length > 0) {
+      const next = outbox[0]!;
+      const delivery = await abortable(deliver(options.targets, next.notice, deps.send, signal, next.done), signal);
+      next.done = delivery.done;
+      if (delivery.failures.length > 0) {
+        deps.err(`Could not send the autopilot message: ${delivery.failures.join("; ")}. It will be sent again next round.`);
+        return;
+      }
+      deps.out(`Sent to ${options.targets.map((t) => t.host).join(", ")}.`);
+      outbox.shift();
+    }
+    if (options.targets.length === 0) outbox.length = 0;
+  };
+
+  const autopilotRound = async (scanned: ScanResult, at: string) => {
+    if (!pilot) return;
+    try {
+      // Not abortable: a fix that has started is let finish and be recorded, however the watch is stopped.
+      const done = await pilot.round({ scan: scanned, startedAt: new Date(at), say: deps.out, signal });
+      if (done.failed) pilotFailed = true;
+      if (done.notice) outbox.push({ notice: done.notice, done: new Set() });
+    } catch (err) {
+      pilotFailed = true;
+      deps.err(`${at}  Autopilot stopped this round: ${reasonOf(err)}. What it did before that is in .cloudpilot/audit.jsonl.`);
+    }
+    await sendOutbox();
+  };
+
   const failedRound = async (err: unknown, at: string) => {
+    pilot?.forget();
     const reason = reasonOf(err);
     const key = sameFailure(reason);
     if (outage?.key !== key) {
@@ -173,7 +213,7 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
     undelivered = !outage.announced;
     if (!outage.announced) {
       const subject = baseline ? subjectOf(baseline) : options.subject;
-      outage.announced = await send(`failed:${key}`, { kind: "failed", subject, reason, at, watching: true });
+      outage.announced = await send(`failed:${key}`, { kind: "failed", subject, reason, at, watching: true, autopilot: pilot?.settings.rules });
       undelivered = !outage.announced;
     }
   };
@@ -209,11 +249,12 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
       deps.out(`${at}  Nothing new since ${since}: ${scanned.findings.length} finding${scanned.findings.length === 1 ? "" : "s"}, ${money(scanned.totalMonthlyWasteUsd)} a month.`);
     }
     await uploadRound(result, banner, at);
+    await autopilotRound(scanned, at);
 
     let notice: Notice | undefined;
     let key = "";
     if (fresh.length > 0) {
-      notice = { kind: "findings", result, first, banner, recoveredSince: heard };
+      notice = { kind: "findings", result, first, banner, recoveredSince: heard, autopilot: pilot?.settings.rules };
       key = `${first ? "first" : "new"}:${fresh.map(keyOf).sort().join("|")}:${heard ?? ""}`;
     } else if (heard) {
       notice = { kind: "recovered", subject: subjectOf(scanned), since: heard, at, banner };
@@ -255,5 +296,6 @@ export async function watch(options: WatchOptions, deps: WatchDeps, signal: Abor
 
   const stopped = signal.aborted;
   if (stopped && undelivered) deps.err("Stopped with a message not yet delivered. Its findings are still new, so the next run reports them.");
-  return { rounds, exitCode: !stopped && (outage || undelivered || uploadFailure !== undefined) ? 1 : 0, stopped };
+  if (stopped && outbox.length > 0) deps.err("Stopped with an autopilot message not yet delivered. What it changed is in .cloudpilot/audit.jsonl: run cloudpilot audit.");
+  return { rounds, exitCode: !stopped && (outage || undelivered || outbox.length > 0 || pilotFailed || uploadFailure !== undefined) ? 1 : 0, stopped };
 }

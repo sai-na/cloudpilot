@@ -1,10 +1,11 @@
 /** CloudPilot's promise is that it only reads. This test holds the code and the README to it. */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { cli } from "./helpers.js";
+import { cli, cliRun, fakeKubectl } from "./helpers.js";
+import { rig } from "./autopilot-rig.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = ["src/collect.ts", "src/pricing.ts", "src/preflight.ts"].map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
@@ -31,7 +32,7 @@ test("the README lists exactly the AWS operations the code calls", () => {
 });
 
 test("no other source file talks to AWS", () => {
-  for (const file of ["advisor", "anomaly", "apply", "assistant", "detect", "evaluate", "html", "index", "mcp", "notify", "output-check", "report", "watch"]) {
+  for (const file of ["advisor", "anomaly", "apply", "assistant", "audit", "autopilot", "detect", "evaluate", "html", "index", "mcp", "notify", "output-check", "report", "watch"]) {
     const text = readFileSync(resolve(root, `src/${file}.ts`), "utf8");
     assert.doesNotMatch(text, /@aws-sdk\/client-/, `${file}.ts imports an AWS client`);
   }
@@ -119,4 +120,37 @@ test("the landing page lists every call the README lists, and its count of kinds
   const rows = [...table.matchAll(/<tr><td>\w+<\/td><td>(\w+)<\/td>/g)].map((m) => m[1]!).sort();
   assert.deepEqual(rows, documented);
   assert.match(table, new RegExp(`makes: ${documented.length} kinds, none of which can change anything`));
+});
+
+/**
+ * The promise for watch: it only reads unless --autopilot is given. A watch
+ * with fixes waiting to be run, and stand-in aws and kubectl programs on the
+ * PATH that write down every start, starts none of them.
+ */
+test("watch without --autopilot starts no aws and no kubectl write, on an account with fixes it could run and on a cluster", async () => {
+  const account = await rig({ volumes: [{ id: "vol-0a1b2c3d4e5f60001", attachedTo: "i-0a1b2c3d4e5f60003" }], buckets: [{ name: "neglected" }] });
+  try {
+    const run = await account.run(account.watchArgs());
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, /gp2 volume can move to gp3/, "the fixes were there to be run");
+    assert.deepEqual(account.calls(), [], "no stand-in aws or kubectl was started");
+    assert.ok(account.requests.length > 5 && account.requests.every((q) => (q.action ? /^(Describe|Get)[A-Z]/.test(q.action) : q.method === "GET")), "and AWS was sent only reads");
+    assert.equal(existsSync(account.file("audit.jsonl")), false);
+    assert.match(run.stderr, /read-only\./);
+  } finally {
+    await account.close();
+  }
+
+  // The cluster: the stand-in kubectl is started to read, and only to read.
+  const kubectl = fakeKubectl(resolve(root, "test/fixtures/kube-lab.json"));
+  const run = await cliRun(["watch", "--kube", "--max-runs", "1", "--lookback-hours", "1"], { env: kubectl.env });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /requests more than it uses/, "the cluster has a fix it could run");
+  const calls = kubectl.calls();
+  assert.ok(calls.length > 3);
+  for (const call of calls) {
+    const rest = call[0] === "--context" ? call.slice(2) : call;
+    assert.ok((rest[0] === "get" && rest[1] === "--raw") || rest.join(" ") === "config view --minify -o json", `kubectl ${call.join(" ")}`);
+  }
+  assert.match(run.stderr, /read-only\./);
 });

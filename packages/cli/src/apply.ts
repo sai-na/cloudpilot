@@ -1,8 +1,9 @@
 /**
  * Running a fix the reader approved.
  *
- * This is the only part of CloudPilot that can change anything, so it is kept
- * apart from scanning in every way:
+ * This is the only part of CloudPilot that can change anything (the watch's
+ * autopilot, which is off unless asked for, uses it for the fixes it may run),
+ * so it is kept apart from scanning in every way:
  *
  * - It is its own command. A scan never runs anything.
  * - It runs only commands that a saved scan holds, and of those only the kinds
@@ -178,7 +179,8 @@ export function plan(scans: ScanResult[], names: string[], options: PlanOptions)
   });
 }
 
-export type Outcome = "applied" | "failed" | "declined" | "refused";
+/** "held-back" is only ever autopilot's: a fix that passed every gate and was left for a cap. */
+export type Outcome = "applied" | "failed" | "declined" | "refused" | "held-back";
 
 /** One line of the audit log: what was asked for and what happened. */
 export interface AuditEntry {
@@ -196,9 +198,11 @@ export interface AuditEntry {
   reason?: string;
   commands: Array<{ command: string; exitCode?: number; output?: string }>;
   wayBack: string;
+  /** Set when the watch's autopilot, not a person, asked for the fix: the gates the finding had passed when it was decided. */
+  autopilot?: { gates: string[] };
 }
 
-const OUTCOMES: Outcome[] = ["applied", "failed", "declined", "refused"];
+const OUTCOMES: Outcome[] = ["applied", "failed", "declined", "refused", "held-back"];
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
 /** True when a line of the audit log is an entry this version can read. */
@@ -224,7 +228,8 @@ export function isAuditEntry(value: unknown): value is AuditEntry {
       (v.reason === undefined || typeof v.reason === "string") &&
       Array.isArray(v.commands) &&
       v.commands.every((c) => c && typeof c.command === "string" && (c.exitCode === undefined || typeof c.exitCode === "number")) &&
-      typeof v.wayBack === "string",
+      typeof v.wayBack === "string" &&
+      (v.autopilot === undefined || (typeof v.autopilot === "object" && v.autopilot !== null && isStringList((v.autopilot as { gates?: unknown }).gates))),
   );
 }
 
@@ -260,6 +265,34 @@ export interface ApplyContext {
   record: (entry: AuditEntry) => Promise<void>;
   user: string;
   now: () => Date;
+  /** Set by autopilot: marks each entry as autopilot's, with the gates this plan passed. */
+  autopilot?: (plan: Plan) => AuditEntry["autopilot"];
+}
+
+/** One line of the audit log for a fix, from what was decided about it. Autopilot writes its own refusals and hold-backs with it too. */
+export function auditEntry(
+  p: Pick<Plan, "scan" | "finding" | "which" | "fix">,
+  who: { user: string; now: () => Date },
+  outcome: Outcome,
+  commands: AuditEntry["commands"],
+  reason?: string,
+  autopilot?: AuditEntry["autopilot"],
+): AuditEntry {
+  return {
+    at: who.now().toISOString(),
+    user: who.user,
+    scope: p.scan.cluster ? "cluster" : "account",
+    target: p.scan.accountId,
+    scannedAt: p.scan.scannedAt,
+    finding: { pattern: p.finding.pattern, region: p.finding.region, resourceIds: p.finding.resourceIds, title: p.finding.title, monthlyCostUsd: p.finding.monthlyCostUsd },
+    which: p.which,
+    risk: p.fix.risk,
+    outcome,
+    ...(reason ? { reason } : {}),
+    commands,
+    wayBack: p.fix.rollback,
+    ...(autopilot ? { autopilot } : {}),
+  };
 }
 
 const money = (n: number) => `$${n.toFixed(2)}`;
@@ -283,20 +316,7 @@ export async function apply(plans: Plan[], ctx: ApplyContext): Promise<Array<Out
       continue;
     }
 
-    const entry = (outcome: Outcome, commands: AuditEntry["commands"], reason?: string): AuditEntry => ({
-      at: ctx.now().toISOString(),
-      user: ctx.user,
-      scope: p.scan.cluster ? "cluster" : "account",
-      target: p.scan.accountId,
-      scannedAt: p.scan.scannedAt,
-      finding: { pattern: p.finding.pattern, region: p.finding.region, resourceIds: p.finding.resourceIds, title: p.finding.title, monthlyCostUsd: p.finding.monthlyCostUsd },
-      which: p.which,
-      risk: p.fix.risk,
-      outcome,
-      ...(reason ? { reason } : {}),
-      commands,
-      wayBack: p.fix.rollback,
-    });
+    const entry = (outcome: Outcome, commands: AuditEntry["commands"], reason?: string): AuditEntry => auditEntry(p, ctx, outcome, commands, reason, ctx.autopilot?.(p));
     const notRun = p.commands.map((c) => ({ command: c.text }));
     const skip = async (outcome: Outcome, reason: string) => {
       ctx.say(`  ${reason}`);
@@ -359,11 +379,13 @@ export function renderAudit(entries: AuditEntry[]): string {
   if (entries.length === 0) return "No fix has been run, declined or refused from this directory yet.";
   return entries
     .map((e) => {
-      const head = `${e.at}  ${e.outcome.toUpperCase().padEnd(8)}  ${e.finding.resourceIds.join(", ")}  (${e.scope} ${e.target}, ${e.finding.region})  by ${e.user}`;
+      const head = `${e.at}  ${e.outcome.toUpperCase().padEnd(8)}  ${e.finding.resourceIds.join(", ")}  (${e.scope} ${e.target}, ${e.finding.region})  by ${e.user}${e.autopilot ? " [autopilot]" : ""}`;
       const lines = [head, `    ${e.finding.title}${e.risk === "dangerous" ? "  [permanent]" : ""}`];
       if (e.reason) lines.push(`    ${e.reason}`);
+      if (e.autopilot) lines.push(`    Autopilot gates passed: ${e.autopilot.gates.length > 0 ? e.autopilot.gates.join("; ") : "none"}`);
       for (const c of e.commands) lines.push(`    ${c.exitCode === undefined ? "not run" : `exit ${c.exitCode}`.padEnd(7)}  ${c.command}`);
-      if (e.outcome === "applied") lines.push(`    Way back: ${e.wayBack}`);
+      // A failed fix may be half done, and the way back is where to start.
+      if (e.outcome === "applied" || e.outcome === "failed") lines.push(`    Way back: ${e.wayBack}`);
       return lines.join("\n");
     })
     .join("\n\n");

@@ -297,6 +297,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
     <div>
       <h3>It runs nothing unless you tell it to</h3>
       <p>A scan, a cluster scan, <code>watch</code>, <code>ask</code>, <code>anomalies</code>, <code>init</code> and the MCP server change nothing: they print each fix for you to review and say which ones are permanent. <code>apply</code> is the only command that can change anything, and only what you name and approve: it shows the commands, asks, and keeps a record. A fix that cannot be undone is never run unattended.</p>
+      <p>The one other thing that can change anything is <code>watch --autopilot</code>. It is off unless you turn it on, it acts only for the rules you name, and only for fixes that can be undone: today a gp2 volume changed to gp3 and a lifecycle rule added to a bucket that has none. A fix that cannot be undone is never run by it, under any option. Start with <code>--autopilot-dry-run</code>, which says what it would have run and runs nothing. Every change is recorded, and sent to your webhook with the way back.</p>
     </div>
     <div>
       <h3>It runs inside your own account</h3>

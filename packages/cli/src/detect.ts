@@ -164,6 +164,14 @@ const LIFECYCLE_RULE = {
   ],
 };
 
+/**
+ * The two fixes autopilot may run, built in one place: autopilot checks a
+ * finding's fix against these, word for word, before it runs it.
+ */
+export const gp3Command = (region: string, volumeId: string) => `aws ec2 modify-volume --volume-id ${volumeId} --volume-type gp3 --region ${region}`;
+export const lifecycleCommand = (region: string, bucket: string) =>
+  `aws s3api put-bucket-lifecycle-configuration --bucket ${bucket} --lifecycle-configuration '${JSON.stringify(LIFECYCLE_RULE)}' --region ${region}`;
+
 /** A unit price, which is often a fraction of a cent: $0.0912, not $0.09. */
 const usd = (n: number) => `$${Number(n.toFixed(4))}`;
 
@@ -186,7 +194,7 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
     if (v.ignored) continue;
     const unattached = v.state === "available" && v.attachedTo.length === 0;
     const toGp3 = {
-      commands: [cli(`ec2 modify-volume --volume-id ${v.id} --volume-type gp3`)],
+      commands: [gp3Command(inventory.region, v.id)],
       risk: "caution" as const,
       rollback: "Online and reversible: the volume can be changed back to gp2 after AWS's 6-hour modification cooldown.",
     };
@@ -541,9 +549,7 @@ export function detect(inventory: Inventory, prices: PriceBook, options: DetectO
         monthlyCostUsd: (b.bytes / GIB) * prices.s3StandardGbMonth,
         costBasis: `${b.truncated ? "at least " : ""}${b.bytes} bytes x ${usd(prices.s3StandardGbMonth)}/GB-month (S3 Standard)`,
         fix: {
-          commands: [
-            cli(`s3api put-bucket-lifecycle-configuration --bucket ${b.name} --lifecycle-configuration '${JSON.stringify(LIFECYCLE_RULE)}'`),
-          ],
+          commands: [lifecycleCommand(inventory.region, b.name)],
           risk: "caution",
           rollback: `Remove the rule again with: ${cli(`s3api delete-bucket-lifecycle --bucket ${b.name}`)}. Objects already moved to Standard-IA stay there.`,
         },
