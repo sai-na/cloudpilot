@@ -390,7 +390,7 @@ ${
     : ""
 }
 <section class="notes">
-<p>End of statement. CloudPilot is read-only: it printed these commands and ran none of them.</p>
+<p>End of statement. This scan was read-only: it printed these commands and ran none of them.</p>
 ${skipped ? `<p>${escape(skipped)}</p>` : ""}
 ${warnings}
 </section>

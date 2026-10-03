@@ -270,7 +270,8 @@ export type Pattern =
 
 /**
  * How much care a fix needs before anyone runs it.
- * CloudPilot never runs these itself; it only prints them.
+ * A scan never runs these; it only prints them. The apply command runs one
+ * only when a person names it and approves.
  */
 export type Risk = "caution" | "dangerous";
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CloudPilot: stop hunting for AWS waste by hand</title>
-<meta name="description" content="A read-only, open-source command that scans your AWS account, and your Kubernetes clusters, for wasted spend and prints the exact fix for each item. It changes nothing.">
+<meta name="description" content="A read-only, open-source command that scans your AWS account, and your Kubernetes clusters, for wasted spend and prints the exact fix for each item. A scan changes nothing.">
 <style>
 /* Two typefaces, served from this site's own files (both under the SIL Open
    Font License): Archivo for everything said, Courier Prime for everything
@@ -194,7 +194,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
       <code id="one-liner">npx @meruapps/cloudpilot</code>
       <button type="button" data-copy="one-liner">Copy</button>
     </div>
-    <p><strong>It changes nothing.</strong> Every call it makes is a read, and every fix is printed for you to run, never run for you. <a href="https://github.com/sai-na/cloudpilot" data-github>Read the source on GitHub</a>.</p>
+    <p><strong>A scan changes nothing.</strong> Every call it makes is a read, and every fix is printed for you to review. <a href="https://github.com/sai-na/cloudpilot" data-github>Read the source on GitHub</a>.</p>
     <p>Paste it into AWS CloudShell. It reads every region with the credentials CloudShell already has, then prints an itemised statement of what you are paying for and not using, with the exact command that would fix each line.</p>
     <p>Running Kubernetes as well? <code>cloudpilot kube</code> reads the cluster your <code>kubectl</code> points at and does the same there. <a href="#clusters">What it finds in a cluster</a>.</p>
   </div>
@@ -295,8 +295,8 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
       <p>Every AWS call it makes is a Describe, a List or a Get. A test in the repository fails if the code ever calls anything else. In a cluster, every read is a <code>kubectl get --raw</code>, which can only GET, and the repository ships the least-access role those reads need.</p>
     </div>
     <div>
-      <h3>It never runs a command</h3>
-      <p>It prints each fix for you to review and says which ones are permanent. Running them is your decision.</p>
+      <h3>It runs nothing unless you tell it to</h3>
+      <p>A scan prints each fix for you to review and says which ones are permanent. If you want CloudPilot to run one, you name it: it shows the commands, asks, and keeps a record. A fix that cannot be undone is never run unattended.</p>
     </div>
     <div>
       <h3>It runs inside your own account</h3>

@@ -1,8 +1,9 @@
 # CloudPilot
 
-A read-only command-line agent that finds wasted AWS spend, prices it from
-the AWS Price List, and prints the exact commands that would fix it. It never
-runs those commands.
+A command-line agent that finds wasted AWS spend, prices it from the AWS Price
+List, and prints the exact commands that would fix it. A scan changes nothing.
+`apply` is the only command that can change anything, and only what you name
+and approve.
 
 ## Run in AWS CloudShell
 
@@ -26,7 +27,7 @@ prints a deprecation warning on Node 18; Node 20 or later is quieter.
 
 ### Every AWS API call it makes
 
-CloudPilot only reads. These are all the operations it calls, and a test
+A scan only reads. These are all the operations it calls, and a test
 fails the build if the code calls anything that is not on this list or that
 is not a `Describe`, `List` or `Get`.
 
@@ -422,7 +423,7 @@ has a tick box; the saving of everything ticked and the script that would do
 it are always on screen and change as you tick. Fixes that can be undone
 start ticked, permanent ones never do, and a finding with two ways to fix it
 takes one of them at most. One button copies the script, which is commands
-and comments only: CloudPilot still runs nothing.
+and comments only: the report runs nothing.
 
 A resource ID is shortened where it is only a label: the finding line in the
 terminal, the `Resource` column of the Markdown table, the heading in HTML
@@ -722,6 +723,72 @@ the request (`401`, `409`, `413`, `422`) is not retried.
 - `kube --upload` with `--answer-key`: that run scores a lab and keeps no scan.
 - `--upload` with no `CLOUDPILOT_UPLOAD_TOKEN`, so a typo costs no scan.
 
+### Run a fix you approved
+
+A scan never runs anything, and neither do `kube`, `watch`, `ask`,
+`anomalies`, `init`, `audit` or `mcp`: none of them changes anything in your
+AWS account or cluster. `apply` is the only command that can, and only what
+you name and approve. If you want CloudPilot to run a fix for you, name the
+resource:
+
+```sh
+cloudpilot apply vol-0123456789abcdef0
+cloudpilot apply deployment/api
+```
+
+It finds the finding in the scans saved in this directory (the account's and
+each cluster's), shows the commands and the way back, and asks before it runs
+them. The commands go to your own `aws` or `kubectl`, with your own
+credentials; the read-only access a scan uses is not enough for them, and
+CloudPilot asks for no more than you already have. The read-only policy
+(`cloudpilot init --print-policy`) is not widened for it: to run a fix, use an
+identity that may make that change, such as `--profile <name>` for the `aws`
+commands.
+
+What it will and will not do:
+
+- **Fixes that can be undone come first.** Where a finding has a gentler
+  alternative (convert a volume instead of deleting it), that is what runs.
+- **A permanent fix needs asking for.** Pass `--allow-permanent`, and then
+  type the resource ID back at the prompt. It is never run unattended,
+  whatever else is passed.
+- **Only CloudPilot's own kinds of command.** It runs the commands a scan
+  printed, as a list of arguments and never through a shell, and only the
+  kinds the rules print: volume, address, snapshot and image changes, instance
+  terminate, resize (stop, wait, change the type, start) and delete, database
+  delete and stop, NAT gateway and load balancer delete, bucket lifecycle and
+  upload abort, and `kubectl` resource, claim and volume changes. A saved scan
+  that has been edited to hold anything else is refused, and so is one that
+  calls a command that cannot be undone undoable.
+- **Nothing stale.** A scan older than 24 hours (`--max-age-hours`) is
+  refused: scan again first.
+- **It stops at the first failure,** and leaves everything after it alone.
+  A fix that is several commands, such as resizing an instance (stop, wait,
+  change the type, start), may then be half done: it says so, and the way back
+  it showed is the place to start.
+- **`--yes`** runs fixes that can be undone without asking, for scripts.
+  Without it and without a terminal, nothing runs. **`--dry-run`** shows the
+  commands and stops.
+
+Every fix it ran, was told not to run or refused to run is appended to
+`.cloudpilot/audit.jsonl`: who, when, which finding, each command with its
+exit code, and the way back. `cloudpilot audit` prints it as a list to read,
+`cloudpilot audit --json` as the entries themselves.
+
+`apply` never sends anything anywhere: it has no `--notify`, `--upload`,
+`--replay` or `--record`, and a webhook or upload token in the environment is
+not used by it. It works from the scans a live run saved in this directory (a
+replay never saves one), or from the file you give with `--from`.
+
+A cluster scan is saved under the cluster's name (`.cloudpilot/last-kube-scan-<name>.json`),
+and `apply` runs its fixes with that name as `--context`, exactly as printed.
+For a cluster scanned from inside it with `--cluster-name`, that name has to
+be a kubectl context on the machine where you run `apply`; where it is not,
+`kubectl` refuses and nothing is changed.
+
+The MCP server has no tool that runs a fix, so an AI client cannot apply
+anything through it.
+
 ### Score it against the waste lab
 
 ```sh
@@ -921,6 +988,10 @@ docker build -t cloudpilot .
 docker run --rm cloudpilot scan --help
 ```
 
+The image is for scanning, and a scan changes nothing. It holds `kubectl` but
+not the `aws` command, and it is meant to be given read-only credentials, so
+run `apply` from your own machine rather than from the container.
+
 The image holds the built command, its production dependencies and `kubectl`
 v1.37.1, on Node 22 (Alpine), with CloudPilot's own licence at `/app/LICENSE`
 and the two font licence texts in `/app/licenses` beside them. It runs as a
@@ -1088,6 +1159,17 @@ say so: see [Watch it](#watch-it).
 | `--live-llm` | With `--replay`: AWS (or the cluster) from the recording, model called live |
 | `--redact-account` | Show the account ID as `123456789012`. Also for `anomalies`. Not with `--kube` |
 
+`apply` takes its own options:
+
+| Option | Meaning |
+|---|---|
+| `--from <file>` | Take the fixes from this scan result instead of the scans saved in this directory |
+| `--allow-permanent` | Choose the fix that cannot be undone; it still needs the resource ID typed back at a terminal |
+| `--yes` | Run fixes that can be undone without asking. Never applies to permanent fixes |
+| `--dry-run` | Show what would run and stop |
+| `--max-age-hours <n>` | Refuse a scan older than this (default 24) |
+| `--profile <name>` | AWS profile the `aws` commands run with |
+
 The last scan is saved to `.cloudpilot/last-scan.json`, except by `--replay`
 and `--redact-account` runs. With `--notify` it is saved once the message has
 been delivered, or when nothing needed sending. `watch` keeps its own.
@@ -1124,7 +1206,8 @@ itself (`kube-system`, `kube-public`, `kube-node-lease`).
 - **`kubectl`**, which also brings whatever sign-in your cluster uses. Every
   cluster read is `kubectl get --raw`, which can only GET; the only other call
   is `kubectl config view --minify`, to learn the current context. A test fails
-  if the code asks kubectl for anything else. Inside a cluster, with no
+  if a scan asks kubectl for anything else. Only `apply`, which you run
+  yourself, ever runs another kind of `kubectl` command. Inside a cluster, with no
   kubeconfig, `kubectl` reads as the pod's service account: see
   [Read a cluster from inside it](#read-a-cluster-from-inside-it).
 - **Prometheus with the kubelet's container metrics**
@@ -1163,6 +1246,11 @@ refused otherwise. It is used only when kubectl has no context: with a kubeconfi
 (or `--context`) nothing changes, and `--cluster-name` cannot be combined with
 `--context`. The lines `Reading cluster <name> from inside it, as this pod's service
 account (read-only)...` say which case a run was in.
+
+The pod's role cannot change anything, so a fix is never run from inside it. A
+scan saved there is only a file: to run one of its fixes, run `apply` on your
+own machine with your own credentials, giving the file with `--from`, where
+that name is a kubectl context (see [Run a fix you approved](#run-a-fix-you-approved)).
 
 To run the watch in a cluster as a Deployment, with the least access, see
 [`deploy/README.md`](../../deploy/README.md#watch-a-cluster-from-inside-it).
@@ -1393,7 +1481,7 @@ The rules are checked against a seeded cluster: see
 ```sh
 npm test            # unit tests and replay tests, no AWS or network needed
 npm run test:lab    # records and replays a scan of the live waste lab
-npm run test:kube-lab   # scans the Kubernetes lab (a kind cluster on this machine)
+npm run test:kube-lab   # the Kubernetes lab (a kind cluster on this machine): scans it, and applies one fix
 npm run typecheck
 npm run fonts       # rewrite src/fonts.ts after a file in site/fonts changes
 ```
@@ -1415,6 +1503,8 @@ with the real AWS probes beside them.
 `src/notify.ts` builds and sends the messages, and `src/watch.ts` is the loop
 behind `watch`: it is handed the scan, the clock and the sender, so its tests
 run without waiting or a network.
+`src/apply.ts` is the only module that can change anything: it chooses the
+fix, asks, and runs the commands through `aws` or `kubectl`.
 
 ## Licence
 

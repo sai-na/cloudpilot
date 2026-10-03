@@ -50,6 +50,12 @@ The live tests include ones that run CloudPilot in the lab as a pod. Those
 need the image on the lab's node as well, and without it they skip, naming the
 two commands that build and load it.
 
+The live tests also check `apply` for real: one of them creates a namespace
+of its own (`cloudpilot-apply-test`), applies a resize to a throwaway
+deployment in it, puts the request back and removes the namespace again. The
+lab's own seeded workloads are left untouched, and the scan test asserts
+that.
+
 ```sh
 k8s-lab/down.sh --confirm  # deletes the cluster
 ```
