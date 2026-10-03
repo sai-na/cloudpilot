@@ -414,7 +414,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
   <h2>Questions</h2>
   <div class="faq">
     <h3>Isn't this a one-time cleanup?</h3>
-    <p>The first scan usually finds the most. But waste comes back as a team ships: a volume gets detached, a test instance is left running, a snapshot outlives its volume. CloudPilot is one command, so you can run it again whenever you like, for example before each month's bill.</p>
+    <p>The first scan usually finds the most. But waste comes back as a team ships: a volume gets detached, a test instance is left running, a snapshot outlives its volume. CloudPilot is one command, so you can run it again whenever you like, for example before each month's bill. A repeat scan from the same directory compares with the last one and says what is new, what was resolved and what is unchanged, so you read what changed instead of the whole list again; <code>--only-new</code> prints just the new findings.</p>
 
     <h3>Do you see my data?</h3>
     <p>No. CloudPilot runs in your CloudShell or terminal and talks to AWS with your credentials. The results are printed there and nowhere else. It reads the size of your S3 objects but never their contents.</p>
