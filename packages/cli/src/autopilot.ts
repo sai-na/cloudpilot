@@ -322,6 +322,8 @@ export function createAutopilot(settings: AutopilotSettings, io: AutopilotIO): A
 
       const waiting: string[] = [];
       const ready: Array<{ f: Finding; p: Plan; gates: string[] }> = [];
+      /** Past a cap: said after the fixes that did run, so the record reads in the order things happened. */
+      const capped: Array<{ f: Finding; gates: string[]; reason: string }> = [];
       const totalLeft = Math.max(0, settings.maxTotal - total);
       const slots = Math.min(settings.maxPerRound, totalLeft);
       const roundCap = settings.maxPerRound;
@@ -398,7 +400,7 @@ export function createAutopilot(settings: AutopilotSettings, io: AutopilotIO): A
 
         if (ready.length >= slots) {
           const why = totalLeft <= roundCap ? `the cap of ${settings.maxTotal} fixes for this watch was reached` : `the cap of ${roundCap} fixes a round was reached`;
-          await leave(f, "held-back", gates, `Held back: ${why}.`);
+          capped.push({ f, gates, reason: `Held back: ${why}.` });
           continue;
         }
         gates.push(`within the caps (${ready.length + 1} of ${roundCap} this round, ${total + ready.length + 1} of ${settings.maxTotal} in all)`);
@@ -445,6 +447,8 @@ export function createAutopilot(settings: AutopilotSettings, io: AutopilotIO): A
         }
         if (outcomes[0] === "failed") failed = true;
       }
+
+      for (const { f, gates, reason } of capped) await leave(f, "held-back", gates, reason);
 
       const count = (outcome: AutopilotLine["outcome"]) => lines.filter((l) => l.outcome === outcome).length;
       const parts = settings.dryRun
