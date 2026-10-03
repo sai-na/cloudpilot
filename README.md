@@ -80,9 +80,10 @@ says what is new, what was resolved and what is unchanged.
 |---|---|
 | [`packages/cli`](packages/cli) | The CloudPilot command, published as `@meruapps/cloudpilot` |
 | [`docs/waste-lab.md`](docs/waste-lab.md) | The waste lab: a test AWS account seeded with nine kinds of waste, and the answer key CloudPilot is scored against |
-| `terraform/`, `scripts/`, `emulator/`, `lab-spec.json`, `pricing/` | The lab itself |
+| `terraform/`, most of `scripts/`, `emulator/`, `lab-spec.json`, `pricing/` | The lab itself |
 | [`k8s-lab/`](k8s-lab) | The Kubernetes waste lab: a local cluster with seeded waste and its answer key |
 | [`deploy/`](deploy) | The daily report: a CloudFormation template that runs the scan on a schedule in your own account and emails what is new |
+| [`Dockerfile`](Dockerfile), [`scripts/docker-smoke.sh`](scripts/docker-smoke.sh) | A Docker image of the command with `kubectl` included, to build yourself, and the offline test that checks it: see [Run it in Docker](packages/cli/README.md#run-it-in-docker) |
 | [`demo/`](demo) | Demo runbook and the record and replay scripts |
 | [`site/`](site) | The landing page |
 

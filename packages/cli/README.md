@@ -298,6 +298,129 @@ AWS_ENDPOINT_URL=http://localhost:5050 node dist/index.js scan --region ap-south
 
 `--price-file` on its own is a fallback: live prices are tried first.
 
+## Run it in Docker
+
+The repository has a `Dockerfile`. The image is not published anywhere, so
+build it yourself, from the repository root:
+
+```sh
+docker build -t cloudpilot .
+docker run --rm cloudpilot scan --help
+```
+
+The image holds the built command, its production dependencies and `kubectl`
+v1.37.1, on Node 22 (Alpine). It runs as a non-root user (uid 1000) and holds
+no credentials. It does not hold the AWS CLI. The `kubectl` download is
+checked in the build against a SHA-256 written in the `Dockerfile`. Building
+needs network and BuildKit (the default in current Docker), for `linux/amd64`
+or `linux/arm64`.
+
+The command is PID 1 in the container, where Node does not act on Ctrl-C or
+`docker stop` on its own. Add `--init` to stop a long scan straight away:
+
+```sh
+docker run --rm --init cloudpilot scan --profile cloudpilot-readonly
+```
+
+### Scan an AWS account
+
+Give the container credentials when you run it. From a shared profile on this
+machine, mounted read-only:
+
+```sh
+docker run --rm -v ~/.aws:/home/node/.aws:ro cloudpilot \
+  scan --profile cloudpilot-readonly --region ap-south-1
+```
+
+Or from environment variables. Naming a variable without a value passes it
+on from your shell, so the secret is not on the command line:
+
+```sh
+docker run --rm \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
+  cloudpilot scan
+```
+
+A profile that signs in through a program the image does not have (a
+`credential_process`, for one) cannot work inside it. Export short-lived
+credentials on the host and pass those instead:
+
+```sh
+eval "$(aws configure export-credentials --profile my-profile --format env)"
+docker run --rm \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
+  cloudpilot scan
+```
+
+The container user is uid 1000, so on Linux the mounted files must be
+readable by it, and a directory mounted at `/work` must be writable by it
+(`chown 1000 cloudpilot-out`, or run with `--user "$(id -u):$(id -g)"`).
+Otherwise the scan runs and then fails to write the report, and the
+baseline a repeat scan compares with is skipped quietly.
+
+Files the command writes (`--html`, `--out`, and `.cloudpilot/last-scan.json`,
+which a repeat scan compares with) land in `/work` inside the container and
+are gone when it exits. To keep them, mount a directory there:
+
+```sh
+mkdir -p cloudpilot-out
+docker run --rm -v ~/.aws:/home/node/.aws:ro -v "$PWD/cloudpilot-out:/work" cloudpilot \
+  scan --profile cloudpilot-readonly --html /work/report.html
+```
+
+### Scan a cluster
+
+`cloudpilot kube` reads through the `kubectl` in the image. Mount your
+kubeconfig read-only where `kubectl` looks for it:
+
+```sh
+docker run --rm -v ~/.kube/config:/home/node/.kube/config:ro cloudpilot \
+  kube --context my-cluster
+```
+
+Two things can stop this from working:
+
+- **The API server must be reachable from inside the container.** A
+  kubeconfig that points at `127.0.0.1` (kind, minikube, a port-forward)
+  points at the container itself.
+- **An exec plugin must exist in the image.** A kubeconfig made by
+  `aws eks update-kubeconfig` has `aws eks get-token` as its credentials, and
+  the image has no `aws`. The same goes for `gke-gcloud-auth-plugin`,
+  `kubelogin` and the like. `kubectl` cannot run the plugin, so the scan fails.
+
+What works instead is a kubeconfig that holds a token and calls no program.
+With the identity from [`docs/cloudpilot-kube-readonly.yaml`](../../docs/cloudpilot-kube-readonly.yaml)
+applied, make a one-hour token on the host, where your plugin works, and
+build a kubeconfig from it:
+
+```sh
+SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+kubectl config view --minify --raw \
+  -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > ca.crt
+TOKEN=$(kubectl create token cloudpilot -n cloudpilot --duration=1h)
+
+KC=cloudpilot.kubeconfig
+kubectl --kubeconfig "$KC" config set-cluster cloudpilot --server "$SERVER" \
+  --certificate-authority=ca.crt --embed-certs=true
+kubectl --kubeconfig "$KC" config set-credentials cloudpilot --token "$TOKEN"
+kubectl --kubeconfig "$KC" config set-context cloudpilot --cluster cloudpilot --user cloudpilot
+kubectl --kubeconfig "$KC" config use-context cloudpilot
+
+docker run --rm -v "$PWD/$KC:/home/node/.kube/config:ro" cloudpilot kube
+```
+
+The token stops working after an hour; delete `cloudpilot.kubeconfig` and
+`ca.crt` when you are done. Or skip the container: `npx @meruapps/cloudpilot
+kube` on the host uses your own `kubectl` and its plugins as they are.
+
+### Check the image
+
+`scripts/docker-smoke.sh` builds the image and replays the recorded scan in
+`test/fixtures/lab` inside a container with `--network none` and the recording
+mounted read-only. It checks that the replay exits 0 and reports the 10
+recorded findings, that the container is not root, and that `kubectl` is
+present. It needs Docker and is not part of `npm test`.
+
 ## Options
 
 These are the options for `scan`, `ask` and `eval`. `kube` adds its own, and
