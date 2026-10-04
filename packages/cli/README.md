@@ -466,8 +466,10 @@ fetched) with a print layout. Its two typefaces, Archivo and Courier Prime,
 are carried inside the file.
 
 The HTML report asks for one decision instead of one per command. Each fix
-has a tick box; the saving of everything ticked and the script that would do
-it are always on screen and change as you tick. Fixes that can be undone
+has a tick box (a finding CloudPilot prints no command for has none, which
+happens only in a cluster scan: see [Kubernetes](#kubernetes)); the saving of
+everything ticked and the script that would do it are always on screen and
+change as you tick. Fixes that can be undone
 start ticked, permanent ones never do, and a finding with two ways to fix it
 takes one of them at most. One button copies the script, which is commands
 and comments only: the report runs nothing.
@@ -1022,18 +1024,20 @@ or by `--provider`:
 | Provider | Needs | Default model for the summary | Default model for `ask` |
 |---|---|---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-opus-5-5` |
-| `openai` | `OPENAI_API_KEY` | the newest `-mini` GPT model the key can use | the newest full-size GPT model the key can use |
+| `openai` | `OPENAI_API_KEY` | the newest `-mini` GPT model the key can use, else the newest `-nano` one | the newest full-size GPT model the key can use |
 | `bedrock` | `--bedrock-profile <aws profile>` and `npm install @anthropic-ai/bedrock-sdk` | Claude Haiku 4.5 | Claude Haiku 4.5 |
 
 **The model is picked by the job.** The summary that `--explain` writes is a
 short formatting job over facts the scanner already worked out, so it gets a
 small, fast model. `ask` may look things up over several turns, so it gets a
 stronger one. For OpenAI the defaults are picked from the models the key can
-list: the summary takes the newest family that has a `-mini` model, `ask` the
-newest family that has a full-size one, and a key with no `-mini` model uses
-the same model for both. Bedrock has one default, Haiku 4.5, for both jobs,
-because it is the only Bedrock model CloudPilot names and Bedrock model IDs
-depend on your account and region: name a stronger one for `ask` yourself.
+list: the summary takes the newest family that has a `-mini` model, or failing
+that the newest with a `-nano` one; `ask` takes the newest family that has a
+full-size one, never a `-mini` or `-nano` model. A key that can use only one
+kind of model uses the same model for both. Bedrock has one default, Haiku 4.5,
+for both jobs, because it is the only Bedrock model CloudPilot names and Bedrock
+model IDs depend on your account and region: name a stronger one for `ask`
+yourself.
 
 To choose the model yourself, from first to last:
 
@@ -1436,6 +1440,23 @@ cannot. Deployments, StatefulSets and DaemonSets are judged; jobs and bare
 pods are not, and neither is anything in the namespaces the cluster runs for
 itself (`kube-system`, `kube-public`, `kube-node-lease`).
 
+**Names from the cluster are made safe before they are printed.** Every name a
+scan reads (a workload, pod, node, claim, volume, namespace or container, and
+the kind and name of an owner reference, which the API server only requires to
+be non-empty) is shown with every character outside the ones a name is made of
+(letters, digits, `.`, `_` and `-`) replaced by `?`, so no quote, backtick,
+markup or terminal control byte from a cluster is ever printed. The free text a
+cluster writes, such as a scheduler's message or a container's stop reason, has
+its control characters and the invisible marks that change the direction or the
+joining of what follows them removed, because that text reaches a terminal and
+the Markdown and HTML reports alike. An object whose name is not a valid
+Kubernetes name is still reported, with its cost and its evidence, but
+CloudPilot prints no command for it, because a command pasted with a name like
+that could act on something else: the finding's `fix.commands` is empty and its
+`rollback` says why, the terminal and Markdown reports say "no fix command" in
+place of the fix, the HTML report gives it no tick box and no line in the
+script, an advisory says the same in its advice, and `apply` refuses to run it.
+
 ### Also worth a look: advisories, which are not waste
 
 `kube` also reports a second kind of result, apart from the findings. An
@@ -1451,9 +1472,9 @@ nothing that adds up, compares, scores or announces findings can pick one up.
 | Rule | Raised when | Says | Command |
 |---|---|---|---|
 | `out-of-memory` | A container's last stop (`lastState`, or `state` for one that has stopped for good) was `OOMKilled`, in a pod that has not finished. One advisory per container of one workload | Which container, when, its memory limit, its restart count, and that the over-requested rule already leaves its memory request alone | Only where the limit is known and the pod belongs to a Deployment, StatefulSet or DaemonSet: `kubectl set resources ... --limits=memory=<limit plus 25%, rounded up to the next 16Mi>`, as a suggestion, with the old limit as the way back. The right figure depends on the workload, and the advisory says so |
-| `restarting` | A container is waiting in `CrashLoopBackOff`, **or** has restarted 5 or more times and, where the pod records when it last stopped, that was within 24 hours of the scan (where it does not, the count alone decides, and the evidence says so) | The restart count of the worst pod, its last state (reason, exit code, time) | None. It points at `kubectl logs <pod> -c <container> --previous` |
+| `restarting` | A container is waiting in `CrashLoopBackOff`, **or** has restarted 5 or more times and, where the pod records when it last stopped, that was within 24 hours of the scan (where it does not, or where the time it gives cannot be read, the count alone decides, and the evidence says which) | The restart count of the worst pod, its last state (reason, exit code, time). Where any pod of the group is in `CrashLoopBackOff` the worst is taken from those, so what is said is true of the pod named | None. It points at `kubectl logs <pod> -c <container> --previous` |
 | `no-requests` | A container of a Deployment, StatefulSet or DaemonSet sets no CPU request or no memory request (a request of zero counts as none) | Which containers lack which request, and that the scheduler cannot place the pods sensibly and CloudPilot cannot judge whether they ask for too much | None. No dollar figure |
-| `unschedulable` | A pod is `Pending` and its `PodScheduled` condition is `False` | The scheduler's own message, with control characters removed and cut to 240 characters, and how long it has waited | None |
+| `unschedulable` | A pod is `Pending` and its `PodScheduled` condition is `False` | The scheduler's own message, made safe to print (above) and cut to 240 characters, and how long it has waited | None |
 | `spare-node-capacity` | The requests of the pods on the nodes that run workloads would fit on fewer nodes of the same size, now or once the over-requested findings' suggested requests are applied | The arithmetic below | None: how a node is removed depends on the provider, so CloudPilot prints no command for it |
 
 Pods of one workload that show the same thing are one advisory, with the count.
@@ -1465,7 +1486,9 @@ namespace, object and container.
 `kubectl get --raw /api/v1/nodes` (see [What it needs](#what-it-needs)). A node
 that runs the control plane (a `node-role.kubernetes.io/control-plane` or
 `.../master` label), carries a `NoSchedule` or `NoExecute` taint, or is cordoned
-is named and left out. For the others:
+is named and left out. So is a node whose allocatable CPU or memory is missing,
+or is not a figure above zero, since it can hold nothing: those are named in
+`advisoryWarnings` instead. For the others:
 
 1. Sum the CPU and memory **requests** of every pod bound to them that has not
    finished, in every namespace, the cluster's own included. Compare with the
