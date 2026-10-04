@@ -416,6 +416,7 @@ footer p { border-top: 2px dashed var(--line); margin: 0; padding-block: 2rem 3.
       <p class="note">The claim was deleted and the volume was kept.</p>
     </li>
   </ol>
+  <p><strong>And a second kind of result, which is not waste.</strong> The same scan also lists things worth a look: containers killed for running out of memory or restarting repeatedly, workloads with no CPU or memory request, pods that cannot be scheduled, and whether the requests would fit on fewer nodes. They are never counted in the total, never compared with the last scan and never posted to a webhook; they sit in their own section after the findings, and <code>--no-advisories</code> leaves them out. The rules and what each one says are in the CLI README in the repository.</p>
   <p>Cluster costs use the OpenCost project's default unit prices unless you give your own, and every one of these findings says the same thing: lowering a request frees capacity, and the money is saved once that lets the cluster run fewer or smaller nodes. When Prometheus holds only a little history the finding says how much it had and its confidence drops, and a container with under five minutes is not judged at all. Not yet for clusters: the daily report below.</p>
 </section>
 
