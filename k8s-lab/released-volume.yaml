@@ -1,0 +1,27 @@
+# KW5, step one: a volume that keeps its data when its claim goes away, and the
+# claim that binds it. up.sh then deletes the claim, which leaves the volume
+# Released: still there, still paid for, usable by nobody.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: archive-2025
+  labels: { cloudpilot-lab: kw5 }
+spec:
+  capacity: { storage: 10Gi }
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /tmp/cloudpilot-lab-archive-2025
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: archive-2025
+  namespace: shop
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: manual
+  volumeName: archive-2025
+  resources:
+    requests: { storage: 10Gi }

@@ -57,3 +57,30 @@ To ask a new question against the recorded account with a live model:
 ```sh
 node packages/cli/dist/index.js ask --replay recordings/demo --live-llm "Which finding is riskiest to fix?"
 ```
+
+## The capture in the README
+
+`docs/demo.gif` is made from recordings, with no network:
+
+```sh
+(cd packages/cli && npm run build)
+python3 demo/capture.py     # writes docs/demo.cast and docs/demo.gif
+```
+
+It runs three commands against recordings in this repository (the AWS lab
+fixture in `packages/cli/test/fixtures/lab`, and the Kubernetes lab in
+`demo/cluster-lab`) and shows what they print. Only the timing is scripted:
+the typing and the pauses. It is a rendering of replayed output, not a live
+screen recording, and every scene shows the `REPLAY MODE` line. Making the GIF
+needs [`agg`](https://github.com/asciinema/agg); without it only the cast is
+written.
+
+`(cd packages/cli && npm test)` fails when the capture no longer matches what
+the commands print, when a scene no longer fits the screen the GIF is rendered
+at, or when the Kubernetes recording stops replaying. Then run the script
+again; after a change to how the cluster is read, record the lab again first:
+
+```sh
+node packages/cli/dist/index.js kube --context kind-cloudpilot-lab --lookback-hours 1 --no-compare --record demo/cluster-lab
+```
+

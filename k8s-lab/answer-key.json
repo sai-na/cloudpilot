@@ -1,0 +1,51 @@
+{
+  "description": "What a scan of the Kubernetes waste lab must find, with the default (OpenCost) prices and 730 hours to the month. It follows from workloads.yaml: every seeded container is idle, so each suggestion is the floor (10m CPU, 32Mi memory).",
+  "context": "kind-cloudpilot-lab",
+  "patterns": [
+    {
+      "id": "KW1",
+      "waste_pattern": "over-requested-workload",
+      "note": "checkout: 2 replicas x (500m - 10m) x $0.031611 x 730. Its memory is sized right and must not appear in the fix.",
+      "resource_ids": ["deployment/checkout"],
+      "fix_commands": ["kubectl set resources deployment/checkout -n shop --context kind-cloudpilot-lab -c api --requests=cpu=10m"],
+      "estimated_monthly_cost_usd": 22.61
+    },
+    {
+      "id": "KW2",
+      "waste_pattern": "over-requested-workload",
+      "note": "search: 1 replica x (1024Mi - 32Mi) x $0.004237 per GiB-hour x 730. Its 20m CPU request is too small to be worth changing.",
+      "resource_ids": ["deployment/search"],
+      "fix_commands": ["kubectl set resources deployment/search -n shop --context kind-cloudpilot-lab -c indexer --requests=memory=32Mi"],
+      "estimated_monthly_cost_usd": 3.0
+    },
+    {
+      "id": "KW3",
+      "waste_pattern": "over-requested-workload",
+      "note": "reports: 3 replicas x ((300m - 10m) x $0.031611 + (512Mi - 32Mi) x $0.004237 per GiB-hour) x 730.",
+      "resource_ids": ["deployment/reports"],
+      "fix_commands": ["kubectl set resources deployment/reports -n shop --context kind-cloudpilot-lab -c worker --requests=cpu=10m,memory=32Mi"],
+      "estimated_monthly_cost_usd": 24.43
+    },
+    {
+      "id": "KW4",
+      "waste_pattern": "unused-volume-claim",
+      "note": "old-exports: 5 GiB x $0.04. The only pod that ever mounted it is a job that finished.",
+      "resource_ids": ["persistentvolumeclaim/old-exports"],
+      "fix_commands": ["kubectl delete persistentvolumeclaim old-exports -n shop --context kind-cloudpilot-lab"],
+      "estimated_monthly_cost_usd": 0.2
+    },
+    {
+      "id": "KW5",
+      "waste_pattern": "released-volume",
+      "note": "archive-2025: 10 GiB x $0.04.",
+      "resource_ids": ["persistentvolume/archive-2025"],
+      "fix_commands": ["kubectl delete persistentvolume archive-2025 --context kind-cloudpilot-lab"],
+      "estimated_monthly_cost_usd": 0.4
+    }
+  ],
+  "must_not_be_reported": [
+    { "id": "KC1", "resource": "deployment/web", "why": "It uses the CPU and memory it requests." },
+    { "id": "KC2", "resource": "deployment/importer", "why": "It was killed for running out of memory, so its memory request must not be lowered, whatever the usage graph shows." },
+    { "id": "lab tooling", "resource": "deployment/prometheus", "why": "Labelled cloudpilot/ignore=true." }
+  ]
+}

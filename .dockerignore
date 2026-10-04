@@ -1,0 +1,9 @@
+# Send the build only what the Dockerfile copies. Everything else, including
+# .env files, recordings and the lab's answer key, stays out of the context.
+*
+!packages/cli/package.json
+!packages/cli/package-lock.json
+!packages/cli/tsconfig.json
+!packages/cli/LICENSE
+!packages/cli/licenses
+!packages/cli/src

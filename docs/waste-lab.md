@@ -23,6 +23,16 @@ names your AWS account and its resources.
 | W8 | S3 bucket with three small objects | No lifecycle rule | Terraform |
 | W9 | Incomplete multipart upload in the W8 bucket | Abandoned multipart upload | `scripts/seed.sh` |
 
+The lab plants no RDS instance, no oversized instance, no NAT gateway and no
+load balancer, so the idle RDS, oversized instance, idle NAT gateway and idle
+load balancer rules are not scored by it. Their tests use hand-built
+inventories. The NAT gateway and load balancer rules have also run against a
+local Moto emulator with synthetic metrics, and the recorded lab scan holds
+their reads as empty lists, but neither rule has been scored against a live
+seeded lab: that needs a NAT gateway (about $0.056 an hour in `ap-south-1`,
+plus its Elastic IP) and a load balancer (about $0.024 an hour) planted on
+purpose.
+
 Plus a $15 monthly budget with alerts at 50% and 100% of actual spend, and
 the `cloudpilot-readonly` IAM role. Every resource is tagged
 `Project=cloudpilot-waste-lab` and `WastePattern=<W id>` (`none` for the
@@ -60,7 +70,14 @@ before the instance looks idle, so launch the lab the evening before a demo.
 
 ## Read-only role for CloudPilot
 
-The policy is in `docs/cloudpilot-readonly-policy.json`. Add this to
+The policy is in `docs/cloudpilot-readonly-policy.json`, and Terraform attaches
+that file as it stands, so a lab built before the policy changed needs
+`scripts/tf.sh apply` again to pick the change up: the idle RDS rule added
+`rds:DescribeDBInstances` to it, and the idle load balancer rule and `--bill`
+added five `elasticloadbalancing:Describe...` reads and
+`ce:GetCostAndUsage`. Until then a scan with the role reports each of those
+calls as a skipped check (the bill as a one-line note) and still finds
+everything else. Add this to
 `~/.aws/config`; the role has no long-lived keys of its own:
 
 ```ini

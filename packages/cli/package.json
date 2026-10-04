@@ -1,7 +1,7 @@
 {
   "name": "@meruapps/cloudpilot",
   "version": "0.1.0",
-  "description": "Read-only agent that finds wasted AWS spend and prints the commands that would fix it.",
+  "description": "Finds wasted AWS spend and prints the commands that would fix it. A scan is read-only; apply runs a fix only when you name and approve it.",
   "keywords": [
     "aws",
     "cost",
@@ -26,7 +26,8 @@
     "cloudpilot": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "licenses"
   ],
   "engines": {
     "node": ">=18"
@@ -37,16 +38,21 @@
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
+    "fonts": "node scripts/embed-fonts.mjs",
     "test": "tsx --test test/*.test.ts",
     "test:lab": "tsx --test test/lab/*.test.ts",
+    "test:kube-lab": "tsx --test test/kube-lab/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
     "@aws-sdk/client-cloudwatch": "3.929.0",
+    "@aws-sdk/client-cost-explorer": "3.929.0",
     "@aws-sdk/client-ec2": "3.929.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "3.929.0",
     "@aws-sdk/client-pricing": "3.929.0",
+    "@aws-sdk/client-rds": "3.929.0",
     "@aws-sdk/client-s3": "3.929.0",
     "@aws-sdk/client-sts": "3.929.0",
     "@aws-sdk/credential-providers": "3.929.0",
@@ -66,8 +72,11 @@
   "devDependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.34.2",
     "@modelcontextprotocol/sdk": "^1.32.0",
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^26.6.4",
+    "jsdom": "^25.0.1",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "yaml": "^2.9.1"
   }
 }

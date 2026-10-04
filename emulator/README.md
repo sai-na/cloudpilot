@@ -11,6 +11,13 @@ For use only if the venue network fails. It runs the lab against a local
 - **Idle CPU data is synthetic.** Emulated instances do not run, so there is
   no real `CPUUtilization`. `emulator/inject-idle-metrics.sh` writes made-up
   datapoints for the W5 instance and says so in its output.
+- **NAT gateway and load balancer rules are not in the lab.** The lab plants
+  none, and the offline price file has no NAT gateway or load balancer prices,
+  so an emulator scan with `--offline` reports neither rule. They were run
+  against Moto by calling `collect` and `detect` with a price book written by
+  hand and synthetic CloudWatch points (the emulator's quirks included: it
+  names a Network Load Balancer `app/...` and answers `DescribeTargetGroups`
+  for a balancer with none with an error).
 - **There is no budget.** Terraform skips it when `use_emulator = true`.
 - **Nothing costs anything**, and prices still come from the real price table
   in `pricing/ap-south-1.json`, fetched earlier from AWS.

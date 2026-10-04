@@ -1,4 +1,5 @@
 import { CloudWatchClient, GetMetricDataCommand } from "@aws-sdk/client-cloudwatch";
+import { CostExplorerClient, GetCostAndUsageCommand, type GetCostAndUsageCommandInput, type GetCostAndUsageCommandOutput } from "@aws-sdk/client-cost-explorer";
 import {
   DescribeAddressesCommand,
   DescribeImagesCommand,
@@ -7,6 +8,7 @@ import {
   EC2Client,
   paginateDescribeInstances,
   paginateDescribeLaunchTemplates,
+  paginateDescribeNatGateways,
   paginateDescribeSnapshots,
   paginateDescribeVolumes,
   type Tag,
@@ -22,16 +24,32 @@ import {
   S3Client,
   type Bucket,
 } from "@aws-sdk/client-s3";
+import {
+  DescribeLoadBalancerAttributesCommand,
+  DescribeTagsCommand,
+  DescribeTargetGroupsCommand,
+  DescribeTargetHealthCommand,
+  ElasticLoadBalancingV2Client,
+  paginateDescribeLoadBalancers,
+} from "@aws-sdk/client-elastic-load-balancing-v2";
+import { paginateDescribeDBInstances, RDSClient } from "@aws-sdk/client-rds";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import { fromIni } from "@aws-sdk/credential-providers";
+import { mergeDays, type DayCost } from "./anomaly.js";
 import { now } from "./clock.js";
 import { awsRequestHandler, labelClient, mode, ReplayMissError } from "./recording.js";
 import type {
+  Bill,
   BucketInfo,
+  ConnectionStats,
   CpuStats,
   InstanceInfo,
   Inventory,
+  LoadBalancerInfo,
   MultipartUploadInfo,
+  NatGatewayInfo,
+  RdsInstanceInfo,
+  TrafficStats,
 } from "./types.js";
 
 export interface AwsOptions {
@@ -43,6 +61,29 @@ export interface AwsOptions {
 
 /** Objects listed per bucket before the size is reported as a lower bound. */
 const MAX_OBJECT_PAGES = 10;
+
+/** Load balancers whose targets are read at the same time, to stay inside the API's rate limits. */
+const LOAD_BALANCERS_AT_ONCE = 5;
+
+/** Resources whose CloudWatch metrics are read at the same time, to stay inside the GetMetricData request rate. */
+const METRICS_AT_ONCE = 10;
+
+/** DescribeTags takes at most this many ARNs in one request. */
+const TAGS_PER_REQUEST = 20;
+
+/** Run a task per item, a few at a time, keeping the results in the order of the items. */
+export async function mapLimit<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await run(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 export function clientConfig(opts: { region: string; profile?: string }) {
   // AWS_ENDPOINT_URL (the Moto emulator) is honoured by the SDK itself.
@@ -100,10 +141,12 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
   const config = clientConfig(opts);
   const ec2 = labelClient(new EC2Client(config), "EC2");
   const s3 = labelClient(new S3Client(config), "S3");
+  const rds = labelClient(new RDSClient(config), "RDS");
+  const elb = labelClient(new ElasticLoadBalancingV2Client(config), "ELBv2");
   const cloudwatch = labelClient(new CloudWatchClient(config), "CloudWatch");
   const warnings: string[] = [];
 
-  const [volumes, snapshots, images, instances, addresses, launchTemplateImageIds, buckets] = await Promise.all([
+  const [volumes, snapshots, images, instances, rdsInstances, addresses, natGateways, loadBalancers, launchTemplateImageIds, buckets] = await Promise.all([
     attempt("ec2:DescribeVolumes", warnings, [], async () => {
       const out: Inventory["volumes"] = [];
       for await (const page of paginateDescribeVolumes({ client: ec2 }, {})) {
@@ -171,9 +214,35 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
               platform: i.PlatformDetails ?? "Linux/UNIX",
               volumeIds: (i.BlockDeviceMappings ?? []).map((m) => m.Ebs?.VolumeId!).filter(Boolean),
               name: nameTag(i.Tags),
+              rootDeviceType: i.RootDeviceType,
+              lifecycle: i.InstanceLifecycle,
+              tenancy: i.Placement?.Tenancy,
               ignored: ignoredByTag(i.Tags),
             });
           }
+        }
+      }
+      return out;
+    }),
+    attempt("rds:DescribeDBInstances", warnings, [], async () => {
+      const out: RdsInstanceInfo[] = [];
+      for await (const page of paginateDescribeDBInstances({ client: rds }, {})) {
+        for (const d of page.DBInstances ?? []) {
+          out.push({
+            id: d.DBInstanceIdentifier!,
+            instanceClass: d.DBInstanceClass ?? "unknown",
+            engine: d.Engine ?? "unknown",
+            status: d.DBInstanceStatus ?? "unknown",
+            allocatedGb: d.AllocatedStorage ?? 0,
+            storageType: d.StorageType ?? "unknown",
+            multiAz: d.MultiAZ ?? false,
+            createdAt: d.InstanceCreateTime?.toISOString(),
+            clusterId: d.DBClusterIdentifier,
+            replicaOf: d.ReadReplicaSourceDBInstanceIdentifier ?? d.ReadReplicaSourceDBClusterIdentifier,
+            replicaIds: d.ReadReplicaDBInstanceIdentifiers ?? [],
+            deletionProtection: d.DeletionProtection ?? false,
+            ignored: ignoredByTag(d.TagList),
+          });
         }
       }
       return out;
@@ -189,6 +258,30 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
         ignored: ignoredByTag(a.Tags),
       }));
     }),
+    attempt("ec2:DescribeNatGateways", warnings, [], async () => {
+      const out: NatGatewayInfo[] = [];
+      for await (const page of paginateDescribeNatGateways({ client: ec2 }, {})) {
+        for (const g of page.NatGateways ?? []) {
+          // A deleted gateway stays listed for about an hour; it is gone.
+          if (g.State === "deleted") continue;
+          const addresses = g.NatGatewayAddresses ?? [];
+          out.push({
+            id: g.NatGatewayId!,
+            state: g.State ?? "unknown",
+            vpcId: g.VpcId,
+            subnetId: g.SubnetId,
+            connectivityType: g.ConnectivityType ?? "public",
+            createdAt: g.CreateTime?.toISOString(),
+            allocationIds: addresses.map((a) => a.AllocationId!).filter(Boolean),
+            publicIps: addresses.map((a) => a.PublicIp!).filter(Boolean),
+            name: nameTag(g.Tags),
+            ignored: ignoredByTag(g.Tags),
+          });
+        }
+      }
+      return out;
+    }),
+    attempt("elasticloadbalancing:DescribeLoadBalancers", warnings, [], () => collectLoadBalancers(elb, opts.lookbackHours, warnings)),
     attempt("ec2:DescribeLaunchTemplates", warnings, [], async () => {
       const ids = new Set<string>();
       for await (const page of paginateDescribeLaunchTemplates({ client: ec2 }, {})) {
@@ -209,15 +302,46 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
     attempt("s3:ListAllMyBuckets", warnings, [], () => collectBuckets(s3, opts.region, warnings)),
   ]);
 
-  await Promise.all(
-    instances
+  // Every CloudWatch read of the region, a few at a time: they all draw on the same GetMetricData request rate.
+  const metricReads: Array<() => Promise<void>> = [
+    ...instances
       .filter((i) => i.state === "running")
-      .map(async (i) => {
+      .map((i) => async () => {
         i.cpu = await attempt(`cloudwatch:GetMetricData ${i.id}`, warnings, undefined, () =>
           cpuStats(cloudwatch, i.id, opts.lookbackHours),
         );
       }),
-  );
+    ...rdsInstances
+      .filter((d) => d.status === "available")
+      .map((d) => async () => {
+        d.connections = await attempt(`cloudwatch:GetMetricData ${d.id}`, warnings, undefined, () =>
+          connectionStats(cloudwatch, d.id, opts.lookbackHours),
+        );
+      }),
+    ...natGateways
+      .filter((g) => g.state === "available")
+      .map((g) => async () => {
+        g.traffic = await attempt(`cloudwatch:GetMetricData ${g.id}`, warnings, undefined, () =>
+          trafficStats(cloudwatch, {
+            namespace: "AWS/NATGateway",
+            dimension: { Name: "NatGatewayId", Value: g.id },
+            metrics: [
+              { name: "BytesInFromSource", stat: "Sum" },
+              { name: "BytesInFromDestination", stat: "Sum" },
+              { name: "BytesOutToSource", stat: "Sum" },
+              { name: "BytesOutToDestination", stat: "Sum" },
+            ],
+            lookbackHours: opts.lookbackHours,
+          }),
+        );
+      }),
+    ...loadBalancers
+      .filter((b) => b.state === "active" && (b.type === "application" || b.type === "network"))
+      .map((b) => async () => {
+        b.traffic = await attempt(`cloudwatch:GetMetricData ${b.name}`, warnings, undefined, () => loadBalancerTraffic(cloudwatch, b, opts.lookbackHours));
+      }),
+  ];
+  await mapLimit(metricReads, METRICS_AT_ONCE, (read) => read());
 
   return {
     accountId,
@@ -227,11 +351,77 @@ export async function collect(opts: AwsOptions, accountId: string): Promise<Inve
     snapshots,
     images,
     instances,
+    rdsInstances,
     addresses,
+    natGateways,
+    loadBalancers,
     launchTemplateImageIds,
     buckets,
-    warnings,
+    // The reads run side by side, so which of two failures is noticed first is chance. Sorted, the
+    // same account gives the same report whichever answer came back first, and a replay matches its recording.
+    warnings: [...warnings].sort(),
   };
+}
+
+/**
+ * Every Application, Network and Gateway load balancer in the region, with
+ * what a rule needs to judge the first two: tags, deletion protection and how
+ * many targets each target group holds. A step that cannot be read becomes a
+ * warning and leaves its field unset, so the rules never judge on a guess.
+ */
+async function collectLoadBalancers(elb: ElasticLoadBalancingV2Client, lookbackHours: number, warnings: string[]): Promise<LoadBalancerInfo[]> {
+  const out: LoadBalancerInfo[] = [];
+  for await (const page of paginateDescribeLoadBalancers({ client: elb }, {})) {
+    for (const b of page.LoadBalancers ?? []) {
+      out.push({
+        arn: b.LoadBalancerArn!,
+        name: b.LoadBalancerName!,
+        type: b.Type ?? "unknown",
+        scheme: b.Scheme,
+        dnsName: b.DNSName,
+        state: b.State?.Code ?? "unknown",
+        createdAt: b.CreatedTime?.toISOString(),
+        windowHours: lookbackHours,
+      });
+    }
+  }
+  if (out.length === 0) return out;
+
+  // The ignore tag is honoured, so a balancer whose tags cannot be read is not judged at all.
+  const tagged = new Map<string, boolean>();
+  const tags = await attempt("elasticloadbalancing:DescribeTags", warnings, false, async () => {
+    for (let i = 0; i < out.length; i += TAGS_PER_REQUEST) {
+      const res = await elb.send(new DescribeTagsCommand({ ResourceArns: out.slice(i, i + TAGS_PER_REQUEST).map((b) => b.arn) }));
+      for (const d of res.TagDescriptions ?? []) tagged.set(d.ResourceArn!, Boolean(ignoredByTag(d.Tags)));
+    }
+    return true;
+  });
+  for (const b of out) {
+    if (!tags) b.tagsUnread = true;
+    else b.ignored = tagged.get(b.arn) || undefined;
+  }
+
+  // Only active Application and Network balancers are judged; the rest cost the same but have no rule here.
+  await mapLimit(
+    out.filter((b) => b.state === "active" && (b.type === "application" || b.type === "network")),
+    LOAD_BALANCERS_AT_ONCE,
+    async (b) => {
+      b.deletionProtection = await attempt(`elasticloadbalancing:DescribeLoadBalancerAttributes ${b.name}`, warnings, undefined, async () => {
+        const res = await elb.send(new DescribeLoadBalancerAttributesCommand({ LoadBalancerArn: b.arn }));
+        return res.Attributes?.find((a) => a.Key === "deletion_protection.enabled")?.Value === "true";
+      });
+      b.targetGroups = await attempt(`elasticloadbalancing:DescribeTargetHealth ${b.name}`, warnings, undefined, async () => {
+        const groups = await elb.send(new DescribeTargetGroupsCommand({ LoadBalancerArn: b.arn }));
+        const found: NonNullable<LoadBalancerInfo["targetGroups"]> = [];
+        for (const g of groups.TargetGroups ?? []) {
+          const health = await elb.send(new DescribeTargetHealthCommand({ TargetGroupArn: g.TargetGroupArn }));
+          found.push({ arn: g.TargetGroupArn!, name: g.TargetGroupName!, registeredTargets: (health.TargetHealthDescriptions ?? []).length });
+        }
+        return found;
+      });
+    },
+  );
+  return out;
 }
 
 async function collectBuckets(s3: S3Client, region: string, warnings: string[]): Promise<BucketInfo[]> {
@@ -352,9 +542,230 @@ async function cpuStats(cloudwatch: CloudWatchClient, instanceId: string, lookba
   const max = res.MetricDataResults?.find((r) => r.Id === "max")?.Values ?? [];
   if (avg.length === 0) return undefined;
   return {
+    windowHours: lookbackHours,
     datapoints: avg.length,
     hoursObserved: (avg.length * period) / 3600,
     averagePct: avg.reduce((a, b) => a + b, 0) / avg.length,
     maxPct: Math.max(...max, ...avg),
   };
+}
+
+/** The highest database connection count CloudWatch holds for one RDS instance over the window. */
+async function connectionStats(cloudwatch: CloudWatchClient, dbInstanceId: string, lookbackHours: number): Promise<ConnectionStats | undefined> {
+  const end = now();
+  const start = new Date(end.getTime() - lookbackHours * 3600_000);
+  const period = lookbackHours <= 24 ? 300 : 3600;
+  const res = await cloudwatch.send(
+    new GetMetricDataCommand({
+      StartTime: start,
+      EndTime: end,
+      MetricDataQueries: [
+        {
+          Id: "max",
+          MetricStat: {
+            Metric: {
+              Namespace: "AWS/RDS",
+              MetricName: "DatabaseConnections",
+              Dimensions: [{ Name: "DBInstanceIdentifier", Value: dbInstanceId }],
+            },
+            Period: period,
+            Stat: "Maximum",
+          },
+        },
+      ],
+    }),
+  );
+  const max = res.MetricDataResults?.find((r) => r.Id === "max")?.Values ?? [];
+  if (max.length === 0) return undefined;
+  return {
+    windowHours: lookbackHours,
+    datapoints: max.length,
+    hoursObserved: (max.length * period) / 3600,
+    maxConnections: Math.max(...max),
+  };
+}
+
+/**
+ * The traffic CloudWatch holds for one resource over the window, summed over
+ * every metric asked for. Undefined when it holds no datapoint, unless the
+ * resource publishes only while traffic flows: then `existedSince` is given,
+ * and the hours it has existed stand in for the hours observed.
+ */
+async function trafficStats(
+  cloudwatch: CloudWatchClient,
+  q: {
+    namespace: string;
+    dimension: { Name: string; Value: string };
+    metrics: Array<{ name: string; stat: string }>;
+    lookbackHours: number;
+    existedSince?: string;
+  },
+): Promise<TrafficStats | undefined> {
+  const end = now();
+  const start = new Date(end.getTime() - q.lookbackHours * 3600_000);
+  const period = q.lookbackHours <= 24 ? 300 : 3600;
+  const res = await cloudwatch.send(
+    new GetMetricDataCommand({
+      StartTime: start,
+      EndTime: end,
+      MetricDataQueries: q.metrics.map((m, n) => ({
+        Id: `m${n}`,
+        MetricStat: {
+          Metric: { Namespace: q.namespace, MetricName: m.name, Dimensions: [q.dimension] },
+          Period: period,
+          Stat: m.stat,
+        },
+      })),
+    }),
+  );
+  const results = res.MetricDataResults ?? [];
+  // A period counts as observed when any of the metrics has a point in it.
+  const observed = new Set(results.flatMap((r) => (r.Timestamps ?? []).map((t) => t.getTime())));
+  const total = results.reduce((sum, r) => sum + (r.Values ?? []).reduce((a, b) => a + b, 0), 0);
+  if (observed.size > 0) {
+    return { windowHours: q.lookbackHours, datapoints: observed.size, hoursObserved: (observed.size * period) / 3600, total };
+  }
+  if (!q.existedSince) return undefined;
+  const age = (end.getTime() - Date.parse(q.existedSince)) / 3600_000;
+  if (!Number.isFinite(age)) return undefined;
+  return { windowHours: q.lookbackHours, datapoints: 0, hoursObserved: Math.min(Math.max(age, 0), q.lookbackHours), total: 0, fromAge: true };
+}
+
+/** Requests (Application) or flows (Network) one load balancer handled over the window. */
+function loadBalancerTraffic(cloudwatch: CloudWatchClient, b: LoadBalancerInfo, lookbackHours: number) {
+  // CloudWatch names a balancer by the end of its ARN: app/my-alb/50dc6c495c0c9188.
+  const suffix = b.arn.split(":loadbalancer/")[1];
+  if (!suffix) return Promise.resolve(undefined);
+  const application = b.type === "application";
+  return trafficStats(cloudwatch, {
+    namespace: application ? "AWS/ApplicationELB" : "AWS/NetworkELB",
+    dimension: { Name: "LoadBalancer", Value: suffix },
+    metrics: application
+      ? [{ name: "RequestCount", stat: "Sum" }]
+      : [
+          { name: "NewFlowCount", stat: "Sum" },
+          { name: "ActiveFlowCount", stat: "Maximum" },
+        ],
+    lookbackHours,
+    existedSince: b.createdAt,
+  });
+}
+
+/** The calendar month before the one `at` falls in (UTC), as the dates Cost Explorer takes: the end is exclusive. */
+export function lastFullMonth(at: Date): { month: string; start: string; end: string } {
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const start = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() - 1, 1));
+  const end = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1));
+  return { month: day(start).slice(0, 7), start: day(start), end: day(end) };
+}
+
+/** The one Cost Explorer request a bill costs, for the month before `at`. */
+export function billQuery(at: Date): { month: string; input: GetCostAndUsageCommandInput } {
+  const { month, start, end } = lastFullMonth(at);
+  return {
+    month,
+    input: {
+      TimePeriod: { Start: start, End: end },
+      Granularity: "MONTHLY",
+      Metrics: ["UnblendedCost"],
+      // The spend before credits and refunds: waste is measured at list price, and a month paid with credits would otherwise read as nothing.
+      Filter: { Not: { Dimensions: { Key: "RECORD_TYPE", Values: ["Credit", "Refund"] } } },
+    },
+  };
+}
+
+/**
+ * What the account spent last month, from Cost Explorer: one request, which
+ * AWS charges $0.01 for, made only when the scan was asked for the bill. Every
+ * way it can fail (no permission, Cost Explorer not enabled, no data yet, a
+ * currency that is not dollars) comes back as a reason, never as a figure.
+ */
+export async function readBill(opts: { profile?: string }): Promise<Bill> {
+  const { month, input } = billQuery(now());
+  // Cost Explorer is one global endpoint, served from us-east-1.
+  const client = labelClient(new CostExplorerClient(clientConfig({ region: "us-east-1", profile: opts.profile })), "CostExplorer");
+  try {
+    const res = await client.send(new GetCostAndUsageCommand(input));
+    const totals = (res.ResultsByTime ?? []).map((r) => r.Total?.UnblendedCost).filter((t) => t !== undefined);
+    if (totals.length === 0) return { month, unavailable: `Cost Explorer returned no data for ${month}` };
+    const unit = totals[0]!.Unit;
+    if (unit !== "USD") return { month, unavailable: `Cost Explorer reports ${month} in ${unit ?? "an unknown currency"}, and CloudPilot compares dollars only` };
+    const totalUsd = totals.reduce((sum, t) => sum + Number(t.Amount), 0);
+    if (!Number.isFinite(totalUsd)) return { month, unavailable: `Cost Explorer returned an amount for ${month} that is not a number` };
+    // A new account, or one Cost Explorer was only just enabled for, reads zero or a fraction of a cent: that is no data, not a free month, and a share of it would mean nothing.
+    if (totalUsd < 0.005) return { month, unavailable: `Cost Explorer shows no spend to the cent for ${month}, so there is nothing to compare the waste with (a new account, or no data yet)` };
+    return { month, totalUsd, ...((res.ResultsByTime ?? []).some((r) => r.Estimated) ? { estimated: true } : {}) };
+  } catch (err) {
+    // A request missing from a replay is a hard stop, never a skipped check.
+    if (err instanceof ReplayMissError) throw err;
+    return { month, unavailable: `${errorName(err)}${err instanceof Error ? ` - ${err.message}` : ""}` };
+  }
+}
+
+/** Cost Explorer pages a long answer; more pages than this is not a month of services, and each page is charged. */
+const MAX_COST_PAGES = 10;
+
+/**
+ * The one Cost Explorer request spend anomalies make: daily unblended cost per
+ * service for the `days` complete days before today (UTC). The end date is
+ * exclusive, so the day in progress is not asked for. Credits, refunds and
+ * tax are left out: a credit running out or the month's tax landing on the
+ * first would otherwise read as a service costing more.
+ */
+export function anomalyQuery(at: Date, days: number): GetCostAndUsageCommandInput {
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const end = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  const start = new Date(end.getTime() - days * 86_400_000);
+  return {
+    TimePeriod: { Start: day(start), End: day(end) },
+    Granularity: "DAILY",
+    Metrics: ["UnblendedCost"],
+    GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }],
+    Filter: { Not: { Dimensions: { Key: "RECORD_TYPE", Values: ["Credit", "Refund", "Tax"] } } },
+  };
+}
+
+/**
+ * What each service cost on each of the last `days` days, from Cost Explorer.
+ * One request, which AWS charges $0.01 for; more only when AWS splits the
+ * answer into pages (NextPageToken), and the number made is returned. Unlike
+ * the bill this is the whole command, so every way it can fail (no
+ * permission, Cost Explorer not enabled, a currency that is not dollars, an
+ * amount that is not a number) is an error that says why, never a figure.
+ */
+export async function readDailyCosts(opts: { profile?: string; days: number }): Promise<{ days: DayCost[]; requests: number }> {
+  const input = anomalyQuery(now(), opts.days);
+  // Cost Explorer is one global endpoint, served from us-east-1.
+  const client = labelClient(new CostExplorerClient(clientConfig({ region: "us-east-1", profile: opts.profile })), "CostExplorer");
+  const parts: DayCost[] = [];
+  let requests = 0;
+  let token: string | undefined;
+  do {
+    if (requests === MAX_COST_PAGES) throw new Error(`Cost Explorer kept paging after ${MAX_COST_PAGES} requests, so CloudPilot stopped rather than be charged for more.`);
+    let res: GetCostAndUsageCommandOutput;
+    try {
+      res = await client.send(new GetCostAndUsageCommand({ ...input, ...(token ? { NextPageToken: token } : {}) }));
+    } catch (err) {
+      // A request missing from a replay is a hard stop, never a skipped check.
+      if (err instanceof ReplayMissError) throw err;
+      throw new Error(`Cost Explorer could not be read: ${errorName(err)}${err instanceof Error ? ` - ${err.message}` : ""}`);
+    }
+    requests += 1;
+    for (const result of res.ResultsByTime ?? []) {
+      const day = result.TimePeriod?.Start;
+      if (!day) throw new Error("Cost Explorer returned a day with no date.");
+      const costs: Record<string, number> = {};
+      for (const group of result.Groups ?? []) {
+        const service = group.Keys?.[0] ?? "(no service)";
+        const cost = group.Metrics?.UnblendedCost;
+        if (cost?.Unit !== "USD") throw new Error(`Cost Explorer reports ${service} in ${cost?.Unit ?? "an unknown currency"}, and CloudPilot compares dollars only.`);
+        const usd = Number(cost.Amount);
+        if (!Number.isFinite(usd)) throw new Error(`Cost Explorer returned an amount for ${service} on ${day} that is not a number.`);
+        costs[service] = (costs[service] ?? 0) + usd;
+      }
+      parts.push({ day, costs, ...(result.Estimated ? { estimated: true } : {}) });
+    }
+    token = res.NextPageToken || undefined;
+  } while (token);
+  return { days: mergeDays(parts), requests };
 }

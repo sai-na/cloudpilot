@@ -4,29 +4,40 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { cli, CLI, recordingText, SECRET_MARKERS, TSX } from "../helpers.js";
 
 const PROFILE = "cloudpilot-readonly";
 const REGION = "ap-south-1";
 
 /** Run the CLI live, with the developer's own environment and AWS config. */
-function live(args: string[], env: NodeJS.ProcessEnv = process.env) {
+function live(args: string[], env: NodeJS.ProcessEnv = process.env, cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"))) {
   const run = spawnSync(process.execPath, ["--import", TSX, CLI, ...args], {
     encoding: "utf8",
-    cwd: mkdtempSync(join(tmpdir(), "cloudpilot-test-")),
+    cwd,
     env: { ...env, NO_COLOR: "1" },
   });
   return { status: run.status, stdout: run.stdout, stderr: run.stderr };
 }
 
-/** Record, replay with the network blocked, and return both results. */
+/**
+ * Record, replay with the network blocked, and return both results. The
+ * recording is made from a directory that already holds a saved scan, because
+ * a replay has no such scan to compare with: anything the recorded run took
+ * from local state would show up as a difference between the two.
+ */
 function recordThenReplay(dir: string, scope: string[]) {
-  const record = live(["scan", "--profile", PROFILE, ...scope, "--json", "--record", dir]);
+  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+  const seed = live(["scan", "--profile", PROFILE, ...scope, "--json"], process.env, cwd);
+  assert.equal(seed.status, 0, seed.stderr);
+  assert.ok(readFileSync(join(cwd, ".cloudpilot/last-scan.json"), "utf8").length > 0, "the seeding scan left a baseline to compare with");
+  const record = live(["scan", "--profile", PROFILE, ...scope, "--json", "--record", dir], process.env, cwd);
   assert.equal(record.status, 0, record.stderr);
+  assert.equal(JSON.parse(record.stdout).comparison, undefined, "a recorded run does not compare with local state");
   const replay = cli(["scan", "--replay", dir, "--json"], { blockNetwork: true });
   assert.equal(replay.status, 0, replay.stderr);
   const recorded = JSON.parse(record.stdout);
@@ -41,6 +52,7 @@ const single = join(mkdtempSync(join(tmpdir(), "cloudpilot-recording-")), "one-r
 test("record a scan of the lab region, then replay it byte-identically with the network blocked", () => {
   const { recorded, replayed, banner } = recordThenReplay(single, ["--region", REGION]);
   assert.ok(recorded.findings.length > 0);
+  assert.ok(recorded.findings.every((f: { isNew?: boolean }) => f.isNew === undefined), "no finding is marked against a scan the replay cannot see");
   assert.equal(JSON.stringify(replayed.findings), JSON.stringify(recorded.findings));
   assert.equal(JSON.stringify(replayed), JSON.stringify(recorded));
   assert.match(banner, /region ap-south-1\. No live calls\.$/);
@@ -85,6 +97,39 @@ test("with no --profile the standard credential chain is used, as in CloudShell"
   assert.ok(result.findings.length > 0);
   // No model key in that environment: the scan still completes, with the templated summary.
   assert.match(result.summary, /^Estimated waste: \$/);
+});
+
+test("a second scan from the same directory says by itself that nothing is new or resolved", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "cloudpilot-test-"));
+  const saved = join(cwd, ".cloudpilot/last-scan.json");
+  const run = (...extra: string[]) =>
+    spawnSync(process.execPath, ["--import", TSX, CLI, "scan", "--profile", PROFILE, "--region", REGION, ...extra], {
+      encoding: "utf8",
+      cwd,
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  assert.doesNotMatch(first.stdout, /since the last scan/i);
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /No new or resolved findings since the last scan \(\S+\)\./);
+
+  // A run that hides the account ID still compares, but must not replace the baseline.
+  const baseline = readFileSync(saved, "utf8");
+  const redacted = run("--redact-account");
+  assert.equal(redacted.status, 0, redacted.stderr);
+  assert.match(redacted.stdout, /No new or resolved findings since the last scan/);
+  assert.equal(readFileSync(saved, "utf8"), baseline, "the saved last scan is untouched");
+});
+
+test("CloudFormation accepts the daily report template, and it asks for nothing beyond IAM roles", () => {
+  const template = join(dirname(fileURLToPath(import.meta.url)), "../../../../deploy/daily-report.yaml");
+  const answer = JSON.parse(
+    execFileSync("aws", ["cloudformation", "validate-template", "--profile", "cloudpilot-seed", "--region", REGION, "--template-body", `file://${template}`, "--output", "json"], { encoding: "utf8" }),
+  );
+  assert.deepEqual(answer.Parameters.map((p: { ParameterKey: string }) => p.ParameterKey).sort(), ["Email", "PackageSpec", "Region", "Schedule"]);
+  assert.deepEqual(answer.Capabilities, ["CAPABILITY_IAM"]);
 });
 
 function roleArn(): string {

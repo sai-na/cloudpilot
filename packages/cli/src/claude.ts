@@ -1,12 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaTool } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { fromIni } from "@aws-sdk/credential-providers";
-import { buildTools, GROUND_RULES, MissingCredentialsError, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { buildTools, groundRules, MissingCredentialsError, modelRequest, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { modelFor, type ModelJob } from "./models.js";
 import type { ScanResult } from "./types.js";
-
-export const DEFAULT_MODEL = "claude-opus-5-5";
-/** Default when calling through Amazon Bedrock. */
-export const DEFAULT_BEDROCK_MODEL = "in.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 type MessagesApi = Pick<Anthropic["beta"]["messages"], "create" | "toolRunner">;
 
@@ -16,7 +13,7 @@ interface Llm {
   params: Pick<Anthropic.Beta.MessageCreateParamsNonStreaming, "model" | "max_tokens" | "output_config" | "betas" | "fallbacks">;
 }
 
-async function llm(options: LlmOptions): Promise<Llm> {
+async function llm(options: LlmOptions, job: ModelJob): Promise<Llm> {
   if (options.provider === "bedrock") {
     if (!options.bedrockProfile) throw new Error("Bedrock needs --bedrock-profile.");
     const profile = options.bedrockProfile;
@@ -27,19 +24,22 @@ async function llm(options: LlmOptions): Promise<Llm> {
     const bedrock = new AnthropicBedrock({
       awsRegion: options.bedrockRegion,
       providerChainResolver: async () => fromIni({ profile }),
+      ...modelRequest(),
     });
-    const model = options.model ?? DEFAULT_BEDROCK_MODEL;
+    const model = modelFor("bedrock", job, options);
     return {
       messages: bedrock.beta.messages as unknown as MessagesApi,
       // Haiku 4.5 has no effort setting; server-side fallbacks are not offered on Bedrock.
-      params: { model, max_tokens: 16000, ...(model.includes("haiku-4-5") ? {} : { output_config: { effort: "medium" } }) },
+      params: { model, max_tokens: 16000, ...(isHaiku(model) ? {} : { output_config: { effort: "medium" } }) },
     };
   }
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new MissingCredentialsError();
+  const model = modelFor("anthropic", job, options);
   return {
-    messages: new Anthropic().beta.messages,
-    params: {
-      model: options.model ?? DEFAULT_MODEL,
+    messages: new Anthropic(modelRequest()).beta.messages,
+    // Haiku 4.5 takes neither an effort setting nor the fallback routing, which is for the larger models.
+    params: isHaiku(model) ? { model, max_tokens: 16000 } : {
+      model,
       max_tokens: 16000,
       output_config: { effort: "medium" },
       // Lets the API route a declined request to its default fallback model inside the same call.
@@ -48,6 +48,8 @@ async function llm(options: LlmOptions): Promise<Llm> {
     },
   };
 }
+
+const isHaiku = (model: string) => model.includes("haiku-4-5");
 
 function textOf(message: { stop_reason: string | null; content: Array<{ type: string; text?: string }> }): string {
   if (message.stop_reason === "refusal") throw new Error("The model declined to answer this request.");
@@ -60,10 +62,10 @@ function textOf(message: { stop_reason: string | null; content: Array<{ type: st
 
 /** A short prioritised summary of a scan, written by the model from the scan data only. */
 export async function summarize(result: ScanResult, options: LlmOptions = {}): Promise<string> {
-  const { messages, params } = await llm(options);
+  const { messages, params } = await llm(options, "summary");
   const message = await messages.create({
     ...params,
-    system: GROUND_RULES,
+    system: groundRules(result),
     messages: [{ role: "user", content: summaryRequest(result) }],
   });
   return textOf(message);
@@ -73,10 +75,10 @@ export async function summarize(result: ScanResult, options: LlmOptions = {}): P
 export async function ask(question: string, ctx: AskContext): Promise<string> {
   const tools = buildTools(ctx).map((tool) => betaTool({ ...tool, inputSchema: tool.inputSchema as { type: "object" } }));
 
-  const { messages, params } = await llm(ctx.llm ?? {});
+  const { messages, params } = await llm(ctx.llm ?? {}, "ask");
   const runner = messages.toolRunner({
     ...params,
-    system: GROUND_RULES,
+    system: groundRules(ctx.result),
     tools,
     max_iterations: 12,
     messages: [{ role: "user", content: question }],
@@ -101,6 +103,8 @@ export function describeError(err: unknown): string | undefined {
   }
   // On Bedrock a zero quota also arrives as a 429, so pass the provider's own wording through.
   if (err instanceof Anthropic.RateLimitError) return `The model's rate limit or quota was hit: ${err.message}`;
+  // A timeout is a kind of connection error, so it has to be asked about first.
+  if (err instanceof Anthropic.APIConnectionTimeoutError) return `The Anthropic API timed out: no answer within ${Math.round(modelRequest().timeout / 1000)} seconds, twice.`;
   if (err instanceof Anthropic.APIConnectionError) return "Could not reach the Anthropic API. Check the network connection.";
   if (err instanceof Anthropic.APIError) return `Anthropic API error ${err.status}: ${err.message}`;
   return undefined;

@@ -1,5 +1,5 @@
 # Publishes site/ to GitHub Pages. Runs only when started by hand, and only
-# if site/check.sh finds no placeholders or unbacked claims on the page.
+# if site/check.sh passes; site/README.md lists what it checks.
 name: Deploy landing page
 
 on:

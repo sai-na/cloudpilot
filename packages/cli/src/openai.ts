@@ -1,30 +1,23 @@
 import OpenAI from "openai";
-import { buildTools, GROUND_RULES, MissingCredentialsError, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { buildTools, groundRules, MissingCredentialsError, modelRequest, summaryRequest, type AskContext, type LlmOptions } from "./advisor.js";
+import { namedModel, pickOpenAIModel, type ModelJob } from "./models.js";
 import type { ScanResult } from "./types.js";
-
-/** Tried in order when no model is named; the first one the account can use wins. */
-const MODEL_PREFERENCE = [/^gpt-6\.1/, /^gpt-6/, /^gpt-5\.5/, /^gpt-5/, /^gpt-4/];
-const NOT_A_CHAT_MODEL = /audio|realtime|image|tts|transcribe|search|embedding|moderation|codex|instruct/;
 
 /** Stop a question that keeps calling tools without ever answering. */
 const MAX_STEPS = 12;
 
 function client(): OpenAI {
   if (!process.env.OPENAI_API_KEY) throw new MissingCredentialsError();
-  return new OpenAI();
+  return new OpenAI(modelRequest());
 }
 
-async function resolveModel(openai: OpenAI, options: LlmOptions): Promise<string> {
-  const named = options.model ?? process.env.CLOUDPILOT_OPENAI_MODEL;
+async function resolveModel(openai: OpenAI, options: LlmOptions, job: ModelJob): Promise<string> {
+  const named = namedModel(options, job) ?? process.env.CLOUDPILOT_OPENAI_MODEL;
   if (named) return named;
   const ids: string[] = [];
   for await (const model of openai.models.list()) ids.push(model.id);
-  const chat = ids.filter((id) => !NOT_A_CHAT_MODEL.test(id)).sort();
-  for (const wanted of MODEL_PREFERENCE) {
-    // The shortest match is the undated alias rather than a snapshot.
-    const match = chat.filter((id) => wanted.test(id)).sort((a, b) => a.length - b.length)[0];
-    if (match) return match;
-  }
+  const picked = pickOpenAIModel(ids, job);
+  if (picked) return picked;
   throw new Error("No usable OpenAI chat model found for this key. Pass --model.");
 }
 
@@ -40,8 +33,8 @@ function answerOf(response: OpenAI.Responses.Response): string {
 export async function summarize(result: ScanResult, options: LlmOptions = {}): Promise<string> {
   const openai = client();
   const response = await openai.responses.create({
-    model: await resolveModel(openai, options),
-    instructions: GROUND_RULES,
+    model: await resolveModel(openai, options, "summary"),
+    instructions: groundRules(result),
     input: summaryRequest(result),
   });
   return answerOf(response);
@@ -50,7 +43,7 @@ export async function summarize(result: ScanResult, options: LlmOptions = {}): P
 /** Answer a free-form question about the account, letting the model look things up in the scan. */
 export async function ask(question: string, ctx: AskContext): Promise<string> {
   const openai = client();
-  const model = await resolveModel(openai, ctx.llm ?? {});
+  const model = await resolveModel(openai, ctx.llm ?? {}, "ask");
   const specs = buildTools(ctx);
   const tools: OpenAI.Responses.FunctionTool[] = specs.map((spec) => ({
     type: "function",
@@ -60,7 +53,7 @@ export async function ask(question: string, ctx: AskContext): Promise<string> {
     strict: false,
   }));
 
-  let response = await openai.responses.create({ model, instructions: GROUND_RULES, input: question, tools });
+  let response = await openai.responses.create({ model, instructions: groundRules(ctx.result), input: question, tools });
   for (let step = 0; step < MAX_STEPS; step++) {
     const calls = response.output.filter((item) => item.type === "function_call");
     if (calls.length === 0) return answerOf(response);
@@ -80,7 +73,7 @@ export async function ask(question: string, ctx: AskContext): Promise<string> {
     // The API keeps the conversation so far; only the tool results are sent back.
     response = await openai.responses.create({
       model,
-      instructions: GROUND_RULES,
+      instructions: groundRules(ctx.result),
       previous_response_id: response.id,
       input: outputs,
       tools,
@@ -96,6 +89,8 @@ export function describeError(err: unknown): string | undefined {
     return `The model is not available to this key (${err.status}): ${err.message}`;
   }
   if (err instanceof OpenAI.RateLimitError) return `The OpenAI rate limit or quota was hit: ${err.message}`;
+  // A timeout is a kind of connection error, so it has to be asked about first.
+  if (err instanceof OpenAI.APIConnectionTimeoutError) return `The OpenAI API timed out: no answer within ${Math.round(modelRequest().timeout / 1000)} seconds, twice.`;
   if (err instanceof OpenAI.APIConnectionError) return "Could not reach the OpenAI API. Check the network connection.";
   if (err instanceof OpenAI.APIError) return `OpenAI API error ${err.status}: ${err.message}`;
   return undefined;

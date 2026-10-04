@@ -1,0 +1,173 @@
+# The seeded waste. Every workload is one busybox container, so what it uses is
+# known in advance: the answer key (answer-key.json) follows from this file.
+#
+#   KW1 checkout  asks for far more CPU than it uses; its memory is sized right
+#   KW2 search    asks for far more memory than it uses; its CPU is sized right
+#   KW3 reports   asks for far more of both, on three replicas
+#   KW4 old-exports  a volume claim no running pod mounts
+#   KW5 archive-2025 a volume left Released (created by up.sh)
+#   KC1 web       sized right: it must not be reported
+#   KC2 importer  was killed for running out of memory: its memory must not be lowered
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+---
+# KW1. Holds 48 MiB of its 64 MiB request, and uses no CPU to speak of.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+  namespace: shop
+  labels: { cloudpilot-lab: kw1 }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: checkout }
+  template:
+    metadata:
+      labels: { app: checkout }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: api
+          image: busybox:1.36
+          command: ["sh", "-c", "dd if=/dev/zero of=/dev/shm/hold bs=1M count=48 2>/dev/null; exec sleep infinity"]
+          resources:
+            requests: { cpu: 500m, memory: 64Mi }
+---
+# KW2. Idle, with a 1 GiB memory request. Its 20m CPU request is small enough to leave alone.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search
+  namespace: shop
+  labels: { cloudpilot-lab: kw2 }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: search }
+  template:
+    metadata:
+      labels: { app: search }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: indexer
+          image: busybox:1.36
+          command: ["sleep", "infinity"]
+          resources:
+            requests: { cpu: 20m, memory: 1Gi }
+---
+# KW3. Idle, three replicas, over-asking on both.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reports
+  namespace: shop
+  labels: { cloudpilot-lab: kw3 }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: reports }
+  template:
+    metadata:
+      labels: { app: reports }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: worker
+          image: busybox:1.36
+          command: ["sleep", "infinity"]
+          resources:
+            requests: { cpu: 300m, memory: 512Mi }
+---
+# KC1. Spins flat out against a 100m CPU limit and holds 48 MiB: it uses what it asks for.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: shop
+  labels: { cloudpilot-lab: kc1 }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: server
+          image: busybox:1.36
+          command: ["sh", "-c", "dd if=/dev/zero of=/dev/shm/hold bs=1M count=48 2>/dev/null; while :; do :; done"]
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: 100m }
+---
+# KC2. The first start eats memory until the kernel kills it; every later start
+# sits idle. Prometheus may never see the spike, so going by the graph alone
+# its memory looks unused. The kill is on the pod's record, and that must win.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: importer
+  namespace: shop
+  labels: { cloudpilot-lab: kc2 }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: importer }
+  template:
+    metadata:
+      labels: { app: importer }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: job
+          image: busybox:1.36
+          command: ["sh", "-c", "if [ -f /state/ran ]; then exec sleep infinity; fi; touch /state/ran; exec tail /dev/zero"]
+          resources:
+            requests: { cpu: 10m, memory: 256Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - { name: state, mountPath: /state }
+      volumes:
+        - name: state
+          emptyDir: {}
+---
+# KW4. Written once by a job that finished long ago; nothing mounts it now.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: old-exports
+  namespace: shop
+  labels: { cloudpilot-lab: kw4 }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests: { storage: 5Gi }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: export-2025
+  namespace: shop
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: export
+          image: busybox:1.36
+          command: ["sh", "-c", "echo exported > /data/export.txt"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: old-exports

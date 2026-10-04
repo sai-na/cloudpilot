@@ -25,7 +25,7 @@ async function fakeOpenAI(outputs: object[][]) {
 
 const ctx = (used: string[]): AskContext => ({
   result: { accountId: "1", regions: ["ap-south-1"], scannedAt: "", prices: { source: "price-file", fetchedAt: "" }, findings: [], totalMonthlyWasteUsd: 42, skippedByTag: [], warnings: [] },
-  inventories: [{ accountId: "1", region: "ap-south-1", collectedAt: "", volumes: [], snapshots: [], images: [], instances: [], addresses: [], launchTemplateImageIds: [], buckets: [], warnings: [] }],
+  inventories: [{ accountId: "1", region: "ap-south-1", collectedAt: "", volumes: [], snapshots: [], images: [], instances: [], rdsInstances: [], addresses: [], natGateways: [], loadBalancers: [], launchTemplateImageIds: [], buckets: [], warnings: [] }],
   prices: [{ region: "ap-south-1", source: "price-file", fetchedAt: "", ebsGbMonth: {}, snapshotGbMonth: 0, idleIpv4Hour: 0, instanceHour: {}, s3StandardGbMonth: 0 }],
   cpuHistory: async () => undefined,
   llm: { model: "test-model" },
@@ -54,4 +54,26 @@ test("ask runs the tools the model asks for and returns its final answer", async
   assert.deepEqual(results.map((m: any) => [m.type, m.call_id]), [["function_call_output", "c1"], ["function_call_output", "c2"]]);
   assert.equal(JSON.parse(results[0].output).totalMonthlyWasteUsd, "$42.00");
   assert.match(results[1].output, /Unknown kind/);
+});
+
+test("a model that never answers costs two short waits, then the scan ends with the templated summary and says why", async () => {
+  // A server that accepts the request and then says nothing.
+  const { createServer: listen } = await import("node:http");
+  const { cli, FIXTURE } = await import("./helpers.js");
+  const silent = listen(() => {});
+  await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  const port = (silent.address() as AddressInfo).port;
+  try {
+    const started = Date.now();
+    const run = cli(["scan", "--replay", FIXTURE, "--explain", "--live-llm", "--model", "any"], {
+      env: { OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`, NO_PROXY: "127.0.0.1", CLOUDPILOT_MODEL_TIMEOUT_MS: "400" },
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.ok(Date.now() - started < 20_000, "it gave up instead of waiting ten minutes");
+    assert.match(run.stderr, /AI explanations are unavailable: .*timed out.*Showing the templated summary instead\./i);
+    assert.match(run.stdout, /Estimated waste: \$151\.53 per month across 10 findings/);
+  } finally {
+    silent.closeAllConnections();
+    silent.close();
+  }
 });
