@@ -1023,9 +1023,13 @@ or by `--provider`:
 
 | Provider | Needs | Default model for the summary | Default model for `ask` |
 |---|---|---|---|
-| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-opus-5-5` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` | `claude-opus-5-5` |
 | `openai` | `OPENAI_API_KEY` | the newest `-mini` GPT model the key can use, else the newest `-nano` one | the newest full-size GPT model the key can use |
 | `bedrock` | `--bedrock-profile <aws profile>` and `npm install @anthropic-ai/bedrock-sdk` | Claude Haiku 4.5 | Claude Haiku 4.5 |
+
+An Anthropic API key that is not tied to one workspace is refused until the
+request names a workspace: set `ANTHROPIC_WORKSPACE_ID` to the workspace's ID
+(it starts with `wrkspc_`). A key made inside a workspace needs nothing more.
 
 **The model is picked by the job.** The summary that `--explain` writes is a
 short formatting job over facts the scanner already worked out, so it gets a

@@ -29,35 +29,61 @@ async function llm(options: LlmOptions, job: ModelJob): Promise<Llm> {
     const model = modelFor("bedrock", job, options);
     return {
       messages: bedrock.beta.messages as unknown as MessagesApi,
-      // Haiku 4.5 has no effort setting; server-side fallbacks are not offered on Bedrock.
-      params: { model, max_tokens: 16000, ...(isHaiku(model) ? {} : { output_config: { effort: "medium" } }) },
+      // Server-side fallbacks are not offered on Bedrock, and only some Haiku generations take an effort setting.
+      params: { model, max_tokens: 16000, ...effortFor(model) },
     };
   }
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new MissingCredentialsError();
   const model = modelFor("anthropic", job, options);
   return {
-    messages: new Anthropic(modelRequest()).beta.messages,
-    // Haiku 4.5 takes neither an effort setting nor the fallback routing, which is for the larger models.
-    params: isHaiku(model) ? { model, max_tokens: 16000 } : {
+    messages: new Anthropic({ ...modelRequest(), ...workspaceHeader() }).beta.messages,
+    // No Haiku has the fallback routing, which is for the larger models.
+    params: {
       model,
       max_tokens: 16000,
-      output_config: { effort: "medium" },
-      // Lets the API route a declined request to its default fallback model inside the same call.
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
+      ...effortFor(model),
+      ...(isHaiku(model)
+        ? {}
+        : {
+            // Lets the API route a declined request to its default fallback model inside the same call.
+            betas: ["server-side-fallback-2026-07-01"],
+            fallbacks: "default",
+          }),
     },
   };
 }
 
-const isHaiku = (model: string) => model.includes("haiku-4-5");
+const isHaiku = (model: string) => model.includes("haiku");
 
+/** The Haiku generations that take an effort setting. Haiku 4.5 and the 3.x line refuse one, so a Haiku has to be named here to be sent it. */
+const HAIKU_WITH_EFFORT = ["haiku-5-5"];
+
+/** Every larger model takes an effort setting; a Haiku takes one only if its generation is named above. */
+function effortFor(model: string): Pick<Llm["params"], "output_config"> {
+  const takesEffort = !isHaiku(model) || HAIKU_WITH_EFFORT.some((generation) => model.includes(generation));
+  return takesEffort ? { output_config: { effort: "medium" } } : {};
+}
+
+/** The variable that names the workspace for an API key that is not tied to one. */
+export const WORKSPACE_ENV = "ANTHROPIC_WORKSPACE_ID";
+
+/** A key that belongs to no single workspace has to name one on every request; a key made inside a workspace needs nothing. */
+function workspaceHeader(): { defaultHeaders?: Record<string, string> } {
+  const id = process.env[WORKSPACE_ENV]?.trim();
+  return id ? { defaultHeaders: { "anthropic-workspace-id": id } } : {};
+}
+
+/** The model's own words, or an error when there are none to trust: a cut-off answer and an answer with no text in it are both discarded. */
 function textOf(message: { stop_reason: string | null; content: Array<{ type: string; text?: string }> }): string {
   if (message.stop_reason === "refusal") throw new Error("The model declined to answer this request.");
-  return message.content
+  if (message.stop_reason === "max_tokens") throw new Error("The model's answer was cut off by the token limit.");
+  const text = message.content
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("")
     .trim();
+  if (!text) throw new Error("The model answered with no text.");
+  return text;
 }
 
 /** A short prioritised summary of a scan, written by the model from the scan data only. */
@@ -97,6 +123,12 @@ export async function ask(question: string, ctx: AskContext): Promise<string> {
 
 /** Turn an SDK error into one line a user can act on. */
 export function describeError(err: unknown): string | undefined {
+  // Asked first: a refusal that names the workspace ID is about the workspace, whichever status Anthropic sends it with.
+  if (isWorkspaceRefusal(err)) {
+    return process.env[WORKSPACE_ENV]?.trim()
+      ? `Anthropic does not accept ${WORKSPACE_ENV} as a workspace ID. Check it against the workspace's ID in the Anthropic Console (it starts with wrkspc_).`
+      : `This Anthropic API key is not tied to a workspace. Set ${WORKSPACE_ENV} to the workspace's ID (it starts with wrkspc_), or create a key inside a workspace and use that.`;
+  }
   if (err instanceof Anthropic.AuthenticationError) return "The Anthropic API key was rejected. Check ANTHROPIC_API_KEY.";
   if (err instanceof Anthropic.PermissionDeniedError || err instanceof Anthropic.NotFoundError) {
     return `The model is not available to this account (${err.status}): ${err.message}`;
@@ -109,3 +141,15 @@ export function describeError(err: unknown): string | undefined {
   if (err instanceof Anthropic.APIError) return `Anthropic API error ${err.status}: ${err.message}`;
   return undefined;
 }
+
+/** The statuses a workspace can be refused with; a 429 or a 5xx is about load, not the workspace. */
+const WORKSPACE_REFUSAL_STATUSES = new Set([400, 401, 403, 404]);
+/**
+ * The header name, the `workspace_id_required` code and a plain "workspace ID"
+ * all match. "No access in this workspace" does not, so a refusal about the
+ * model stays one.
+ */
+const NAMES_A_WORKSPACE_ID = /workspace[-_ ]?id/i;
+
+const isWorkspaceRefusal = (err: unknown) =>
+  err instanceof Anthropic.APIError && WORKSPACE_REFUSAL_STATUSES.has(err.status ?? 0) && NAMES_A_WORKSPACE_ID.test(err.message);
