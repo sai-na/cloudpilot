@@ -75,9 +75,9 @@ const withFake = async <T>(options: Parameters<typeof fakeModels>[0], body: (fak
 // ---- The mapping ----
 
 test("each provider maps the two jobs to models in one table, with a small one for the summary and a stronger one for ask", () => {
-  assert.deepEqual(DEFAULT_MODELS.anthropic, { summary: "claude-haiku-4-5", ask: "claude-opus-5-5" });
+  assert.deepEqual(DEFAULT_MODELS.anthropic, { summary: "claude-haiku-5-5", ask: "claude-opus-5-5" });
   assert.deepEqual(DEFAULT_MODELS.bedrock, { summary: BEDROCK_HAIKU, ask: BEDROCK_HAIKU });
-  assert.equal(modelFor("anthropic", "summary", {}), "claude-haiku-4-5");
+  assert.equal(modelFor("anthropic", "summary", {}), "claude-haiku-5-5");
   assert.equal(modelFor("anthropic", "ask", {}), "claude-opus-5-5");
 });
 
@@ -96,7 +96,7 @@ test("--model beats the job's variable, which beats the default, and an empty va
     assert.equal(modelFor("anthropic", "ask", { model: "from-flag" }), "from-flag");
     assert.equal(modelFor("bedrock", "summary", {}), "small-one");
     process.env.CLOUDPILOT_MODEL_SUMMARY = "";
-    assert.equal(modelFor("anthropic", "summary", {}), "claude-haiku-4-5");
+    assert.equal(modelFor("anthropic", "summary", {}), "claude-haiku-5-5");
     assert.equal(namedModel({ model: "  " }, "summary"), undefined);
   } finally {
     for (const key of ["CLOUDPILOT_MODEL_SUMMARY", "CLOUDPILOT_MODEL_ASK"]) {
@@ -137,19 +137,20 @@ test("for OpenAI a -nano model is small too: ask never takes one over a full-siz
 
 // ---- The two jobs pick different defaults, end to end ----
 
-test("Anthropic: the summary asks the small model and ask the stronger one, and the small one is sent no effort or fallback settings", async () => {
+test("Anthropic: the summary asks the small model and ask the stronger one, and the small one is sent an effort setting but no fallback", async () => {
   await withFake({}, async (fake) => {
     const summary = await run("summary", fake, "anthropic");
     assert.equal(summary.status, 0, summary.stderr);
-    assert.deepEqual(fake.asked(), ["claude-haiku-4-5"]);
+    assert.deepEqual(fake.asked(), ["claude-haiku-5-5"]);
     const body = fake.requests.find((r) => r.path === "/v1/messages")!.body;
-    assert.equal(body.output_config, undefined);
-    assert.equal(body.fallbacks, undefined);
+    assert.deepEqual(body.output_config, { effort: "medium" });
+    assert.equal(body.fallbacks, undefined, "no Haiku model has the fallback routing");
+    assert.equal(body.betas, undefined);
     assert.match(summary.stdout, new RegExp(TEXT));
 
     const answer = await run("ask", fake, "anthropic");
     assert.equal(answer.status, 0, answer.stderr);
-    assert.deepEqual(fake.asked(), ["claude-haiku-4-5", "claude-opus-5-5"]);
+    assert.deepEqual(fake.asked(), ["claude-haiku-5-5", "claude-opus-5-5"]);
     const asked = fake.requests.filter((r) => r.path === "/v1/messages")[1]!.body;
     assert.deepEqual(asked.output_config, { effort: "medium" }, "the stronger model is asked as it always was");
     assert.equal(asked.fallbacks, "default");
@@ -184,7 +185,7 @@ test("CLOUDPILOT_MODEL_SUMMARY and CLOUDPILOT_MODEL_ASK each move only their own
     // Only one is set: the other job keeps its default.
     assert.equal((await run("summary", fake, "anthropic", [], { CLOUDPILOT_MODEL_ASK: "ask-model" })).status, 0);
     assert.equal((await run("ask", fake, "anthropic", [], { CLOUDPILOT_MODEL_SUMMARY: "summary-model" })).status, 0);
-    assert.deepEqual(fake.asked().slice(2), ["claude-haiku-4-5", "claude-opus-5-5"]);
+    assert.deepEqual(fake.asked().slice(2), ["claude-haiku-5-5", "claude-opus-5-5"]);
   });
   await withFake({ models: ["gpt-5", "gpt-5-mini"] }, async (fake) => {
     assert.equal((await run("summary", fake, "openai", [], env)).status, 0);

@@ -30,15 +30,15 @@ async function llm(options: LlmOptions, job: ModelJob): Promise<Llm> {
     return {
       messages: bedrock.beta.messages as unknown as MessagesApi,
       // Haiku 4.5 has no effort setting; server-side fallbacks are not offered on Bedrock.
-      params: { model, max_tokens: 16000, ...(isHaiku(model) ? {} : { output_config: { effort: "medium" } }) },
+      params: { model, max_tokens: 16000, ...(isHaiku45(model) ? {} : { output_config: { effort: "medium" } }) },
     };
   }
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new MissingCredentialsError();
   const model = modelFor("anthropic", job, options);
   return {
     messages: new Anthropic({ ...modelRequest(), ...workspaceHeader() }).beta.messages,
-    // Haiku 4.5 takes neither an effort setting nor the fallback routing, which is for the larger models.
-    params: isHaiku(model) ? { model, max_tokens: 16000 } : {
+    // Haiku 4.5 takes no effort setting, and no Haiku has the fallback routing, which is for the larger models.
+    params: isHaiku45(model) ? { model, max_tokens: 16000 } : isHaiku(model) ? { model, max_tokens: 16000, output_config: { effort: "medium" } } : {
       model,
       max_tokens: 16000,
       output_config: { effort: "medium" },
@@ -49,7 +49,8 @@ async function llm(options: LlmOptions, job: ModelJob): Promise<Llm> {
   };
 }
 
-const isHaiku = (model: string) => model.includes("haiku-4-5");
+const isHaiku45 = (model: string) => model.includes("haiku-4-5");
+const isHaiku = (model: string) => model.includes("haiku");
 
 /** The variable that names the workspace for an API key that is not tied to one. */
 export const WORKSPACE_ENV = "ANTHROPIC_WORKSPACE_ID";

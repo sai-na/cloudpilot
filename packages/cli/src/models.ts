@@ -20,15 +20,16 @@ export const BEDROCK_HAIKU = "in.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 /**
  * Providers whose models are named here. Anthropic: the summary job gets Haiku
- * 4.5 (the alias of the model the Bedrock default already names) and `ask` the
- * model that has always been the default. Bedrock: Haiku 4.5 for both, since it
+ * 5.5 (Haiku 4.5 often adds amounts together, and a summary with a figure that
+ * is not in the scan is discarded) and `ask` the model that has always been the
+ * default. Bedrock: Haiku 4.5 for both, since it
  * is the only Bedrock model named and its ID depends on the account's region;
  * name a stronger one for `ask` with --model or CLOUDPILOT_MODEL_ASK.
  * OpenAI is not here: its default is picked from the models the key can use,
  * see `pickOpenAIModel`.
  */
 export const DEFAULT_MODELS: Record<"anthropic" | "bedrock", Record<ModelJob, string>> = {
-  anthropic: { summary: "claude-haiku-4-5", ask: "claude-opus-5-5" },
+  anthropic: { summary: "claude-haiku-5-5", ask: "claude-opus-5-5" },
   bedrock: { summary: BEDROCK_HAIKU, ask: BEDROCK_HAIKU },
 };
 

@@ -1023,7 +1023,7 @@ or by `--provider`:
 
 | Provider | Needs | Default model for the summary | Default model for `ask` |
 |---|---|---|---|
-| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | `claude-opus-5-5` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` | `claude-opus-5-5` |
 | `openai` | `OPENAI_API_KEY` | the newest `-mini` GPT model the key can use, else the newest `-nano` one | the newest full-size GPT model the key can use |
 | `bedrock` | `--bedrock-profile <aws profile>` and `npm install @anthropic-ai/bedrock-sdk` | Claude Haiku 4.5 | Claude Haiku 4.5 |
 
