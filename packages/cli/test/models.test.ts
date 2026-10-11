@@ -169,6 +169,27 @@ test("Anthropic: the summary asks the small model and ask the stronger one, and 
   });
 });
 
+test("Haiku 4.5 is still asked with no effort setting and no fallback, on Anthropic and on Bedrock", async () => {
+  await withFake({}, async (fake) => {
+    const named = await run("summary", fake, "anthropic", ["--model", "claude-haiku-4-5"]);
+    assert.equal(named.status, 0, named.stderr);
+    assert.deepEqual(fake.asked(), ["claude-haiku-4-5"]);
+    const asked = fake.messages()[0]!;
+    assert.equal(asked.body.output_config, undefined, "Haiku 4.5 refuses an effort setting");
+    assert.equal(asked.body.fallbacks, undefined);
+    assert.equal(asked.headers["anthropic-beta"], undefined);
+    assert.match(named.stdout, new RegExp(TEXT));
+
+    // The Bedrock default is Haiku 4.5 too, and the Bedrock SDK takes the same base URL.
+    const bedrock = await run("summary", fake, "anthropic", ["--model", BEDROCK_HAIKU]);
+    assert.equal(bedrock.status, 0, bedrock.stderr);
+    const onBedrock = fake.messages()[1]!;
+    assert.equal(onBedrock.body.model, BEDROCK_HAIKU);
+    assert.equal(onBedrock.body.output_config, undefined, "the Bedrock Haiku 4.5 ID refuses one as well");
+    assert.equal(onBedrock.body.fallbacks, undefined);
+  });
+});
+
 // ---- The workspace an Anthropic key is not tied to ----
 
 test("ANTHROPIC_WORKSPACE_ID is sent as the workspace header, trimmed, and nothing is sent when it is not set", async () => {

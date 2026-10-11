@@ -26,8 +26,10 @@ node packages/cli/dist/index.js eval --profile cloudpilot-readonly --manifest la
 ```
 
 `--explain` and `ask` need a model key in `.env` (`OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY`). Without one, the scan still ends with a summary built
-from the findings.
+`ANTHROPIC_API_KEY`; an Anthropic key that is not tied to one workspace also
+needs `ANTHROPIC_WORKSPACE_ID`, see
+[`packages/cli/README.md`](../packages/cli/README.md#ask-questions-needs-a-model-api-key)).
+Without one, the scan still ends with a summary built from the findings.
 
 ## From an AI editor (MCP)
 
