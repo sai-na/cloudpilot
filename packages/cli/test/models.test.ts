@@ -18,17 +18,19 @@ const TEXT = "Nothing in this answer is a figure.";
  * Answers the Anthropic Messages API, the OpenAI Responses API and the OpenAI
  * model list. `models` is what the OpenAI key can list. A model named in
  * `unknown` is refused with a 404, as a provider refuses one it does not have.
- * Every request's path and body are kept.
+ * `refuse` answers every Anthropic request with that status and message, as
+ * the API refuses a request it will not serve; `stop` and `content` shape the
+ * answer it gives otherwise. Every request's path, body and headers are kept.
  */
-async function fakeModels(options: { models?: string[]; unknown?: string[] } = {}) {
-  const requests: Array<{ path: string; body: any }> = [];
+async function fakeModels(options: { models?: string[]; unknown?: string[]; refuse?: { status: number; message: string }; stop?: string; content?: unknown[] } = {}) {
+  const requests: Array<{ path: string; body: any; headers: Record<string, string | undefined> }> = [];
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
       const path = (req.url ?? "").split("?")[0]!;
       const body = raw ? JSON.parse(raw) : undefined;
-      requests.push({ path, body });
+      requests.push({ path, body, headers: req.headers as Record<string, string | undefined> });
       res.setHeader("content-type", "application/json");
       if (path === "/v1/models") return void res.end(JSON.stringify({ object: "list", data: (options.models ?? []).map((id) => ({ id, object: "model", created: 0, owned_by: "test" })) }));
       if (options.unknown?.includes(body?.model)) {
@@ -36,7 +38,11 @@ async function fakeModels(options: { models?: string[]; unknown?: string[] } = {
         return void res.end(JSON.stringify({ type: "error", error: { type: "not_found_error", message: `model: ${body.model}`, code: "model_not_found" } }));
       }
       if (path === "/v1/messages") {
-        return void res.end(JSON.stringify({ id: "msg_1", type: "message", role: "assistant", model: body.model, content: [{ type: "text", text: TEXT }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+        if (options.refuse) {
+          res.statusCode = options.refuse.status;
+          return void res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: options.refuse.message } }));
+        }
+        return void res.end(JSON.stringify({ id: "msg_1", type: "message", role: "assistant", model: body.model, content: options.content ?? [{ type: "text", text: TEXT }], stop_reason: options.stop ?? "end_turn", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
       }
       res.end(JSON.stringify({ id: "resp_1", object: "response", status: "completed", model: body?.model, output: [{ type: "message", id: "m1", role: "assistant", status: "completed", content: [{ type: "output_text", text: TEXT, annotations: [] }] }] }));
     });
@@ -46,6 +52,8 @@ async function fakeModels(options: { models?: string[]; unknown?: string[] } = {
   return {
     /** The models that were asked to write something, in order. */
     asked: () => requests.filter((r) => r.path === "/v1/messages" || r.path === "/v1/responses").map((r) => r.body.model as string),
+    /** The Anthropic requests, in order. */
+    messages: () => requests.filter((r) => r.path === "/v1/messages"),
     requests,
     anthropic: { ANTHROPIC_API_KEY: "test-key", ANTHROPIC_BASE_URL: base, NO_PROXY: "127.0.0.1" },
     openai: { OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: `${base}/v1`, NO_PROXY: "127.0.0.1" },
@@ -142,20 +150,84 @@ test("Anthropic: the summary asks the small model and ask the stronger one, and 
     const summary = await run("summary", fake, "anthropic");
     assert.equal(summary.status, 0, summary.stderr);
     assert.deepEqual(fake.asked(), ["claude-haiku-5-5"]);
-    const body = fake.requests.find((r) => r.path === "/v1/messages")!.body;
-    assert.deepEqual(body.output_config, { effort: "medium" });
-    assert.equal(body.fallbacks, undefined, "no Haiku model has the fallback routing");
-    assert.equal(body.betas, undefined);
+    const small = fake.messages()[0]!;
+    assert.deepEqual(small.body.output_config, { effort: "medium" });
+    assert.equal(small.body.fallbacks, undefined, "no Haiku model has the fallback routing");
+    // The SDK sends `betas` as this header rather than in the body, so this is where a beta shows up.
+    assert.equal(small.headers["anthropic-beta"], undefined, "no beta is asked for on a Haiku model");
+    assert.equal(small.headers["anthropic-workspace-id"], undefined, "no workspace is named when the variable is not set");
     assert.match(summary.stdout, new RegExp(TEXT));
 
     const answer = await run("ask", fake, "anthropic");
     assert.equal(answer.status, 0, answer.stderr);
     assert.deepEqual(fake.asked(), ["claude-haiku-5-5", "claude-opus-5-5"]);
-    const asked = fake.requests.filter((r) => r.path === "/v1/messages")[1]!.body;
-    assert.deepEqual(asked.output_config, { effort: "medium" }, "the stronger model is asked as it always was");
-    assert.equal(asked.fallbacks, "default");
+    const stronger = fake.messages()[1]!;
+    assert.deepEqual(stronger.body.output_config, { effort: "medium" }, "the stronger model is asked as it always was");
+    assert.equal(stronger.body.fallbacks, "default");
+    assert.equal(stronger.headers["anthropic-beta"], "server-side-fallback-2026-07-01", "the fallback routing is a beta, asked for in the header");
     assert.ok(answer.stdout.trim().endsWith(TEXT), answer.stdout);
   });
+});
+
+// ---- The workspace an Anthropic key is not tied to ----
+
+test("ANTHROPIC_WORKSPACE_ID is sent as the workspace header, trimmed, and nothing is sent when it is not set", async () => {
+  await withFake({}, async (fake) => {
+    const named = await run("summary", fake, "anthropic", [], { ANTHROPIC_WORKSPACE_ID: " wrkspc_abc123 \n" });
+    assert.equal(named.status, 0, named.stderr);
+    assert.equal(fake.messages()[0]!.headers["anthropic-workspace-id"], "wrkspc_abc123");
+
+    const blank = await run("summary", fake, "anthropic", [], { ANTHROPIC_WORKSPACE_ID: "   " });
+    assert.equal(blank.status, 0, blank.stderr);
+    assert.equal(fake.messages()[1]!.headers["anthropic-workspace-id"], undefined, "a blank value counts as not set");
+  });
+});
+
+test("a refusal that names the workspace ID says which variable to set, or that its value is wrong, whatever status it arrives with", async () => {
+  const header = "Your API key is not scoped to a workspace: name one with the anthropic-workspace-id header.";
+  await withFake({ refuse: { status: 400, message: header } }, async (fake) => {
+    const summary = await run("summary", fake, "anthropic");
+    assert.equal(summary.status, 0, summary.stderr);
+    assert.match(summary.stderr, /This Anthropic API key is not tied to a workspace\. Set ANTHROPIC_WORKSPACE_ID to the workspace's ID \(it starts with wrkspc_\)/);
+    assert.doesNotMatch(summary.stderr, /ANTHROPIC_API_KEY/, "the key is not what has to be changed");
+    assert.match(summary.stdout, /Estimated waste: \$151\.53 per month across 10 findings/);
+  });
+  // The value of the variable is refused with whichever status the API picks, and by code as well as by header name.
+  for (const refuse of [
+    { status: 400, message: header },
+    { status: 401, message: "workspace_id_required" },
+    { status: 403, message: "The anthropic-workspace-id does not belong to this organization." },
+  ]) {
+    await withFake({ refuse }, async (fake) => {
+      const summary = await run("summary", fake, "anthropic", [], { ANTHROPIC_WORKSPACE_ID: "wrkspc_from_elsewhere" });
+      assert.equal(summary.status, 0, summary.stderr);
+      assert.match(summary.stderr, /Anthropic does not accept ANTHROPIC_WORKSPACE_ID as a workspace ID/, `status ${refuse.status}: ${summary.stderr}`);
+      assert.match(summary.stdout, /Estimated waste: \$151\.53 per month across 10 findings/);
+    });
+  }
+});
+
+test("a refusal about the model is still about the model, even though the workspace it names is not the problem", async () => {
+  await withFake({ refuse: { status: 403, message: "This workspace does not have access to the requested model." } }, async (fake) => {
+    const summary = await run("summary", fake, "anthropic", [], { ANTHROPIC_WORKSPACE_ID: "wrkspc_abc123" });
+    assert.equal(summary.status, 0, summary.stderr);
+    assert.match(summary.stderr, /The model is not available to this account \(403\)/);
+    assert.doesNotMatch(summary.stderr, /ANTHROPIC_WORKSPACE_ID/);
+  });
+});
+
+// ---- An answer that cannot be trusted ----
+
+test("an answer the token limit cut off, and one with no text in it, are not shown as the summary", async () => {
+  for (const reply of [{ stop: "max_tokens" }, { content: [{ type: "thinking", thinking: "still thinking" }] }]) {
+    await withFake(reply, async (fake) => {
+      const summary = await run("summary", fake, "anthropic");
+      assert.equal(summary.status, 0, summary.stderr);
+      assert.match(summary.stderr, /AI explanations are unavailable: The model.* Showing the templated summary instead\./);
+      assert.doesNotMatch(summary.stdout, new RegExp(TEXT));
+      assert.match(summary.stdout, /Estimated waste: \$151\.53 per month across 10 findings/);
+    });
+  }
 });
 
 test("OpenAI: the summary asks the key's mini model and ask its full-size one", async () => {
