@@ -36,7 +36,7 @@ async function llm(options: LlmOptions, job: ModelJob): Promise<Llm> {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new MissingCredentialsError();
   const model = modelFor("anthropic", job, options);
   return {
-    messages: new Anthropic(modelRequest()).beta.messages,
+    messages: new Anthropic({ ...modelRequest(), ...workspaceHeader() }).beta.messages,
     // Haiku 4.5 takes neither an effort setting nor the fallback routing, which is for the larger models.
     params: isHaiku(model) ? { model, max_tokens: 16000 } : {
       model,
@@ -50,6 +50,15 @@ async function llm(options: LlmOptions, job: ModelJob): Promise<Llm> {
 }
 
 const isHaiku = (model: string) => model.includes("haiku-4-5");
+
+/** The variable that names the workspace for an API key that is not tied to one. */
+export const WORKSPACE_ENV = "ANTHROPIC_WORKSPACE_ID";
+
+/** A key that belongs to no single workspace has to name one on every request; a key made inside a workspace needs nothing. */
+function workspaceHeader(): { defaultHeaders?: Record<string, string> } {
+  const id = process.env[WORKSPACE_ENV]?.trim();
+  return id ? { defaultHeaders: { "anthropic-workspace-id": id } } : {};
+}
 
 function textOf(message: { stop_reason: string | null; content: Array<{ type: string; text?: string }> }): string {
   if (message.stop_reason === "refusal") throw new Error("The model declined to answer this request.");
@@ -106,6 +115,11 @@ export function describeError(err: unknown): string | undefined {
   // A timeout is a kind of connection error, so it has to be asked about first.
   if (err instanceof Anthropic.APIConnectionTimeoutError) return `The Anthropic API timed out: no answer within ${Math.round(modelRequest().timeout / 1000)} seconds, twice.`;
   if (err instanceof Anthropic.APIConnectionError) return "Could not reach the Anthropic API. Check the network connection.";
+  if (err instanceof Anthropic.BadRequestError && err.message.includes("anthropic-workspace-id")) {
+    return process.env[WORKSPACE_ENV]?.trim()
+      ? `Anthropic does not accept ${WORKSPACE_ENV} as a workspace ID. Check it against the workspace's ID in the Anthropic Console (it starts with wrkspc_).`
+      : `This Anthropic API key is not tied to a workspace. Set ${WORKSPACE_ENV} to the workspace's ID (it starts with wrkspc_), or create a key inside a workspace and use that.`;
+  }
   if (err instanceof Anthropic.APIError) return `Anthropic API error ${err.status}: ${err.message}`;
   return undefined;
 }
